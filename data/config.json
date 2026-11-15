@@ -1,0 +1,12 @@
+{
+  "port": 8090,
+  "view_password": "123456",
+  "edit_password": "8888",
+  "agent_token": "gw-local-agent-token",
+  "workspace_root": "workspace_files",
+  "prefix_archived_folder": false,
+  "ai_api_base": "",
+  "ai_api_key": "",
+  "ai_model": "deepseek-chat",
+  "lan_notice": "📌 欢迎访问科室公文与材料工作台！支持按【标题】或【标题+正文】秒搜公文，点开任意文件可直接预览复制全文或打包下载。"
+}
