@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>公文与材料智能工作台 (GW-Workbench)</title>
+  <title>公文与材料智能工作台 (GW-Workbench v1.2.0)</title>
   <style>
     :root {
-      --bg: #f3f5f8;
+      --bg: #f1f5f9;
       --surface: #ffffff;
       --surface-alt: #f8fafc;
-      --border: #dde3ec;
+      --surface-hover: #f1f5f9;
+      --border: #e2e8f0;
       --border-strong: #cbd5e1;
-      --text: #1e293b;
-      --text-secondary: #475569;
+      --text: #0f172a;
+      --text-secondary: #334155;
       --text-muted: #64748b;
       --primary: #1d4ed8;
       --primary-hover: #1e40af;
@@ -25,8 +26,32 @@
       --success-soft: #ecfdf5;
       --purple: #6d28d9;
       --purple-soft: #f5f3ff;
+      --topbar-bg: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
       --radius: 10px;
       --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow-hover: 0 6px 16px rgba(15, 23, 42, 0.09);
+    }
+
+    body.dark-mode {
+      --bg: #0b1120;
+      --surface: #111827;
+      --surface-alt: #1e293b;
+      --surface-hover: #263349;
+      --border: #1f2937;
+      --border-strong: #374151;
+      --text: #f1f5f9;
+      --text-secondary: #cbd5e1;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --primary-soft: rgba(59, 130, 246, 0.16);
+      --danger-soft: rgba(220, 38, 38, 0.18);
+      --warning-soft: rgba(217, 119, 6, 0.18);
+      --success-soft: rgba(5, 150, 105, 0.18);
+      --purple-soft: rgba(109, 40, 217, 0.22);
+      --topbar-bg: linear-gradient(135deg, #030712 0%, #0f172a 100%);
+      --shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+      --shadow-hover: 0 8px 20px rgba(0, 0, 0, 0.5);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -35,15 +60,28 @@
       background: var(--bg);
       color: var(--text);
       font-size: 14px;
-      line-height: 1.5;
+      line-height: 1.55;
       min-height: 100vh;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    ::-webkit-scrollbar { width: 7px; height: 7px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+
+    mark.hl {
+      background: #fde047;
+      color: #713f12;
+      padding: 0 3px;
+      border-radius: 3px;
+      font-weight: 700;
     }
 
     /* 顶部导航栏 */
     .topbar {
-      background: #0f172a;
+      background: var(--topbar-bg);
       color: #f8fafc;
-      padding: 10px 20px;
+      padding: 10px 22px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -52,48 +90,56 @@
       position: sticky;
       top: 0;
       z-index: 100;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.18);
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
+      flex-wrap: wrap;
     }
     .brand-title {
-      font-size: 17px;
+      font-size: 16.5px;
       font-weight: 700;
       letter-spacing: 0.3px;
       color: #fff;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
+    }
+    .ver-tag {
+      font-size: 11px;
+      background: rgba(255,255,255,0.16);
+      padding: 1px 7px;
+      border-radius: 99px;
+      font-weight: 500;
     }
     .lan-badge {
       background: rgba(255,255,255,0.12);
-      border: 1px solid rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.22);
       color: #e2e8f0;
       font-size: 12px;
       padding: 3px 10px;
       border-radius: 99px;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: all 0.15s;
     }
-    .lan-badge:hover { background: rgba(255,255,255,0.22); }
+    .lan-badge:hover { background: rgba(255,255,255,0.24); }
 
     .nav-tabs {
       display: flex;
-      gap: 6px;
-      background: rgba(255,255,255,0.08);
+      gap: 4px;
+      background: rgba(255,255,255,0.1);
       padding: 4px;
-      border-radius: 8px;
+      border-radius: 9px;
     }
     .nav-tab {
       border: none;
       background: transparent;
       color: #cbd5e1;
-      padding: 6px 14px;
+      padding: 6px 13px;
       border-radius: 6px;
-      font-size: 13.5px;
+      font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.15s;
@@ -101,16 +147,17 @@
     .nav-tab.active {
       background: #2563eb;
       color: #ffffff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.2);
     }
     .nav-tab:hover:not(.active) {
       color: #ffffff;
-      background: rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.12);
     }
 
     .top-actions {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
     }
     .btn {
       display: inline-flex;
@@ -128,42 +175,86 @@
       text-decoration: none;
       white-space: nowrap;
     }
-    .btn:hover { background: var(--surface-alt); border-color: var(--border-strong); }
+    .btn:hover { background: var(--surface-hover); border-color: var(--border-strong); }
     .btn-sm { padding: 4px 9px; font-size: 12px; border-radius: 6px; }
+    .btn-xs { padding: 2px 7px; font-size: 11.5px; border-radius: 5px; }
     .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
     .btn-primary:hover { background: var(--primary-hover); color: #fff; }
     .btn-success { background: var(--success); color: #fff; border-color: var(--success); }
     .btn-success:hover { background: #047857; color: #fff; }
     .btn-purple { background: var(--purple); color: #fff; border-color: var(--purple); }
     .btn-purple:hover { background: #5b21b6; color: #fff; }
-    .btn-danger-ghost { color: var(--danger); border-color: #fecaca; background: #fff; }
+    .btn-danger-ghost { color: var(--danger); border-color: #fecaca; background: var(--surface); }
     .btn-danger-ghost:hover { background: var(--danger-soft); }
 
     .mode-pill {
       padding: 5px 12px;
       border-radius: 99px;
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 600;
       cursor: pointer;
       border: 1px solid transparent;
     }
     .mode-edit { background: #059669; color: #fff; }
-    .mode-view { background: #475569; color: #f1f5f9; border-color: #64748b; }
+    .mode-view { background: rgba(255,255,255,0.14); color: #f1f5f9; border-color: rgba(255,255,255,0.28); }
 
     /* 主容器 */
     .container {
-      max-width: 1460px;
+      max-width: 1480px;
       margin: 0 auto;
-      padding: 14px 20px 40px;
+      padding: 14px 20px 44px;
+    }
+
+    /* 政务驾驶舱 KPI 统计磁贴条 */
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    @media (max-width: 980px) {
+      .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+    }
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      transition: all 0.15s;
+    }
+    .kpi-card:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-hover);
+      border-color: var(--primary);
+    }
+    .kpi-label {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .kpi-val {
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1.15;
+      margin-top: 2px;
+    }
+    .kpi-icon {
+      font-size: 22px;
+      opacity: 0.85;
     }
 
     /* 局域网公告与置顶共享栏 */
     .lan-banner {
-      background: linear-gradient(90deg, #eff6ff 0%, #f8fafc 100%);
-      border: 1px solid #bfdbfe;
+      background: var(--primary-soft);
+      border: 1px solid var(--border-strong);
       border-radius: var(--radius);
-      padding: 10px 16px;
-      margin-bottom: 14px;
+      padding: 9px 15px;
+      margin-bottom: 12px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -177,26 +268,27 @@
       gap: 8px;
     }
     .pinned-chip {
-      background: #fff;
+      background: var(--surface);
       border: 1px solid #93c5fd;
-      color: #1e40af;
+      color: var(--primary);
       padding: 3px 10px;
       border-radius: 6px;
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 5px;
+      text-decoration: none;
     }
-    .pinned-chip:hover { background: #dbeafe; }
+    .pinned-chip:hover { background: var(--surface-hover); }
 
     /* 全局强搜索栏 */
     .search-panel {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 12px 16px;
+      padding: 11px 15px;
       margin-bottom: 14px;
       box-shadow: var(--shadow);
     }
@@ -215,10 +307,12 @@
     }
     .search-input {
       width: 100%;
-      padding: 9px 14px;
+      padding: 8px 14px;
       border: 1.5px solid var(--border-strong);
       border-radius: 8px;
-      font-size: 14px;
+      font-size: 13.5px;
+      background: var(--surface);
+      color: var(--text);
       outline: none;
       transition: border-color 0.15s;
     }
@@ -233,8 +327,8 @@
     .scope-btn {
       border: none;
       background: transparent;
-      padding: 8px 12px;
-      font-size: 13px;
+      padding: 7px 12px;
+      font-size: 12.5px;
       font-weight: 600;
       color: var(--text-secondary);
       cursor: pointer;
@@ -244,7 +338,6 @@
       color: #fff;
     }
 
-    /* 搜索结果与 AI 问答展示盒 */
     .search-results-box {
       margin-top: 12px;
       border-top: 1px solid var(--border);
@@ -253,29 +346,28 @@
     }
     .ai-answer-card {
       background: var(--purple-soft);
-      border: 1px solid #ddd6fe;
+      border: 1px solid #c4b5fd;
       border-radius: 8px;
       padding: 12px 16px;
       margin-bottom: 12px;
       white-space: pre-wrap;
       font-size: 13.5px;
-      color: #2e1065;
       line-height: 1.65;
     }
 
     /* 全能极速投喂框 (Omnibox) */
     .omnibox {
       background: var(--surface);
-      border: 1.5px dashed #93c5fd;
+      border: 1.5px dashed #60a5fa;
       border-radius: var(--radius);
-      padding: 12px 16px;
-      margin-bottom: 16px;
+      padding: 12px 15px;
+      margin-bottom: 14px;
       box-shadow: var(--shadow);
       transition: all 0.15s;
     }
     .omnibox.dragover {
       border-color: var(--primary);
-      background: #eff6ff;
+      background: var(--primary-soft);
     }
     .omnibox-top {
       display: flex;
@@ -284,16 +376,18 @@
     }
     .omnibox-textarea {
       flex: 1;
-      min-height: 58px;
+      min-height: 54px;
       max-height: 180px;
       resize: vertical;
       padding: 8px 12px;
       border: 1px solid var(--border-strong);
       border-radius: 8px;
       font-size: 13.5px;
+      background: var(--surface-alt);
+      color: var(--text);
       font-family: inherit;
     }
-    .omnibox-textarea:focus { outline: none; border-color: var(--primary); }
+    .omnibox-textarea:focus { outline: none; border-color: var(--primary); background: var(--surface); }
     .omnibox-controls {
       display: flex;
       flex-direction: column;
@@ -306,7 +400,7 @@
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 8px;
-      font-size: 12.5px;
+      font-size: 12px;
       color: var(--text-muted);
     }
     .pending-files-bar {
@@ -316,8 +410,9 @@
       margin-top: 6px;
     }
     .file-pill {
-      background: #e0f2fe;
-      color: #0369a1;
+      background: var(--primary-soft);
+      color: var(--primary);
+      border: 1px solid #93c5fd;
       padding: 2px 9px;
       border-radius: 6px;
       font-size: 12px;
@@ -347,39 +442,38 @@
       border: 1px solid var(--border);
       background: var(--surface);
       color: var(--text-secondary);
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       cursor: pointer;
+      transition: all 0.15s;
     }
     .filter-pill.active {
-      background: #1e293b;
+      background: var(--primary);
       color: #fff;
-      border-color: #1e293b;
+      border-color: var(--primary);
     }
 
-    /* 工作事项卡片网格 */
+    /* 工作事项卡片 */
     .tasks-grid {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 11px;
     }
     .task-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-left: 5px solid var(--primary);
       border-radius: var(--radius);
-      padding: 14px 16px;
+      padding: 13px 16px;
       box-shadow: var(--shadow);
-      transition: box-shadow 0.15s;
+      transition: box-shadow 0.15s, border-color 0.15s;
     }
-    .task-card:hover {
-      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-    }
+    .task-card:hover { box-shadow: var(--shadow-hover); }
     .task-card.level-danger { border-left-color: var(--danger); }
     .task-card.level-warning { border-left-color: var(--warning); }
     .task-card.level-normal { border-left-color: var(--primary); }
     .task-card.level-routine { border-left-color: #64748b; }
-    .task-card.level-archived { border-left-color: var(--success); opacity: 0.9; }
+    .task-card.level-archived { border-left-color: var(--success); opacity: 0.92; }
 
     .task-header {
       display: flex;
@@ -387,24 +481,38 @@
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
-      margin-bottom: 8px;
     }
-    .task-title-area {
+    .task-title-wrap {
+      flex: 1;
+      min-width: 260px;
+    }
+    .task-title-line {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 7px;
-      flex: 1;
     }
     .task-title {
-      font-size: 16px;
+      font-size: 15.5px;
       font-weight: 700;
-      color: #0f172a;
+      color: var(--text);
+      cursor: pointer;
     }
+    .task-title:hover { color: var(--primary); }
+    .task-submeta {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 3px;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
     .badge {
       padding: 2px 8px;
       border-radius: 5px;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 600;
       display: inline-flex;
       align-items: center;
@@ -413,34 +521,31 @@
     .badge-danger { background: var(--danger-soft); color: var(--danger); border: 1px solid #fecaca; }
     .badge-warning { background: var(--warning-soft); color: var(--warning); border: 1px solid #fde68a; }
     .badge-normal { background: var(--primary-soft); color: var(--primary); border: 1px solid #bfdbfe; }
-    .badge-routine { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+    .badge-routine { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border-strong); }
     .badge-archived { background: var(--success-soft); color: var(--success); border: 1px solid #a7f3d0; }
-    .badge-cat { background: #f8fafc; color: #334155; border: 1px solid #cbd5e1; }
-    .badge-docnum { background: #fef3c7; color: #92400e; }
 
     .task-summary {
-      font-size: 13.5px;
+      font-size: 13px;
       color: var(--text-secondary);
       background: var(--surface-alt);
       padding: 7px 11px;
       border-radius: 7px;
-      margin-bottom: 10px;
-      border: 1px solid #edf2f7;
+      margin: 9px 0;
+      border: 1px solid var(--border);
     }
 
-    /* 事项内部三栏：1.待办细项Checklist  2.实时进展流水  3.来文与我写的材料双栏柜 */
     .task-body-grid {
       display: grid;
-      grid-template-columns: 1.15fr 1fr 1.35fr;
-      gap: 12px;
+      grid-template-columns: 1.1fr 0.95fr 1.45fr;
+      gap: 11px;
       align-items: stretch;
     }
-    @media (max-width: 1080px) {
+    @media (max-width: 1100px) {
       .task-body-grid { grid-template-columns: 1fr; }
     }
     .sub-box {
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
       border-radius: 8px;
       padding: 9px 11px;
       display: flex;
@@ -448,9 +553,9 @@
       justify-content: space-between;
     }
     .sub-box-title {
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 700;
-      color: #334155;
+      color: var(--text-secondary);
       margin-bottom: 6px;
       display: flex;
       align-items: center;
@@ -468,14 +573,14 @@
       display: flex;
       align-items: flex-start;
       gap: 6px;
-      font-size: 13px;
+      font-size: 12.5px;
       cursor: pointer;
     }
     .chk-item input[type="checkbox"] {
       margin-top: 3px;
       cursor: pointer;
-      width: 15px;
-      height: 15px;
+      width: 14px;
+      height: 14px;
     }
     .chk-item.done span {
       text-decoration: line-through;
@@ -490,10 +595,11 @@
     .inline-input {
       flex: 1;
       padding: 5px 8px;
-      font-size: 12.5px;
+      font-size: 12px;
       border: 1px solid var(--border-strong);
       border-radius: 6px;
-      background: #fff;
+      background: var(--surface);
+      color: var(--text);
     }
     .inline-input:focus { outline: none; border-color: var(--primary); }
 
@@ -502,20 +608,20 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
-      max-height: 120px;
+      max-height: 115px;
       overflow-y: auto;
       margin-bottom: 6px;
     }
     .prog-item {
-      font-size: 12.5px;
-      color: #334155;
+      font-size: 12px;
+      color: var(--text-secondary);
       border-left: 2px solid #94a3b8;
       padding-left: 7px;
     }
     .prog-time {
       color: var(--text-muted);
       font-family: monospace;
-      font-size: 11.5px;
+      font-size: 11px;
       margin-right: 4px;
     }
 
@@ -526,8 +632,8 @@
       gap: 8px;
     }
     .file-col {
-      background: #ffffff;
-      border: 1px solid #e2e8f0;
+      background: var(--surface);
+      border: 1px solid var(--border);
       border-radius: 6px;
       padding: 7px 9px;
     }
@@ -537,8 +643,8 @@
       justify-content: space-between;
       gap: 4px;
       padding: 3px 0;
-      border-bottom: 1px dashed #f1f5f9;
-      font-size: 12.5px;
+      border-bottom: 1px dashed var(--border);
+      font-size: 12px;
     }
     .file-item:last-child { border-bottom: none; }
     .file-name-link {
@@ -547,22 +653,21 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      max-width: 175px;
+      max-width: 165px;
       font-weight: 500;
     }
     .file-name-link:hover { text-decoration: underline; }
 
-    /* 库内参考旧稿推荐栏 */
     .ref-bar {
-      margin-top: 9px;
-      padding-top: 8px;
+      margin-top: 8px;
+      padding-top: 7px;
       border-top: 1px dashed var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 8px;
-      font-size: 12.5px;
+      font-size: 12px;
     }
     .ref-chips {
       display: flex;
@@ -571,15 +676,15 @@
       gap: 6px;
     }
     .ref-chip {
-      background: #fefce8;
-      border: 1px solid #fde047;
-      color: #854d0e;
+      background: var(--warning-soft);
+      border: 1px solid #fcd34d;
+      color: var(--warning);
       padding: 2px 8px;
       border-radius: 5px;
       cursor: pointer;
-      font-size: 12px;
+      font-size: 11.5px;
+      font-weight: 600;
     }
-    .ref-chip:hover { background: #fef08a; }
 
     /* 紧凑台账表格视图 */
     .ledger-table-wrap {
@@ -595,8 +700,8 @@
       font-size: 13px;
     }
     table.ledger-table th {
-      background: #f8fafc;
-      color: #334155;
+      background: var(--surface-alt);
+      color: var(--text-secondary);
       text-align: left;
       padding: 10px 12px;
       border-bottom: 1px solid var(--border);
@@ -604,19 +709,19 @@
     }
     table.ledger-table td {
       padding: 9px 12px;
-      border-bottom: 1px solid #f1f5f9;
-      vertical-align: top;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
     }
-    table.ledger-table tr:hover td { background: #f8fafc; }
+    table.ledger-table tr:hover td { background: var(--surface-hover); }
 
     /* 独立【公文与材料库】布局 */
     .library-layout {
       display: grid;
-      grid-template-columns: 250px 1fr;
+      grid-template-columns: 270px 1fr;
       gap: 16px;
       align-items: start;
     }
-    @media (max-width: 900px) {
+    @media (max-width: 920px) {
       .library-layout { grid-template-columns: 1fr; }
     }
     .cat-sidebar {
@@ -640,22 +745,61 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      font-size: 13.5px;
+      font-size: 13px;
       font-weight: 500;
       color: var(--text-secondary);
+      border: 1px solid transparent;
+      transition: all 0.15s;
     }
-    .cat-item:hover { background: var(--surface-alt); }
+    .cat-item:hover { background: var(--surface-hover); }
+    .cat-item.drag-target {
+      border-color: var(--primary);
+      background: var(--primary-soft);
+    }
     .cat-item.active {
       background: var(--primary-soft);
       color: var(--primary);
       font-weight: 700;
     }
+    .cat-ops {
+      display: none;
+      gap: 4px;
+    }
+    .cat-item:hover .cat-ops { display: inline-flex; }
 
-    /* 右侧滑出正文预览抽屉 */
+    /* 批量操作浮动条 */
+    .batch-bar {
+      background: #1e293b;
+      color: #fff;
+      padding: 8px 14px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    /* 分页栏 */
+    .pagination-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 var(--radius) var(--radius);
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+
+    /* 右侧滑出正文预览与在线写稿抽屉 */
     .drawer-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.35);
+      background: rgba(15, 23, 42, 0.4);
       z-index: 200;
       display: none;
     }
@@ -664,46 +808,75 @@
       top: 0;
       right: 0;
       bottom: 0;
-      width: min(680px, 92vw);
+      width: min(740px, 94vw);
       background: var(--surface);
       z-index: 201;
-      box-shadow: -4px 0 20px rgba(0,0,0,0.18);
+      box-shadow: -4px 0 24px rgba(0,0,0,0.22);
       display: none;
       flex-direction: column;
     }
     .drawer-header {
-      padding: 14px 18px;
+      padding: 12px 18px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      background: #f8fafc;
+      background: var(--surface-alt);
+    }
+    .drawer-toolbar {
+      padding: 8px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      background: var(--surface);
     }
     .drawer-body {
       padding: 16px 18px;
       overflow-y: auto;
       flex: 1;
+      display: flex;
+      flex-direction: column;
     }
-    .preview-text-box {
-      background: #f8fafc;
+    .preview-rendered-box {
+      background: var(--surface-alt);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 14px;
-      white-space: pre-wrap;
-      font-size: 14px;
-      line-height: 1.75;
-      color: #0f172a;
-      max-height: 68vh;
+      padding: 18px 22px;
+      font-size: 15px;
+      line-height: 1.8;
+      color: var(--text);
+      flex: 1;
       overflow-y: auto;
-      user-select: text;
+    }
+    .preview-rendered-box h1 { font-size: 20px; text-align: center; margin-bottom: 14px; }
+    .preview-rendered-box h2 { font-size: 16.5px; margin: 14px 0 6px; color: var(--primary); }
+    .preview-rendered-box h3 { font-size: 15px; margin: 10px 0 4px; }
+    .preview-rendered-box p { margin-bottom: 8px; text-indent: 2em; }
+    .preview-rendered-box ul { padding-left: 22px; margin-bottom: 8px; }
+    .editor-textarea {
+      width: 100%;
+      flex: 1;
+      min-height: 420px;
+      padding: 14px;
+      font-size: 14.5px;
+      line-height: 1.7;
+      border: 1.5px solid var(--primary);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      font-family: inherit;
+      resize: none;
     }
 
     /* 弹窗 Modal */
     .modal-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.45);
+      background: rgba(15, 23, 42, 0.48);
       z-index: 300;
       display: none;
       align-items: center;
@@ -712,12 +885,14 @@
     }
     .modal {
       background: var(--surface);
+      color: var(--text);
       border-radius: 12px;
-      width: min(640px, 96vw);
+      width: min(650px, 96vw);
       max-height: 90vh;
       overflow-y: auto;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
       padding: 18px 20px;
+      border: 1px solid var(--border);
     }
     .modal-header {
       display: flex;
@@ -742,7 +917,7 @@
     }
     .form-group.full { grid-column: 1 / -1; }
     .form-group label {
-      font-size: 12.5px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--text-secondary);
     }
@@ -750,11 +925,12 @@
       padding: 7px 10px;
       border: 1px solid var(--border-strong);
       border-radius: 7px;
-      font-size: 13.5px;
+      font-size: 13px;
+      background: var(--surface);
+      color: var(--text);
       font-family: inherit;
     }
 
-    /* 轻提示 Toast */
     .toast {
       position: fixed;
       bottom: 22px;
@@ -763,10 +939,10 @@
       color: #fff;
       padding: 10px 16px;
       border-radius: 8px;
-      font-size: 13.5px;
+      font-size: 13px;
       font-weight: 600;
       z-index: 500;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
       display: none;
     }
   </style>
@@ -776,25 +952,30 @@
   <!-- 顶部导航栏 -->
   <header class="topbar">
     <div class="brand">
-      <div class="brand-title">🏛️ 公文与材料智能工作台</div>
+      <div class="brand-title">
+        🏛️ 公文与材料智能工作台
+        <span class="ver-tag" id="verBadge">v1.2.0</span>
+      </div>
       <span class="lan-badge" id="lanUrlBadge" onclick="copyLanUrl()" title="点击复制局域网访问链接发给同事">
         🌐 局域网共享加载中...
       </span>
-      <span class="lan-badge" id="localDirBadge" onclick="copyWorkspaceRoot()" title="点击复制本机物理资料库文件夹路径">
+      <span class="lan-badge" id="localDirBadge" onclick="openOrCopyWorkspaceRoot()" title="本机点击直接打开物理文件夹，局域网点击复制路径">
         📂 本地资料库目录
       </span>
     </div>
 
     <div class="nav-tabs">
-      <button class="nav-tab active" id="tabBtnWorkbench" onclick="switchMainTab('workbench')">📋 工作台待办与台账</button>
+      <button class="nav-tab active" id="tabBtnWorkbench" onclick="switchMainTab('workbench')">📋 工作台待办 (<span id="navCntActive">0</span>)</button>
       <button class="nav-tab" id="tabBtnLibrary" onclick="switchMainTab('library')">🗂️ 公文与材料库 (<span id="libCountBadge">0</span>)</button>
-      <button class="nav-tab" id="tabBtnSummary" onclick="switchMainTab('summary')">📊 台账导出与阶段总结</button>
+      <button class="nav-tab" id="tabBtnRecurring" onclick="switchMainTab('recurring')">🔁 周期性工作派生 (<span id="recCountBadge">0</span>)</button>
+      <button class="nav-tab" id="tabBtnSummary" onclick="switchMainTab('summary')">📊 台账导出与总结</button>
     </div>
 
     <div class="top-actions">
       <button class="btn btn-sm" onclick="triggerDiskSync()" title="扫描本地文件夹中直接用 WPS 新建或修改的公文与材料">
-        🔄 同步本地目录
+        🔄 同步目录
       </button>
+      <button class="btn btn-sm" onclick="toggleTheme()" id="themeBtn" title="切换政务蓝白 / 护眼深色模式">🌙</button>
       <span class="mode-pill mode-view" id="modeBadge" onclick="toggleEditMode()">
         🔒 浏览下载模式
       </span>
@@ -803,10 +984,49 @@
   </header>
 
   <main class="container">
+    <!-- 政务驾驶舱 KPI 统计磁贴条 -->
+    <section class="kpi-strip">
+      <div class="kpi-card" onclick="quickFilterByKpi('urgent')">
+        <div>
+          <div class="kpi-label">🔴 临期 / 超期急件</div>
+          <div class="kpi-val" style="color:var(--danger);" id="kpiUrgent">0</div>
+        </div>
+        <span class="kpi-icon">⏰</span>
+      </div>
+      <div class="kpi-card" onclick="quickFilterByKpi('in_progress')">
+        <div>
+          <div class="kpi-label">🔄 正在推进事项</div>
+          <div class="kpi-val" style="color:var(--primary);" id="kpiInProgress">0</div>
+        </div>
+        <span class="kpi-icon">⚡</span>
+      </div>
+      <div class="kpi-card" onclick="quickFilterByKpi('pending')">
+        <div>
+          <div class="kpi-label">⏳ 待办事项</div>
+          <div class="kpi-val" style="color:var(--warning);" id="kpiPending">0</div>
+        </div>
+        <span class="kpi-icon">📥</span>
+      </div>
+      <div class="kpi-card" onclick="quickFilterByKpi('archived')">
+        <div>
+          <div class="kpi-label">✅ 已办结归档</div>
+          <div class="kpi-val" style="color:var(--success);" id="kpiArchived">0</div>
+        </div>
+        <span class="kpi-icon">🗂️</span>
+      </div>
+      <div class="kpi-card" onclick="switchMainTab('library')">
+        <div>
+          <div class="kpi-label">📚 库内公文与材料</div>
+          <div class="kpi-val" style="color:var(--purple);" id="kpiDocs">0</div>
+        </div>
+        <span class="kpi-icon">📄</span>
+      </div>
+    </section>
+
     <!-- 局域网公告与置顶共享栏 -->
     <div class="lan-banner" id="lanBanner">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <span id="lanNoticeText" style="font-weight:600;color:#1e3a8a;"></span>
+        <span id="lanNoticeText" style="font-weight:600;color:var(--primary);"></span>
       </div>
       <div class="lan-pinned-list" id="lanPinnedList"></div>
     </div>
@@ -816,16 +1036,17 @@
       <div class="search-row">
         <div class="search-input-wrap">
           <input type="text" id="globalSearchInput" class="search-input"
-            placeholder="输入关键词秒搜，或输入自然语言问题（如：找一下今年防灾减灾或冬春火灾的通知和我写过的汇报）..."
+            placeholder="输入关键词实时秒搜 (Ctrl+K)，或输入自然语言问题点【AI 智能搜索】..."
+            oninput="handleSearchDebounce()"
             onkeydown="if(event.key==='Enter') runUserSearch()" />
         </div>
         <div class="scope-group">
           <button class="scope-btn" id="scopeTitleBtn" onclick="setSearchScope('title')">仅搜标题/文号</button>
           <button class="scope-btn active" id="scopeFullBtn" onclick="setSearchScope('full')">标题 + 正文内容</button>
         </div>
-        <button class="btn btn-primary" onclick="runUserSearch()">🔍 立即检索</button>
+        <button class="btn btn-primary" onclick="runUserSearch()">🔍 检索</button>
         <button class="btn btn-purple" onclick="runAiSemanticSearch()">🤖 AI 智能搜索与问答</button>
-        <button class="btn btn-sm" id="clearSearchBtn" style="display:none;" onclick="clearSearch()">✖ 关闭搜索结果</button>
+        <button class="btn btn-sm" id="clearSearchBtn" style="display:none;" onclick="clearSearch()">✖ 关闭搜索</button>
       </div>
 
       <div class="search-results-box" id="searchResultsBox">
@@ -836,14 +1057,14 @@
 
     <!-- ==================== TAB 1: 工作台待办与台账 ==================== -->
     <section id="tabWorkbench">
-      <!-- 全能极速投喂框 (编辑模式下显示) -->
+      <!-- 全能极速投喂框 -->
       <div class="omnibox" id="omniboxPanel"
            ondragover="event.preventDefault(); this.classList.add('dragover');"
            ondragleave="this.classList.remove('dragover');"
            ondrop="handleOmniboxDrop(event)">
         <div class="omnibox-top">
           <textarea id="omniText" class="omnibox-textarea"
-            placeholder="⚡ 全能投喂台：直接在此粘贴【微信群通知 / 电话记录 / 公文正文】，或直接把上级来文 (.docx / .ofd / .pdf / .wps / .txt) 拖拽到此区域，一键由 AI 提取要求、截止时间与待办细项并自动建好本地专属文件夹！"></textarea>
+            placeholder="⚡ 全能投喂台：直接在此粘贴【微信群通知 / 电话记录 / 公文正文】，或直接把上级来文 (.ofd / .docx / .pdf / .wps / .txt) 拖入此区域，AI 一键拆解文号、截止期与待办清单并自动创建本地专属文件夹！"></textarea>
           <div class="omnibox-controls">
             <button class="btn btn-primary" onclick="quickCreateFromOmnibox(false)">🤖 AI 一键解析入库</button>
             <button class="btn btn-sm" onclick="quickCreateFromOmnibox(true)">📝 预览/微调后入库</button>
@@ -853,7 +1074,7 @@
         <div class="omnibox-meta">
           <div>
             <label class="btn btn-sm" style="cursor:pointer;">
-              📎 选择来文或附件 (.ofd/.docx/.pdf/.wps)
+              📎 挂载来文或附件 (.ofd/.docx/.pdf/.wps)
               <input type="file" id="omniFileInput" multiple style="display:none;" onchange="handleOmniFileSelect(this.files)" />
             </label>
             <span style="margin-left:8px;">来源预设：</span>
@@ -865,14 +1086,15 @@
               <option value="自建">日常自建</option>
             </select>
           </div>
-          <span>💡 提示：你在本地专属文件夹里直接用 WPS 修改或新建的材料，工作台会自动识别并建立全文索引，无需反复重传。</span>
+          <span>💡 支持直接点击卡片上的【✍️ 在线写材料】免 WPS 撰稿并一键排版为符合 GB/T 9704 国标的 .docx 公文！</span>
         </div>
       </div>
 
       <!-- 过滤与视图切换栏 -->
       <div class="filter-bar">
-        <div class="pill-group">
+        <div class="pill-group" id="wbStatusPills">
           <button class="filter-pill active" data-status="active" onclick="setTaskStatusFilter('active', this)">🔥 待办与进行中 (<span id="cntActive">0</span>)</button>
+          <button class="filter-pill" data-status="urgent" onclick="setTaskStatusFilter('urgent', this)">🔴 临期/超期 (<span id="cntUrgent">0</span>)</button>
           <button class="filter-pill" data-status="in_progress" onclick="setTaskStatusFilter('in_progress', this)">🔄 进行中 (<span id="cntInProgress">0</span>)</button>
           <button class="filter-pill" data-status="pending" onclick="setTaskStatusFilter('pending', this)">⏳ 待办 (<span id="cntPending">0</span>)</button>
           <button class="filter-pill" data-status="archived" onclick="setTaskStatusFilter('archived', this)">✅ 已完成归档 (<span id="cntArchived">0</span>)</button>
@@ -880,10 +1102,11 @@
         </div>
 
         <div class="pill-group">
-          <select id="wbCatFilter" class="form-control" style="padding:4px 10px;font-size:13px;" onchange="renderTasks()">
+          <select id="wbCatFilter" class="form-control" style="padding:4px 10px;font-size:12.5px;" onchange="renderTasks()">
             <option value="">📂 所有业务分类</option>
           </select>
-          <button class="btn btn-sm" id="viewModeCardBtn" onclick="setTaskViewMode('card')" style="background:#e2e8f0;">🗂️ 看板卡片</button>
+          <button class="btn btn-sm" onclick="toggleCollapseAllTasks()" title="一键折叠或展开全部事项卡片">↕️ 折叠/展开全部</button>
+          <button class="btn btn-sm" id="viewModeCardBtn" onclick="setTaskViewMode('card')">🗂️ 卡片视图</button>
           <button class="btn btn-sm" id="viewModeTableBtn" onclick="setTaskViewMode('table')">📑 紧凑台账表</button>
         </div>
       </div>
@@ -895,14 +1118,14 @@
     <!-- ==================== TAB 2: 独立【公文与材料库（分类归纳中心）】 ==================== -->
     <section id="tabLibrary" style="display:none;">
       <div class="library-layout">
-        <!-- 左侧物理分类目录树 -->
+        <!-- 左侧物理分类目录树（支持拖拽文件直接归入分类、支持重命名与合并） -->
         <aside class="cat-sidebar">
           <div style="display:flex;align-items:center;justify-content:space-between;">
-            <strong style="font-size:14px;">📁 本地物理分类目录</strong>
-            <button class="btn btn-sm" onclick="createNewCategoryPrompt()" id="btnNewCat">+ 新建目录</button>
+            <strong style="font-size:13.5px;">📁 本地物理分类目录</strong>
+            <button class="btn btn-xs btn-primary" onclick="createNewCategoryPrompt()" id="btnNewCat">+ 新建</button>
           </div>
           <p style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
-            网页分类与本机硬盘文件夹 1:1 实时对应，不开系统也能直接按文件夹查找。
+            💡 可直接将右侧文件行拖拽到下方目录完成本地物理移动；点击目录右侧 ✏️ 可重命名或合并分类。
           </p>
           <ul class="cat-list" id="libCategoryList"></ul>
         </aside>
@@ -910,16 +1133,37 @@
         <!-- 右侧材料库主面板 -->
         <div>
           <div class="filter-bar" style="background:var(--surface);padding:10px 14px;border-radius:var(--radius);border:1px solid var(--border);">
-            <div class="pill-group">
+            <div class="pill-group" id="libRolePills">
               <button class="filter-pill active" onclick="setLibRoleFilter('', this)">全部文件</button>
               <button class="filter-pill" onclick="setLibRoleFilter('starred', this)">⭐ 常用范文/模板</button>
               <button class="filter-pill" onclick="setLibRoleFilter('draft', this)">✍️ 我写的材料</button>
               <button class="filter-pill" onclick="setLibRoleFilter('incoming', this)">📄 上级来文原件</button>
               <button class="filter-pill" onclick="setLibRoleFilter('historical', this)">🏛️ 历史公文归档</button>
             </div>
-            <div class="pill-group" id="libEditActions">
-              <button class="btn btn-primary btn-sm" onclick="openUploadLibraryModal()">📤 上传独立材料 / 历史公文</button>
-              <button class="btn btn-sm" onclick="openScanLocalDirModal()">📂 扫描导入本机历史公文文件夹</button>
+            <div class="pill-group">
+              <input type="text" id="libQuickFilterInput" class="form-control" style="padding:4px 10px;width:170px;font-size:12.5px;"
+                     placeholder="🔍 过滤当前库文件名/标签..." oninput=" STATE.libPage=1; renderLibrary();" />
+              <div id="libEditActions" style="display:inline-flex;gap:6px;flex-wrap:wrap;">
+                <button class="btn btn-xs btn-success" onclick="openOnlineEditorNewStandalone()">✍️ 在线新建材料</button>
+                <button class="btn btn-primary btn-xs" onclick="openUploadLibraryModal()">📤 上传文件</button>
+                <button class="btn btn-xs" onclick="openScanLocalDirModal()">📂 扫描本机历史目录</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 多选批量归纳操作栏 -->
+          <div class="batch-bar" id="libBatchBar">
+            <div>
+              已勾选 <strong id="batchSelectedCount">0</strong> 份文件
+              <button class="btn btn-xs" style="margin-left:8px;" onclick="clearLibSelection()">取消选择</button>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              <select id="batchMoveCatSelect" class="form-control" style="padding:2px 8px;font-size:12px;width:auto;"></select>
+              <button class="btn btn-xs btn-primary" onclick="executeBatchMoveCat()">📁 批量移入该目录</button>
+              <button class="btn btn-xs" onclick="executeBatchAddTags()">🏷️ 批量加标签</button>
+              <button class="btn btn-xs" onclick="executeBatchStar()">⭐ 设为常用范文</button>
+              <button class="btn btn-xs btn-success" onclick="executeBatchDownloadZip()">📦 批量打包下载 (.zip)</button>
+              <button class="btn btn-xs btn-danger-ghost" onclick="executeBatchDelete()">🗑️ 批量移除</button>
             </div>
           </div>
 
@@ -927,44 +1171,95 @@
             <table class="ledger-table">
               <thead>
                 <tr>
-                  <th>文件名称（点击直接预览全文）</th>
+                  <th style="width:34px;">
+                    <input type="checkbox" id="libSelectAllChk" onchange="toggleLibSelectAll(this.checked)" />
+                  </th>
+                  <th>文件名称（点击直接预览 / 可拖拽至左侧分类目录）</th>
                   <th>性质分类</th>
                   <th>所属物理目录</th>
                   <th>标签归纳 (Tags)</th>
                   <th>更新时间</th>
-                  <th>整理与下载操作</th>
+                  <th>整理、国标排版与下载</th>
                 </tr>
               </thead>
               <tbody id="libraryTableBody"></tbody>
             </table>
           </div>
+
+          <!-- 分页控制栏（海量文件防卡顿） -->
+          <div class="pagination-bar">
+            <div id="libPageInfo">共 0 份文件</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span>每页显示：</span>
+              <select id="libPageSizeSelect" class="form-control" style="padding:2px 6px;font-size:12px;width:auto;"
+                      onchange="STATE.libPageSize=parseInt(this.value);STATE.libPage=1;renderLibrary();">
+                <option value="30">30 条</option>
+                <option value="60">60 条</option>
+                <option value="150">150 条</option>
+              </select>
+              <button class="btn btn-xs" onclick="changeLibPage(-1)">上一页</button>
+              <span id="libPageNumText">1 / 1</span>
+              <button class="btn btn-xs" onclick="changeLibPage(1)">下一页</button>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- ==================== TAB 3: 台账导出与阶段总结 ==================== -->
+    <!-- ==================== TAB 3: 周期性/常态化工作自动派生 ==================== -->
+    <section id="tabRecurring" style="display:none;">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+          <div>
+            <h3>🔁 周期性 / 常态化工作自动派生引擎（周调度表 / 月度总结 / 风险会商 / 值班报送）</h3>
+            <p style="font-size:13px;color:var(--text-secondary);margin-top:3px;">
+              配置好周期规则后，系统会在每个周期自动为您创建对应的事项专属文件夹，并自动关联上一期写好的定稿材料作为本期参考底稿；您也可随时点【⚡ 立即派生本期事项】。
+            </p>
+          </div>
+          <button class="btn btn-primary" onclick="openRecurringModal()" id="btnAddRecurring">+ 新增周期性工作规则</button>
+        </div>
+
+        <div class="ledger-table-wrap">
+          <table class="ledger-table">
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>周期类型与触发规则</th>
+                <th>派生事项标题模板</th>
+                <th>所属分类 / 来文单位</th>
+                <th>上期派生记录</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="recurringTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 4: 台账导出与阶段总结 ==================== -->
     <section id="tabSummary" style="display:none;">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);">
         <h3 style="margin-bottom:8px;">📊 办文与工作台账一键导出 & 阶段工作总结生成</h3>
-        <p style="color:var(--text-secondary);font-size:13.5px;margin-bottom:14px;">
-          支持导出带 BOM 的标准 CSV 表格（银河麒麟 WPS 表格与 Windows Excel 直接双击打开不乱码）及 Markdown 台账；或一键汇总阶段办文与材料清单生成工作总结汇报初稿。
+        <p style="color:var(--text-secondary);font-size:13px;margin-bottom:14px;">
+          支持导出带 UTF-8 BOM 的标准 CSV 表格（银河麒麟 WPS 表格与 Windows Excel 直接双击打开不乱码）及 Markdown 台账；或一键汇总阶段办文与材料清单生成工作总结汇报初稿。
         </p>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;">
           <a class="btn btn-success" href="/api/export/ledger?format=csv" target="_blank">📥 导出 Excel/WPS 兼容台账 (.csv)</a>
           <a class="btn" href="/api/export/ledger?format=md" target="_blank">📝 导出 Markdown 台账 (.md)</a>
           <span style="color:var(--border-strong);">|</span>
           <input type="text" id="summaryPeriodInput" class="form-control" value="2026年11月阶段性" style="width:180px;" />
-          <button class="btn btn-purple" onclick="generatePeriodicSummary()">🤖 一键生成阶段工作总结汇报初稿</button>
+          <button class="btn btn-purple" onclick="generatePeriodicSummary()">🤖 一键生成阶段工作总结初稿</button>
           <button class="btn btn-sm" onclick="copySummaryText()">📋 复制总结全文</button>
         </div>
-        <div id="summaryResultArea" class="preview-text-box" style="min-height:260px;">
-          点击上方“🤖 一键生成阶段工作总结汇报初稿”，系统将自动汇总工作台中的已办结事项、推进中事项以及您撰写的全部材料，生成规范的总结汇报初稿（也可直接复制喂给本地 Agent）。
+        <div id="summaryResultArea" class="preview-rendered-box" style="min-height:260px;white-space:pre-wrap;">
+          点击上方“🤖 一键生成阶段工作总结初稿”，系统将自动汇总工作台中的已办结事项、推进中事项以及您撰写的全部材料，生成规范的总结汇报初稿。
         </div>
       </div>
     </section>
   </main>
 
-  <!-- 右侧滑出：正文免 WPS 预览与一键复制抽屉 -->
+  <!-- 右侧滑出：正文预览 / 在线写稿改稿 / 一键国标公文排版抽屉 -->
   <div class="drawer-backdrop" id="drawerBackdrop" onclick="closePreviewDrawer()"></div>
   <aside class="drawer" id="previewDrawer">
     <div class="drawer-header">
@@ -973,14 +1268,57 @@
         <div id="drawerSubMeta" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button class="btn btn-xs" onclick="adjustDrawerFont(-1)">A-</button>
+        <button class="btn btn-xs" onclick="adjustDrawerFont(1)">A+</button>
         <button class="btn btn-primary btn-sm" onclick="copyDrawerText()">📋 复制全文</button>
-        <a class="btn btn-sm" id="drawerDownloadLink" href="#" target="_blank">⬇️ 下载原件</a>
+        <a class="btn btn-sm" id="drawerDownloadLink" href="#" target="_blank">⬇️ 下载</a>
         <button class="btn btn-sm" onclick="closePreviewDrawer()">✖</button>
       </div>
     </div>
+
+    <div class="drawer-toolbar">
+      <div class="scope-group">
+        <button class="scope-btn active" id="drawerTabReadBtn" onclick="switchDrawerMode('read')">📖 排版阅读</button>
+        <button class="scope-btn" id="drawerTabRawBtn" onclick="switchDrawerMode('raw')">📝 纯文本</button>
+        <button class="scope-btn" id="drawerTabEditBtn" onclick="switchDrawerMode('edit')">✍️ 在线写稿/改稿</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;" id="drawerActionBtns">
+        <button class="btn btn-xs btn-success" id="btnDrawerFormatGw" onclick="formatCurrentDrawerDocToGw('report')" title="按 GB/T 9704—2012 国标公文标准（二号小标宋标题+三号仿宋正文+28磅行距）导出 .docx">
+          📄 导出国标公文(.docx)
+        </button>
+        <button class="btn btn-xs btn-purple" id="btnDrawerFormatRedhead" onclick="formatCurrentDrawerDocToGw('redhead')" title="生成带红色版头与发文字号的正式红头文件 .docx">
+          📕 导出红头文件(.docx)
+        </button>
+        <button class="btn btn-xs" id="btnDrawerOpenWps" style="display:none;" onclick="openCurrentDrawerDocInWps()">
+          🖥️ 本机 WPS 打开
+        </button>
+      </div>
+    </div>
+
     <div class="drawer-body">
-      <div id="drawerPathBar" style="font-size:12px;background:#eff6ff;color:#1e40af;padding:6px 10px;border-radius:6px;margin-bottom:10px;word-break:break-all;"></div>
-      <div class="preview-text-box" id="drawerTextContent"></div>
+      <div id="drawerPathBar" style="font-size:12px;background:var(--primary-soft);color:var(--primary);padding:6px 10px;border-radius:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span id="drawerPathText" style="word-break:break-all;"></span>
+        <button class="btn btn-xs" onclick="copyDrawerPath()">复制路径</button>
+      </div>
+
+      <!-- 阅读模式 -->
+      <div class="preview-rendered-box" id="drawerRenderedBox"></div>
+
+      <!-- 在线编辑/新建材料草稿模式 -->
+      <div id="drawerEditorWrap" style="display:none;flex-direction:column;flex:1;gap:8px;">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <label style="font-size:12px;font-weight:600;">保存文件名：</label>
+          <input type="text" id="drawerEditorFilename" class="form-control" style="flex:1;" placeholder="如：我县冬春防灾减灾总结汇报_初稿.md" />
+        </div>
+        <textarea id="drawerEditorTextarea" class="editor-textarea" placeholder="在此直接撰写材料正文（支持一、/（一）/1. 自动识别国标公文标题层级）..."></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+          <span style="font-size:12px;color:var(--text-muted);">💡 保存后将直接写入对应的本地物理文件夹并刷新全文索引</span>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary" onclick="saveDrawerOnlineDraft(false)">💾 保存至本地文件夹</button>
+            <button class="btn btn-success" onclick="saveDrawerOnlineDraft(true)">📄 保存并导出国标 .docx</button>
+          </div>
+        </div>
+      </div>
     </div>
   </aside>
 
@@ -994,7 +1332,7 @@
       <input type="hidden" id="editTaskId" />
       <div class="form-grid">
         <div class="form-group full">
-          <label>事项名称 *</label>
+          <label>事项名称 *（修改后将自动同步重命名本地物理文件夹）</label>
           <input type="text" id="editTaskTitleInput" class="form-control" />
         </div>
         <div class="form-group">
@@ -1003,11 +1341,12 @@
             <option value="上级来文">上级来文</option>
             <option value="微信群">微信群</option>
             <option value="电话通知">电话通知</option>
+            <option value="周期性工作">周期性工作</option>
             <option value="自建">日常自建</option>
           </select>
         </div>
         <div class="form-group">
-          <label>所属物理分类目录（修改后自动同步移动本地文件夹）</label>
+          <label>所属物理分类目录（修改后自动移动本地文件夹）</label>
           <select id="editTaskCat" class="form-control"></select>
         </div>
         <div class="form-group">
@@ -1053,7 +1392,7 @@
     </div>
   </div>
 
-  <!-- 弹窗：公文与材料库上传 / 整理编辑 -->
+  <!-- 弹窗：公文与材料库上传 -->
   <div class="modal-backdrop" id="libUploadModalBackdrop">
     <div class="modal">
       <div class="modal-header">
@@ -1075,7 +1414,7 @@
           </select>
         </div>
         <div class="form-group full">
-          <label>归纳标签（多个标签用空格或逗号分隔，如：防灾减灾 年度总结 汇报）</label>
+          <label>归纳标签（多个标签用空格或逗号分隔）</label>
           <input type="text" id="libUploadTags" class="form-control" placeholder="例如：防灾减灾 冬春救助 汇报材料" />
         </div>
         <div class="form-group full">
@@ -1098,15 +1437,21 @@
         <button class="btn btn-sm" onclick="document.getElementById('scanDirModalBackdrop').style.display='none'">✖</button>
       </div>
       <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
-        填入你麒麟系统电脑上的历史公文文件夹路径（如 <code>/home/kylin/桌面/2025历史公文</code>），系统将自动提取所有公文与材料的正文并建立全文检索库（不消耗 AI Token，按需一键转待办）。
+        填入你麒麟系统电脑上的历史公文文件夹路径（如 <code>/home/kylin/桌面/2025历史公文</code>），系统将自动提取正文建立 FTS5 全文检索，并自动保留原多级子文件夹名称作为标签！
       </p>
       <div class="form-group">
         <label>本机历史公文文件夹绝对路径 *</label>
         <input type="text" id="scanSourceDirInput" class="form-control" placeholder="/home/..." />
       </div>
       <div class="form-group">
-        <label>归入工作台哪个物理分类目录</label>
+        <label>默认归入哪个物理分类目录</label>
         <select id="scanTargetCatSelect" class="form-control"></select>
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+          <input type="checkbox" id="scanSmartAutoCat" checked />
+          🤖 按公文主题词自动智能分拣至对应业务分类目录（防灾减灾 / 隐患排查 / 汇报总结等）
+        </label>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
         <button class="btn" onclick="document.getElementById('scanDirModalBackdrop').style.display='none'">取消</button>
@@ -1152,7 +1497,7 @@
         </div>
         <div class="form-group">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" id="editDocPinned" /> 📌 设为局域网置顶共享（方便同事一眼下载）
+            <input type="checkbox" id="editDocPinned" /> 📌 设为局域网置顶共享
           </label>
         </div>
       </div>
@@ -1166,11 +1511,60 @@
     </div>
   </div>
 
+  <!-- 弹窗：新增周期性工作派生规则 -->
+  <div class="modal-backdrop" id="recurringModalBackdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <span>🔁 新增周期性 / 常态化工作派生规则</span>
+        <button class="btn btn-sm" onclick="document.getElementById('recurringModalBackdrop').style.display='none'">✖</button>
+      </div>
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>派生事项标题模板 *（可用 <code>{period}</code> 代表周/月标识，<code>{month}</code> 代表当前月份）</label>
+          <input type="text" id="recTitleTpl" class="form-control" placeholder="如：报送《重点行业领域重大事故隐患排查周调度表》({period})" />
+        </div>
+        <div class="form-group">
+          <label>所属物理分类目录</label>
+          <select id="recCategory" class="form-control"></select>
+        </div>
+        <div class="form-group">
+          <label>督办/来文单位</label>
+          <input type="text" id="recOrg" class="form-control" placeholder="如：县安委办 / 市应急局" />
+        </div>
+        <div class="form-group">
+          <label>周期频率类型</label>
+          <select id="recFreqType" class="form-control">
+            <option value="weekly">每周固定星期几</option>
+            <option value="monthly">每月固定几号</option>
+            <option value="quarterly">每季度末月几号</option>
+            <option value="custom_days">每隔 N 天</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>触发日数值（每周填1~7，每月填1~28，间隔填天数）</label>
+          <input type="number" id="recFreqVal" class="form-control" value="4" />
+        </div>
+        <div class="form-group full">
+          <label>核心工作要求说明</label>
+          <input type="text" id="recSummary" class="form-control" placeholder="汇总本周排查数据并报送简表..." />
+        </div>
+        <div class="form-group full">
+          <label>每次自动生成的待办细项清单（每行一条）</label>
+          <textarea id="recChecklist" class="form-control" rows="3" placeholder="汇总数据填报统计表&#10;撰写本期工作小结"></textarea>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button class="btn" onclick="document.getElementById('recurringModalBackdrop').style.display='none'">取消</button>
+        <button class="btn btn-primary" onclick="saveRecurringModal()">💾 保存周期规则</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 弹窗：系统设置 -->
   <div class="modal-backdrop" id="settingsModalBackdrop">
     <div class="modal">
       <div class="modal-header">
-        <span>⚙️ 工作台与 AI 接口设置</span>
+        <span>⚙️ 工作台、AI 接口与 xkl-gw 联动设置</span>
         <button class="btn btn-sm" onclick="document.getElementById('settingsModalBackdrop').style.display='none'">✖</button>
       </div>
       <div class="form-grid">
@@ -1179,24 +1573,28 @@
           <input type="text" id="cfgWorkspaceRoot" class="form-control" />
         </div>
         <div class="form-group">
-          <label>局域网同事访问密码（浏览器自动记住）</label>
-          <input type="text" id="cfgViewPwd" class="form-control" />
+          <label>修改局域网访问密码（留空则保持原密码不变）</label>
+          <input type="password" id="cfgViewPwd" class="form-control" placeholder="留空不修改（默认 123456）" />
         </div>
         <div class="form-group">
-          <label>主理人编辑模式口令（本机 127.0.0.1 默认免密）</label>
-          <input type="text" id="cfgEditPwd" class="form-control" />
+          <label>修改主理人编辑口令（留空则保持原口令不变）</label>
+          <input type="password" id="cfgEditPwd" class="form-control" placeholder="留空不修改（默认 8888）" />
         </div>
         <div class="form-group full">
           <label>局域网顶部共享公告栏文字</label>
           <input type="text" id="cfgLanNotice" class="form-control" />
         </div>
         <div class="form-group full">
+          <label>外部 xkl-gw 公文排版助手 CLI 脚本路径（可选，留空则使用工作台内置 GB/T 9704 国标排版引擎）</label>
+          <input type="text" id="cfgXklGwCli" class="form-control" placeholder="如：/opt/xkl-gw/bin/xkl-gw-cli" />
+        </div>
+        <div class="form-group full">
           <label>AI 接口地址 (兼容 OpenAI 格式，如 https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1；留空则使用内置政务规则引擎)</label>
           <input type="text" id="cfgAiBase" class="form-control" placeholder="https://api.deepseek.com/v1" />
         </div>
         <div class="form-group">
-          <label>AI API Key (本地模型或仅用本地 Agent 时可留空)</label>
-          <input type="password" id="cfgAiKey" class="form-control" placeholder="sk-..." />
+          <label>AI API Key (留空则保持已存 Key 不变)</label>
+          <input type="password" id="cfgAiKey" class="form-control" placeholder="留空不修改" />
         </div>
         <div class="form-group">
           <label>AI 模型名称</label>
@@ -1236,21 +1634,32 @@
 
   <script>
     let STATE = {
+      version: '1.2.0',
       can_view: true,
       can_edit: false,
       is_localhost: false,
       lan_url: '',
       workspace_root: '',
       lan_notice: '',
+      xkl_gw_cli: '',
       categories: [],
       tasks: [],
       documents: [],
+      recurring_rules: [],
       taskStatusFilter: 'active',
       taskViewMode: 'card',
       searchScope: 'full',
+      searchKeywords: [],
       libCategoryFilter: '',
       libRoleFilter: '',
-      omniFiles: []
+      libSelectedIds: new Set(),
+      libPage: 1,
+      libPageSize: 30,
+      omniFiles: [],
+      drawerDoc: null,
+      drawerTaskId: null,
+      drawerMode: 'read',
+      drawerFontSize: 15
     };
 
     function showToast(msg, duration = 2600) {
@@ -1266,7 +1675,56 @@
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function highlightKeywordsHtml(text, keywords) {
+      let safe = escapeHtml(text || '');
+      if (!keywords || keywords.length === 0) return safe;
+      keywords.forEach(kw => {
+        if (!kw || kw.length < 1) return;
+        const escapedKw = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const reg = new RegExp(`(${escapedKw})`, 'gi');
+        safe = safe.replace(reg, '<mark class="hl">$1</mark>');
+      });
+      return safe;
+    }
+
+    function renderSimpleMarkdown(mdText, keywords = []) {
+      const lines = String(mdText || '').split('\n');
+      let html = [];
+      let inList = false;
+      for (let rawLine of lines) {
+        let ln = rawLine.trim();
+        if (!ln) {
+          if (inList) { html.push('</ul>'); inList = false; }
+          continue;
+        }
+        if (ln.startsWith('<!--') && ln.endsWith('-->')) continue;
+        if (ln.startsWith('# ')) {
+          if (inList) { html.push('</ul>'); inList = false; }
+          html.push(`<h1>${highlightKeywordsHtml(ln.slice(2), keywords)}</h1>`);
+        } else if (ln.startsWith('## ')) {
+          if (inList) { html.push('</ul>'); inList = false; }
+          html.push(`<h2>${highlightKeywordsHtml(ln.slice(3), keywords)}</h2>`);
+        } else if (ln.startsWith('### ')) {
+          if (inList) { html.push('</ul>'); inList = false; }
+          html.push(`<h3>${highlightKeywordsHtml(ln.slice(4), keywords)}</h3>`);
+        } else if (ln.startsWith('- ') || ln.startsWith('* ')) {
+          if (!inList) { html.push('<ul>'); inList = true; }
+          let itemTxt = highlightKeywordsHtml(ln.slice(2), keywords);
+          itemTxt = itemTxt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          html.push(`<li>${itemTxt}</li>`);
+        } else {
+          if (inList) { html.push('</ul>'); inList = false; }
+          let pTxt = highlightKeywordsHtml(ln, keywords);
+          pTxt = pTxt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          html.push(`<p>${pTxt}</p>`);
+        }
+      }
+      if (inList) html.push('</ul>');
+      return html.join('\n');
     }
 
     async function apiFetch(url, options = {}) {
@@ -1292,36 +1750,107 @@
         document.getElementById('loginModalBackdrop').style.display = 'none';
         renderHeaderAndAuth();
         renderCategorySelectors();
+        renderKpiStrip();
         renderLanBanner();
         renderTasks();
         renderLibrary();
+        renderRecurring();
       } catch (err) {
         console.warn(err);
       }
     }
 
+    /**
+     * 乐观局部更新：当修改单条事项（勾选细项、填进展、改状态、置顶、折叠）时，
+     * 仅就地更新内存中该事项及对应卡片 DOM，绝不重刷整页或丢失其它输入框焦点！
+     */
+    function updateSingleTaskInStateAndDOM(updatedTask) {
+      if (!updatedTask || !updatedTask.id) return;
+      const idx = STATE.tasks.findIndex(x => x.id === updatedTask.id);
+      if (idx !== -1) {
+        STATE.tasks[idx] = updatedTask;
+      } else {
+        STATE.tasks.unshift(updatedTask);
+      }
+      renderKpiStrip();
+      renderLanBanner();
+
+      const cardEl = document.getElementById(`task_card_${updatedTask.id}`);
+      const stillMatches = doesTaskMatchCurrentFilter(updatedTask);
+      if (cardEl && STATE.taskViewMode === 'card' && stillMatches) {
+        const temp = document.createElement('div');
+        temp.innerHTML = buildSingleTaskCardHtml(updatedTask);
+        cardEl.replaceWith(temp.firstElementChild);
+      } else {
+        renderTasks();
+      }
+    }
+
+    function doesTaskMatchCurrentFilter(t) {
+      const catFilter = document.getElementById('wbCatFilter').value;
+      if (catFilter && t.category !== catFilter) return false;
+      if (STATE.taskStatusFilter === 'active') return t.status !== 'archived';
+      if (STATE.taskStatusFilter === 'urgent') {
+        return t.status !== 'archived' && t.deadline_info && (t.deadline_info.level === 'danger' || t.deadline_info.level === 'warning');
+      }
+      if (STATE.taskStatusFilter === 'all') return true;
+      return t.status === STATE.taskStatusFilter;
+    }
+
+    function renderKpiStrip() {
+      const tasks = STATE.tasks || [];
+      const cntUrgent = tasks.filter(t => t.status !== 'archived' && t.deadline_info && (t.deadline_info.level === 'danger' || t.deadline_info.level === 'warning')).length;
+      const cntInProgress = tasks.filter(t => t.status === 'in_progress').length;
+      const cntPending = tasks.filter(t => t.status === 'pending').length;
+      const cntArchived = tasks.filter(t => t.status === 'archived').length;
+
+      document.getElementById('kpiUrgent').textContent = cntUrgent;
+      document.getElementById('kpiInProgress').textContent = cntInProgress;
+      document.getElementById('kpiPending').textContent = cntPending;
+      document.getElementById('kpiArchived').textContent = cntArchived;
+      document.getElementById('kpiDocs').textContent = (STATE.documents || []).length;
+
+      document.getElementById('navCntActive').textContent = cntInProgress + cntPending;
+      document.getElementById('cntActive').textContent = cntInProgress + cntPending;
+      document.getElementById('cntUrgent').textContent = cntUrgent;
+      document.getElementById('cntInProgress').textContent = cntInProgress;
+      document.getElementById('cntPending').textContent = cntPending;
+      document.getElementById('cntArchived').textContent = cntArchived;
+      document.getElementById('cntAll').textContent = tasks.length;
+    }
+
+    function quickFilterByKpi(filterKey) {
+      switchMainTab('workbench');
+      const btn = document.querySelector(`#wbStatusPills .filter-pill[data-status="${filterKey}"]`);
+      setTaskStatusFilter(filterKey, btn);
+    }
+
     function renderHeaderAndAuth() {
-      document.getElementById('lanUrlBadge').textContent = `🌐 局域网共享: ${STATE.lan_url} (点击复制)`;
-      document.getElementById('localDirBadge').textContent = `📂 本地库: ${STATE.workspace_root}`;
-      document.getElementById('libCountBadge').textContent = STATE.documents.length;
+      document.getElementById('verBadge').textContent = `v${STATE.version || '1.2.0'}`;
+      document.getElementById('lanUrlBadge').textContent = `🌐 局域网共享: ${STATE.lan_url}`;
+      document.getElementById('localDirBadge').textContent = STATE.is_localhost
+        ? `📂 打开本地资料库 (${STATE.workspace_root})`
+        : `📂 本地库: ${STATE.workspace_root}`;
+      document.getElementById('libCountBadge').textContent = (STATE.documents || []).length;
+      document.getElementById('recCountBadge').textContent = (STATE.recurring_rules || []).length;
 
       const modeBadge = document.getElementById('modeBadge');
       const omnibox = document.getElementById('omniboxPanel');
       if (STATE.can_edit) {
         modeBadge.className = 'mode-pill mode-edit';
-        modeBadge.textContent = '✍️ 主理人编辑模式 (已开启)';
+        modeBadge.textContent = '✍️ 主理人编辑模式';
         omnibox.style.display = 'block';
       } else {
         modeBadge.className = 'mode-pill mode-view';
-        modeBadge.textContent = '🔒 浏览下载模式 (点击切换编辑)';
+        modeBadge.textContent = '🔒 浏览下载模式 (点此切换)';
         omnibox.style.display = 'none';
       }
     }
 
     function renderLanBanner() {
       document.getElementById('lanNoticeText').textContent = STATE.lan_notice || '';
-      const pinnedTasks = STATE.tasks.filter(t => t.is_pinned);
-      const pinnedDocs = STATE.documents.filter(d => d.is_pinned);
+      const pinnedTasks = (STATE.tasks || []).filter(t => t.is_pinned);
+      const pinnedDocs = (STATE.documents || []).filter(d => d.is_pinned);
       const container = document.getElementById('lanPinnedList');
       let html = '';
       pinnedTasks.forEach(t => {
@@ -1341,31 +1870,34 @@
       wbSel.value = currentVal;
 
       const catOptions = STATE.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-      ['editTaskCat', 'libUploadCat', 'scanTargetCatSelect', 'editDocCategory'].forEach(id => {
+      ['editTaskCat', 'libUploadCat', 'scanTargetCatSelect', 'editDocCategory', 'batchMoveCatSelect', 'recCategory'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = catOptions;
       });
     }
 
     function switchMainTab(tab) {
-      ['workbench', 'library', 'summary'].forEach(t => {
+      ['workbench', 'library', 'recurring', 'summary'].forEach(t => {
         document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = (t === tab) ? 'block' : 'none';
         document.getElementById('tabBtn' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
       });
       if (tab === 'library') renderLibrary();
+      if (tab === 'recurring') renderRecurring();
     }
 
     async function toggleEditMode() {
       if (STATE.can_edit && !STATE.is_localhost) {
+        await apiFetch('/api/auth/lock-edit', { method: 'POST', body: '{}' });
         STATE.can_edit = false;
         renderHeaderAndAuth();
         renderTasks();
         renderLibrary();
-        showToast('已切回防误触【浏览下载模式】');
+        renderRecurring();
+        showToast('🔒 已切回防误触【浏览下载模式】并清除编辑状态');
         return;
       }
       if (STATE.can_edit && STATE.is_localhost) {
-        showToast('本机直连默认开启主理人编辑模式');
+        showToast('本机直连 (127.0.0.1) 默认常驻主理人编辑模式');
         return;
       }
       const pwd = prompt('请输入主理人编辑模式口令（默认 8888）：', '');
@@ -1379,7 +1911,8 @@
         renderHeaderAndAuth();
         renderTasks();
         renderLibrary();
-        showToast('✍️ 已开启主理人编辑模式（浏览器已自动记住）');
+        renderRecurring();
+        showToast('✍️ 已开启主理人编辑模式');
       } catch (err) {
         alert(err.message);
       }
@@ -1480,213 +2013,249 @@
       showToast('✅ 已自动提取填入工作台，并在本地生成专属文件夹！');
     }
 
-    // ==================== 工作台渲染与行内直改 ====================
+    // ==================== 工作台渲染与乐观局部更新 ====================
     function setTaskStatusFilter(status, btnEl) {
       STATE.taskStatusFilter = status;
-      document.querySelectorAll('#tabWorkbench .filter-pill').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('#wbStatusPills .filter-pill').forEach(b => b.classList.remove('active'));
       if (btnEl) btnEl.classList.add('active');
       renderTasks();
     }
 
     function setTaskViewMode(mode) {
       STATE.taskViewMode = mode;
-      document.getElementById('viewModeCardBtn').style.background = mode === 'card' ? '#e2e8f0' : '#fff';
-      document.getElementById('viewModeTableBtn').style.background = mode === 'table' ? '#e2e8f0' : '#fff';
       renderTasks();
     }
 
     function renderTasks() {
-      const tasks = STATE.tasks || [];
-      const cntInProgress = tasks.filter(t => t.status === 'in_progress').length;
-      const cntPending = tasks.filter(t => t.status === 'pending').length;
-      const cntArchived = tasks.filter(t => t.status === 'archived').length;
-      document.getElementById('cntActive').textContent = cntInProgress + cntPending;
-      document.getElementById('cntInProgress').textContent = cntInProgress;
-      document.getElementById('cntPending').textContent = cntPending;
-      document.getElementById('cntArchived').textContent = cntArchived;
-      document.getElementById('cntAll').textContent = tasks.length;
-
-      const catFilter = document.getElementById('wbCatFilter').value;
-      const filtered = tasks.filter(t => {
-        if (catFilter && t.category !== catFilter) return false;
-        if (STATE.taskStatusFilter === 'active') return t.status !== 'archived';
-        if (STATE.taskStatusFilter === 'all') return true;
-        return t.status === STATE.taskStatusFilter;
-      });
-
+      const filtered = (STATE.tasks || []).filter(doesTaskMatchCurrentFilter);
       const container = document.getElementById('tasksContainer');
       if (filtered.length === 0) {
-        container.innerHTML = `<div style="background:#fff;padding:32px;text-align:center;border-radius:10px;border:1px solid var(--border);color:var(--text-muted);">当前筛选条件下暂无工作事项。</div>`;
+        container.innerHTML = `<div style="background:var(--surface);padding:34px;text-align:center;border-radius:10px;border:1px solid var(--border);color:var(--text-muted);">当前筛选条件下暂无工作事项。</div>`;
         return;
       }
 
       if (STATE.taskViewMode === 'table') {
         renderTasksTable(container, filtered);
       } else {
-        renderTasksCards(container, filtered);
+        container.innerHTML = `<div class="tasks-grid">` + filtered.map(buildSingleTaskCardHtml).join('') + `</div>`;
       }
     }
 
-    function renderTasksCards(container, list) {
-      container.innerHTML = `<div class="tasks-grid">` + list.map(t => {
-        const dl = t.deadline_info || { level: 'routine', label: '常态化' };
-        const badgeClass = {
-          danger: 'badge-danger',
-          warning: 'badge-warning',
-          normal: 'badge-normal',
-          routine: 'badge-routine',
-          archived: 'badge-archived'
-        }[dl.level] || 'badge-routine';
+    function buildSingleTaskCardHtml(t) {
+      const dl = t.deadline_info || { level: 'routine', label: '常态化' };
+      const badgeClass = {
+        danger: 'badge-danger',
+        warning: 'badge-warning',
+        normal: 'badge-normal',
+        routine: 'badge-routine',
+        archived: 'badge-archived'
+      }[dl.level] || 'badge-routine';
 
-        const chkHtml = (t.checklist || []).map(c => `
-          <li class="chk-item ${c.done ? 'done' : ''}" onclick="${STATE.can_edit ? `toggleCheckItem(${t.id}, '${escapeHtml(c.id)}')` : ''}">
-            <input type="checkbox" ${c.done ? 'checked' : ''} ${STATE.can_edit ? '' : 'disabled'} />
-            <span>${escapeHtml(c.text)}</span>
-          </li>
-        `).join('');
+      const doneCnt = (t.checklist || []).filter(x => x.done).length;
+      const totalCnt = (t.checklist || []).length;
+      const latestProg = (t.progress_logs && t.progress_logs[0])
+        ? `[${t.progress_logs[0].time}] ${t.progress_logs[0].text}`
+        : '暂无进展';
 
-        const progHtml = (t.progress_logs || []).map(p => `
-          <li class="prog-item">
-            <span class="prog-time">[${escapeHtml(p.time)}]</span>${escapeHtml(p.text)}
-          </li>
-        `).join('') || `<li style="color:var(--text-muted);font-size:12px;">暂无进展记录</li>`;
+      const subMetaParts = [
+        `📂 ${t.category}`,
+        t.source_channel,
+        t.issuing_org ? `来文：${t.issuing_org}` : '',
+        t.doc_number ? `文号：${t.doc_number}` : '',
+        t.completed_at ? `办结于：${t.completed_at}` : ''
+      ].filter(Boolean);
 
-        const incFilesHtml = (t.incoming_files || []).map(f => `
-          <div class="file-item">
-            <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击免WPS直接预览全文">📄 ${escapeHtml(f.filename)}</span>
-            <a class="btn btn-sm" style="padding:1px 6px;font-size:11px;" href="/api/docs/${f.id}/download">下载</a>
-          </div>
-        `).join('') || `<div style="color:var(--text-muted);font-size:12px;">${t.raw_notice_text ? `<span class="file-name-link" onclick="previewTaskRawNotice(${t.id})">💬 查看原始微信/通知文本</span>` : '无独立附件'}</div>`;
-
-        const draftFilesHtml = (t.drafted_files || []).map(f => `
-          <div class="file-item">
-            <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览或复制段落">✍️ ${escapeHtml(f.filename)}</span>
-            <a class="btn btn-sm" style="padding:1px 6px;font-size:11px;" href="/api/docs/${f.id}/download">下载</a>
-          </div>
-        `).join('') || `<div style="color:var(--text-muted);font-size:12px;">暂未上传材料（可拖入或存至本地目录）</div>`;
-
-        const refsHtml = (t.reference_docs || []).map(r => `
-          <span class="ref-chip" onclick="openDocPreview(${r.id})" title="点击对比预览库内历史参考材料">
-            ${r.is_starred ? '⭐' : '📄'} ${escapeHtml(r.filename)}
-          </span>
-        `).join('');
-
+      // 折叠紧凑态
+      if (t.is_collapsed) {
         return `
-          <article class="task-card level-${dl.level}">
-            <div class="task-header">
-              <div class="task-title-area">
+          <article class="task-card level-${dl.level}" id="task_card_${t.id}" style="padding:10px 15px;">
+            <div class="task-header" style="align-items:center;">
+              <div class="task-title-line" style="flex:1;">
                 <span class="badge ${badgeClass}">${escapeHtml(dl.label)}</span>
-                <span class="badge badge-cat">📂 ${escapeHtml(t.category)}</span>
-                <span class="badge badge-routine">${escapeHtml(t.source_channel)}</span>
-                ${t.doc_number ? `<span class="badge badge-docnum">${escapeHtml(t.doc_number)}</span>` : ''}
-                ${t.issuing_org ? `<span class="badge badge-routine">${escapeHtml(t.issuing_org)}</span>` : ''}
-                <span class="task-title">${escapeHtml(t.title)}</span>
+                <span class="task-title" onclick="toggleTaskCollapse(${t.id}, false)">${escapeHtml(t.title)}</span>
+                <span class="badge badge-routine">清单 ${doneCnt}/${totalCnt}</span>
+                <span style="font-size:12px;color:var(--text-muted);">最新进展：${escapeHtml(latestProg)}</span>
               </div>
-
-              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                <a class="btn btn-sm" href="/api/tasks/${t.id}/zip" title="将本事项来文、我写的材料及要求进展说明一键打包下载">📦 打包下载 (.zip)</a>
-                ${STATE.can_edit ? `
-                  <select class="form-control" style="padding:3px 7px;font-size:12px;width:auto;font-weight:600;"
-                          onchange="quickChangeStatus(${t.id}, this.value)">
-                    <option value="pending" ${t.status === 'pending' ? 'selected' : ''}>⏳ 待办</option>
-                    <option value="in_progress" ${t.status === 'in_progress' ? 'selected' : ''}>🔄 进行中</option>
-                    <option value="archived" ${t.status === 'archived' ? 'selected' : ''}>✅ 已完成(归档)</option>
-                  </select>
-                  <button class="btn btn-sm" onclick="toggleTaskPin(${t.id}, ${!t.is_pinned})" title="置顶到局域网共享栏">${t.is_pinned ? '📌 已置顶' : '📌 置顶'}</button>
-                  <button class="btn btn-sm" onclick="openEditTaskModal(${t.id})">✏️ 编辑</button>
-                ` : ''}
+              <div style="display:flex;gap:6px;align-items:center;">
+                <a class="btn btn-xs" href="/api/tasks/${t.id}/zip">📦 ZIP</a>
+                <button class="btn btn-xs" onclick="toggleTaskCollapse(${t.id}, false)">▼ 展开详情</button>
               </div>
-            </div>
-
-            <div class="task-summary">
-              <strong>核心要求：</strong>${escapeHtml(t.summary || '暂无摘要')}
-              ${t.raw_notice_text ? `<span style="margin-left:10px;color:var(--primary);cursor:pointer;font-weight:600;" onclick="previewTaskRawNotice(${t.id})">[查看原文]</span>` : ''}
-            </div>
-
-            <div class="task-body-grid">
-              <!-- 1. 待办细项清单 -->
-              <div class="sub-box">
-                <div>
-                  <div class="sub-box-title">
-                    <span>☑️ 待办要求细项 (${(t.checklist||[]).filter(x=>x.done).length}/${(t.checklist||[]).length})</span>
-                  </div>
-                  <ul class="chk-list">${chkHtml}</ul>
-                </div>
-                ${STATE.can_edit ? `
-                  <div class="inline-input-row">
-                    <input type="text" class="inline-input" placeholder="+ 补充待办细项，回车保存..."
-                           onkeydown="if(event.key==='Enter') appendCheckItem(${t.id}, this)" />
-                  </div>
-                ` : ''}
-              </div>
-
-              <!-- 2. 实时进展流水 -->
-              <div class="sub-box">
-                <div>
-                  <div class="sub-box-title">
-                    <span>📝 实时进展记录</span>
-                  </div>
-                  <ul class="prog-list">${progHtml}</ul>
-                </div>
-                ${STATE.can_edit ? `
-                  <div class="inline-input-row">
-                    <input type="text" class="inline-input" id="progInput_${t.id}" placeholder="随手填一句最新进展，回车即存..."
-                           onkeydown="if(event.key==='Enter') quickAppendProgress(${t.id})" />
-                    <button class="btn btn-sm btn-primary" onclick="quickAppendProgress(${t.id})">记录</button>
-                  </div>
-                ` : ''}
-              </div>
-
-              <!-- 3. 双栏文件柜：来文原件 vs 我写的材料 -->
-              <div class="sub-box">
-                <div class="dual-files">
-                  <div class="file-col">
-                    <div class="sub-box-title">
-                      <span>📄 来文/通知原件</span>
-                      ${STATE.can_edit ? `
-                        <label style="color:var(--primary);cursor:pointer;font-size:11.5px;">
-                          +传原件
-                          <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'incoming', this.files)" />
-                        </label>
-                      ` : ''}
-                    </div>
-                    ${incFilesHtml}
-                  </div>
-                  <div class="file-col">
-                    <div class="sub-box-title">
-                      <span>✍️ 我写的材料</span>
-                      ${STATE.can_edit ? `
-                        <label style="color:var(--success);cursor:pointer;font-size:11.5px;">
-                          +传材料
-                          <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'draft', this.files)" />
-                        </label>
-                      ` : ''}
-                    </div>
-                    ${draftFilesHtml}
-                  </div>
-                </div>
-                <div style="margin-top:6px;font-size:11.5px;color:var(--text-muted);display:flex;justify-content:space-between;align-items:center;">
-                  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(t.folder_abs_path)}">
-                    📁 本地路径: ${escapeHtml(t.folder_rel_path)}
-                  </span>
-                  <span style="color:var(--primary);cursor:pointer;flex-shrink:0;" onclick="copyText('${escapeHtml(t.folder_abs_path)}', '已复制本事项本地文件夹路径！')">[复制路径]</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- 底部：库内历史参考旧稿推荐 & 一键复制给本地 Agent 写稿 -->
-            <div class="ref-bar">
-              <div class="ref-chips">
-                <strong style="color:#475569;">💡 库内关联参考旧稿：</strong>
-                ${refsHtml || '<span style="color:var(--text-muted);">暂未匹配到同类旧稿，可在【公文与材料库】星标常用范文</span>'}
-              </div>
-              <button class="btn btn-sm" onclick="copyAgentDraftingPrompt(${t.id})" title="将本事项来文要求、本地文件夹路径及参考旧稿一键打包复制，直接发给本地 Agent 撰稿">
-                🤖 复制本地 Agent 撰稿上下文
-              </button>
             </div>
           </article>
         `;
-      }).join('') + `</div>`;
+      }
+
+      const chkHtml = (t.checklist || []).map(c => `
+        <li class="chk-item ${c.done ? 'done' : ''}" onclick="${STATE.can_edit ? `toggleCheckItem(${t.id}, '${escapeHtml(c.id)}')` : ''}">
+          <input type="checkbox" ${c.done ? 'checked' : ''} ${STATE.can_edit ? '' : 'disabled'} />
+          <span>${escapeHtml(c.text)}</span>
+        </li>
+      `).join('');
+
+      const progHtml = (t.progress_logs || []).map(p => `
+        <li class="prog-item">
+          <span class="prog-time">[${escapeHtml(p.time)}]</span>${escapeHtml(p.text)}
+        </li>
+      `).join('') || `<li style="color:var(--text-muted);font-size:12px;">暂无进展记录</li>`;
+
+      const incFilesHtml = (t.incoming_files || []).map(f => `
+        <div class="file-item">
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击免WPS直接预览全文">📄 ${escapeHtml(f.filename)}</span>
+          <div style="display:flex;gap:3px;flex-shrink:0;">
+            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开">WPS</button>` : ''}
+            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, 'draft')" title="切换为【我写的材料】">⇄</button>` : ''}
+            <a class="btn btn-xs" href="/api/docs/${f.id}/download">下</a>
+          </div>
+        </div>
+      `).join('') || `<div style="color:var(--text-muted);font-size:12px;">${t.raw_notice_text ? `<span class="file-name-link" onclick="previewTaskRawNotice(${t.id})">💬 查看原始微信/通知文本</span>` : '无独立附件'}</div>`;
+
+      const draftFilesHtml = (t.drafted_files || []).map(f => `
+        <div class="file-item">
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、在线改稿或导出国标公文">✍️ ${escapeHtml(f.filename)}</span>
+          <div style="display:flex;gap:3px;flex-shrink:0;">
+            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${f.id})" title="按 GB/T 9704 国标公文排版导出 .docx">国标</button>` : ''}
+            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开编辑">WPS</button>` : ''}
+            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, 'incoming')" title="切换为【来文原件】">⇄</button>` : ''}
+            <a class="btn btn-xs" href="/api/docs/${f.id}/download">下</a>
+          </div>
+        </div>
+      `).join('') || `<div style="color:var(--text-muted);font-size:12px;">暂未放入材料（可点右上【+在线写稿】或拖入）</div>`;
+
+      const refsHtml = (t.reference_docs || []).map(r => `
+        <span class="ref-chip" onclick="openDocPreview(${r.id})" title="点击对比预览库内历史参考材料">
+          ${r.is_starred ? '⭐' : '📄'} ${escapeHtml(r.filename)}
+        </span>
+      `).join('');
+
+      return `
+        <article class="task-card level-${dl.level}" id="task_card_${t.id}"
+          ondragover="if(STATE.can_edit){event.preventDefault();this.style.outline='2px dashed var(--primary)';}"
+          ondragleave="this.style.outline='none';"
+          ondrop="this.style.outline='none';if(STATE.can_edit){event.preventDefault();uploadTaskFiles(${t.id}, 'draft', event.dataTransfer.files);}">
+          <div class="task-header">
+            <div class="task-title-wrap">
+              <div class="task-title-line">
+                <span class="badge ${badgeClass}">${escapeHtml(dl.label)}</span>
+                ${t.priority === '紧急' ? '<span class="badge badge-danger">🔥 紧急</span>' : (t.priority === '重要' ? '<span class="badge badge-warning">⚡ 重要</span>' : '')}
+                <span class="task-title" onclick="openEditTaskModal(${t.id})">${escapeHtml(t.title)}</span>
+              </div>
+              <div class="task-submeta">
+                ${subMetaParts.map(p => `<span>${escapeHtml(p)}</span>`).join('<span>·</span>')}
+              </div>
+            </div>
+
+            <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+              ${STATE.can_edit ? `
+                <button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id})" title="直接在网页抽屉里为此事项撰写材料并可一键导出国标 .docx">✍️ 在线写材料</button>
+              ` : ''}
+              ${STATE.is_localhost ? `
+                <button class="btn btn-xs" onclick="openTaskLocalFolder(${t.id})" title="在麒麟文件管理器中直接打开本事项物理文件夹">📂 打开目录</button>
+              ` : ''}
+              <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" title="打包下载本事项全部文件 (.zip)">📦 打包下载</a>
+              ${STATE.can_edit ? `
+                <select class="form-control" style="padding:2px 6px;font-size:12px;width:auto;font-weight:600;"
+                        onchange="quickChangeStatus(${t.id}, this.value)">
+                  <option value="pending" ${t.status === 'pending' ? 'selected' : ''}>⏳ 待办</option>
+                  <option value="in_progress" ${t.status === 'in_progress' ? 'selected' : ''}>🔄 进行中</option>
+                  <option value="archived" ${t.status === 'archived' ? 'selected' : ''}>✅ 办结归档</option>
+                </select>
+                <button class="btn btn-xs" onclick="toggleTaskPin(${t.id}, ${!t.is_pinned})" title="置顶到局域网共享栏">${t.is_pinned ? '📌已置顶' : '📌置顶'}</button>
+                <button class="btn btn-xs" onclick="openEditTaskModal(${t.id})">✏️ 编辑</button>
+              ` : ''}
+              <button class="btn btn-xs" onclick="toggleTaskCollapse(${t.id}, true)" title="收起卡片详情">▲ 收起</button>
+            </div>
+          </div>
+
+          <div class="task-summary">
+            <strong>核心要求：</strong>${escapeHtml(t.summary || '暂无摘要')}
+            ${t.raw_notice_text ? `<span style="margin-left:10px;color:var(--primary);cursor:pointer;font-weight:600;" onclick="previewTaskRawNotice(${t.id})">[查看通知原文]</span>` : ''}
+          </div>
+
+          <div class="task-body-grid">
+            <!-- 1. 待办细项清单 -->
+            <div class="sub-box">
+              <div>
+                <div class="sub-box-title">
+                  <span>☑️ 待办要求细项 (${doneCnt}/${totalCnt})</span>
+                </div>
+                <ul class="chk-list">${chkHtml}</ul>
+              </div>
+              ${STATE.can_edit ? `
+                <div class="inline-input-row">
+                  <input type="text" class="inline-input" placeholder="+ 补充待办细项，回车保存..."
+                         onkeydown="if(event.key==='Enter') appendCheckItem(${t.id}, this)" />
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- 2. 实时进展流水 -->
+            <div class="sub-box">
+              <div>
+                <div class="sub-box-title">
+                  <span>📝 实时进展记录</span>
+                </div>
+                <ul class="prog-list">${progHtml}</ul>
+              </div>
+              ${STATE.can_edit ? `
+                <div class="inline-input-row">
+                  <input type="text" class="inline-input" id="progInput_${t.id}" placeholder="随手记一句最新进展，回车即存..."
+                         onkeydown="if(event.key==='Enter') quickAppendProgress(${t.id})" />
+                  <button class="btn btn-xs btn-primary" onclick="quickAppendProgress(${t.id})">记录</button>
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- 3. 双栏文件柜 -->
+            <div class="sub-box">
+              <div class="dual-files">
+                <div class="file-col">
+                  <div class="sub-box-title">
+                    <span>📄 来文/通知原件</span>
+                    ${STATE.can_edit ? `
+                      <label style="color:var(--primary);cursor:pointer;font-size:11px;">
+                        +传原件
+                        <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'incoming', this.files)" />
+                      </label>
+                    ` : ''}
+                  </div>
+                  ${incFilesHtml}
+                </div>
+                <div class="file-col">
+                  <div class="sub-box-title">
+                    <span>✍️ 我写的材料</span>
+                    ${STATE.can_edit ? `
+                      <div style="display:flex;gap:6px;">
+                        <span style="color:var(--success);cursor:pointer;font-size:11px;" onclick="openOnlineEditorForTask(${t.id})">+在线写稿</span>
+                        <label style="color:var(--primary);cursor:pointer;font-size:11px;">
+                          +上传
+                          <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'draft', this.files)" />
+                        </label>
+                      </div>
+                    ` : ''}
+                  </div>
+                  ${draftFilesHtml}
+                </div>
+              </div>
+              <div style="margin-top:6px;font-size:11px;color:var(--text-muted);display:flex;justify-content:space-between;align-items:center;">
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(t.folder_abs_path)}">
+                  📁 ${escapeHtml(t.folder_rel_path)}
+                </span>
+                <span style="color:var(--primary);cursor:pointer;flex-shrink:0;" onclick="copyTaskFolderPath(${t.id})">[复制路径]</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="ref-bar">
+            <div class="ref-chips">
+              <strong style="color:var(--text-secondary);">💡 库内关联参考旧稿：</strong>
+              ${refsHtml || '<span style="color:var(--text-muted);">暂未匹配到同类旧稿，可在【公文与材料库】星标常用范文</span>'}
+            </div>
+            <button class="btn btn-xs" onclick="copyAgentDraftingPrompt(${t.id})">
+              🤖 复制本地 Agent 撰稿上下文
+            </button>
+          </div>
+        </article>
+      `;
     }
 
     function renderTasksTable(container, list) {
@@ -1698,7 +2267,7 @@
                 <th>状态 / 期限预警</th>
                 <th>分类 / 渠道 / 文号</th>
                 <th>事项名称与核心要求</th>
-                <th>最新进展 (可直填)</th>
+                <th>最新进展 (回车直填)</th>
                 <th>来文原件 & 我写的材料</th>
                 <th>操作</th>
               </tr>
@@ -1709,19 +2278,17 @@
                 const latestProg = (t.progress_logs && t.progress_logs[0]) ? `[${t.progress_logs[0].time}] ${t.progress_logs[0].text}` : '暂无';
                 return `
                   <tr>
-                    <td>
-                      <span class="badge badge-${dl.level}">${escapeHtml(dl.label)}</span>
-                    </td>
+                    <td><span class="badge badge-${dl.level}">${escapeHtml(dl.label)}</span></td>
                     <td>
                       <div><strong>${escapeHtml(t.category)}</strong></div>
-                      <div style="font-size:12px;color:var(--text-muted);">${escapeHtml(t.source_channel)} ${escapeHtml(t.doc_number || '')}</div>
+                      <div style="font-size:11.5px;color:var(--text-muted);">${escapeHtml(t.source_channel)} ${escapeHtml(t.doc_number || '')}</div>
                     </td>
                     <td style="max-width:340px;">
-                      <div style="font-weight:700;color:#0f172a;">${escapeHtml(t.title)}</div>
+                      <div style="font-weight:700;cursor:pointer;" onclick="openEditTaskModal(${t.id})">${escapeHtml(t.title)}</div>
                       <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${escapeHtml(t.summary || '')}</div>
                     </td>
                     <td style="min-width:220px;">
-                      <div style="font-size:12.5px;margin-bottom:4px;">${escapeHtml(latestProg)}</div>
+                      <div style="font-size:12px;margin-bottom:4px;">${escapeHtml(latestProg)}</div>
                       ${STATE.can_edit ? `
                         <input type="text" class="inline-input" style="width:100%;" placeholder="+ 回车追加进展..."
                                onkeydown="if(event.key==='Enter') quickAppendProgressFromEl(${t.id}, this)" />
@@ -1732,9 +2299,10 @@
                       ${(t.drafted_files||[]).map(f => `<div class="file-name-link" onclick="openDocPreview(${f.id})">✍️ ${escapeHtml(f.filename)}</div>`).join('')}
                     </td>
                     <td>
-                      <div style="display:flex;gap:5px;flex-wrap:wrap;">
-                        <a class="btn btn-sm" href="/api/tasks/${t.id}/zip">📦 ZIP</a>
-                        ${STATE.can_edit ? `<button class="btn btn-sm" onclick="openEditTaskModal(${t.id})">编辑</button>` : ''}
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                        ${STATE.can_edit ? `<button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id})">✍️写稿</button>` : ''}
+                        <a class="btn btn-xs" href="/api/tasks/${t.id}/zip">📦 ZIP</a>
+                        ${STATE.can_edit ? `<button class="btn btn-xs" onclick="openEditTaskModal(${t.id})">编辑</button>` : ''}
                       </div>
                     </td>
                   </tr>
@@ -1747,22 +2315,22 @@
     }
 
     async function toggleCheckItem(taskId, checkId) {
-      await apiFetch(`/api/tasks/${taskId}`, {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         body: JSON.stringify({ toggle_check_id: checkId })
       });
-      await loadBootstrap();
+      updateSingleTaskInStateAndDOM(res.task);
     }
 
     async function appendCheckItem(taskId, inputEl) {
       const val = inputEl.value.trim();
       if (!val) return;
       inputEl.value = '';
-      await apiFetch(`/api/tasks/${taskId}`, {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         body: JSON.stringify({ append_check_text: val })
       });
-      await loadBootstrap();
+      updateSingleTaskInStateAndDOM(res.task);
       showToast('已添加待办细项并同步更新本地说明文件');
     }
 
@@ -1771,11 +2339,11 @@
       if (!el || !el.value.trim()) return;
       const text = el.value.trim();
       el.value = '';
-      await apiFetch(`/api/tasks/${taskId}`, {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         body: JSON.stringify({ append_progress: text })
       });
-      await loadBootstrap();
+      updateSingleTaskInStateAndDOM(res.task);
       showToast('✅ 进展已记录并同步写入本地 00_事项要求与进展.md');
     }
 
@@ -1783,30 +2351,63 @@
       const text = el.value.trim();
       if (!text) return;
       el.value = '';
-      await apiFetch(`/api/tasks/${taskId}`, {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         body: JSON.stringify({ append_progress: text })
       });
-      await loadBootstrap();
+      updateSingleTaskInStateAndDOM(res.task);
       showToast('✅ 进展已记录');
     }
 
     async function quickChangeStatus(taskId, newStatus) {
-      await apiFetch(`/api/tasks/${taskId}`, {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         body: JSON.stringify({ status: newStatus })
       });
-      await loadBootstrap();
+      updateSingleTaskInStateAndDOM(res.task);
       showToast(newStatus === 'archived' ? '🎉 已标记为完成归档！' : '状态已更新');
     }
 
     async function toggleTaskPin(taskId, isPinned) {
-      await apiFetch(`/api/tasks/${taskId}`, {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
         method: 'PUT',
         body: JSON.stringify({ is_pinned: isPinned })
       });
-      await loadBootstrap();
+      updateSingleTaskInStateAndDOM(res.task);
       showToast(isPinned ? '📌 已置顶到局域网共享栏' : '已取消置顶');
+    }
+
+    async function toggleTaskCollapse(taskId, isCollapsed) {
+      const t = STATE.tasks.find(x => x.id === taskId);
+      if (t) {
+        t.is_collapsed = isCollapsed;
+        updateSingleTaskInStateAndDOM(t);
+      }
+      if (STATE.can_edit) {
+        await apiFetch(`/api/tasks/${taskId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ is_collapsed: isCollapsed })
+        });
+      }
+    }
+
+    function toggleCollapseAllTasks() {
+      const anyExpanded = (STATE.tasks || []).some(t => !t.is_collapsed);
+      (STATE.tasks || []).forEach(t => { t.is_collapsed = anyExpanded; });
+      renderTasks();
+    }
+
+    async function swapFileRole(docId, targetRole) {
+      const res = await apiFetch(`/api/docs/${docId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ doc_role: targetRole })
+      });
+      if (res.task) {
+        updateSingleTaskInStateAndDOM(res.task);
+      } else {
+        await loadBootstrap();
+      }
+      showToast(`⇄ 已切换文件角色为【${targetRole === 'incoming' ? '来文原件' : '我写的材料'}】`);
     }
 
     async function uploadTaskFiles(taskId, role, fileList) {
@@ -1820,15 +2421,85 @@
           doc_role: role
         });
       }
-      await apiFetch(`/api/tasks/${taskId}/files`, {
+      const res = await apiFetch(`/api/tasks/${taskId}/files`, {
         method: 'POST',
         body: JSON.stringify({ doc_role: role, files: payloadFiles })
       });
-      await loadBootstrap();
+      updateSingleTaskInStateAndDOM(res.task);
       showToast('✅ 文件已存入事项本地文件夹并建立全文索引！');
     }
 
-    // ==================== 独立【公文与材料库】渲染与手动整理归纳 ====================
+    // ==================== 本机 WPS 直开与国标 GB/T 9704 公文排版联动 ====================
+    async function openLocalPath(type, docId, customRelPath = '') {
+      let relPath = customRelPath;
+      if (!relPath && docId) {
+        const d = (STATE.documents || []).find(x => x.id === docId);
+        if (d) relPath = d.rel_path;
+      }
+      try {
+        const res = await apiFetch('/api/local/open', {
+          method: 'POST',
+          body: JSON.stringify({ type, rel_path: relPath })
+        });
+        if (res.launched) {
+          showToast(`🖥️ 已在银河麒麟桌面调起: ${res.command}`);
+        } else {
+          copyText(res.abs_path, `📋 已复制本机绝对路径 (${res.abs_path})`);
+        }
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    function openTaskLocalFolder(taskId) {
+      const t = (STATE.tasks || []).find(x => x.id === taskId);
+      if (!t) return;
+      openLocalPath('folder', null, t.folder_rel_path);
+    }
+
+    function openOrCopyWorkspaceRoot() {
+      if (STATE.is_localhost) {
+        openLocalPath('folder', null, '');
+      } else {
+        copyText(STATE.workspace_root, `📂 已复制本地资料库路径 (${STATE.workspace_root})`);
+      }
+    }
+
+    function copyTaskFolderPath(taskId) {
+      const t = (STATE.tasks || []).find(x => x.id === taskId);
+      if (t) copyText(t.folder_abs_path, '📋 已复制本事项本地文件夹路径！');
+    }
+
+    async function quickFormatDocToGw(docId, mode = 'report') {
+      showToast('📄 正在按 GB/T 9704—2012 国标公文标准排版生成 .docx...');
+      try {
+        const res = await apiFetch(`/api/docs/${docId}/format-gw`, {
+          method: 'POST',
+          body: JSON.stringify({ mode })
+        });
+        await loadBootstrap();
+        showToast(`✅ 已生成国标公文《${res.document.filename}》并存入本地文件夹！`);
+        window.open(`/api/docs/${res.document.id}/download`, '_blank');
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+
+    // ==================== 独立【公文与材料库】渲染、拖拽归类、批量操作与分页 ====================
+    function getFilteredLibraryDocs() {
+      const kw = (document.getElementById('libQuickFilterInput')?.value || '').trim().toLowerCase();
+      return (STATE.documents || []).filter(d => {
+        if (STATE.libCategoryFilter && d.category !== STATE.libCategoryFilter) return false;
+        if (STATE.libRoleFilter === 'starred' && !d.is_starred) return false;
+        if (STATE.libRoleFilter && STATE.libRoleFilter !== 'starred' && d.doc_role !== STATE.libRoleFilter) return false;
+        if (kw) {
+          const hay = `${d.filename} ${(d.tags || []).join(' ')} ${d.category}`.toLowerCase();
+          if (!hay.includes(kw)) return false;
+        }
+        return true;
+      });
+    }
+
     function renderLibrary() {
       const catListEl = document.getElementById('libCategoryList');
       const docs = STATE.documents || [];
@@ -1842,23 +2513,41 @@
       STATE.categories.forEach(cat => {
         const count = docs.filter(d => d.category === cat).length;
         catHtml += `
-          <li class="cat-item ${STATE.libCategoryFilter === cat ? 'active' : ''}" onclick="selectLibCategory('${escapeHtml(cat)}')">
-            <span>📁 ${escapeHtml(cat)}</span>
-            <span class="badge badge-routine">${count}</span>
+          <li class="cat-item ${STATE.libCategoryFilter === cat ? 'active' : ''}"
+              onclick="selectLibCategory('${escapeHtml(cat)}')"
+              ondragover="event.preventDefault(); this.classList.add('drag-target');"
+              ondragleave="this.classList.remove('drag-target');"
+              ondrop="handleDropDocToCategory(event, '${escapeHtml(cat)}')">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📁 ${escapeHtml(cat)}</span>
+            <div style="display:flex;align-items:center;gap:4px;">
+              ${STATE.can_edit ? `
+                <span class="cat-ops" onclick="event.stopPropagation();">
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameCategoryPrompt('${escapeHtml(cat)}')" title="重命名或合并此物理分类文件夹">✏️</button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteCategoryPrompt('${escapeHtml(cat)}')" title="删除空目录">🗑️</button>
+                </span>
+              ` : ''}
+              <span class="badge badge-routine">${count}</span>
+            </div>
           </li>
         `;
       });
       catListEl.innerHTML = catHtml;
 
-      document.getElementById('libEditActions').style.display = STATE.can_edit ? 'flex' : 'none';
+      document.getElementById('libEditActions').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       document.getElementById('btnNewCat').style.display = STATE.can_edit ? 'inline-flex' : 'none';
 
-      const filteredDocs = docs.filter(d => {
-        if (STATE.libCategoryFilter && d.category !== STATE.libCategoryFilter) return false;
-        if (STATE.libRoleFilter === 'starred') return d.is_starred;
-        if (STATE.libRoleFilter && d.doc_role !== STATE.libRoleFilter) return false;
-        return true;
-      });
+      const filteredDocs = getFilteredLibraryDocs();
+      const total = filteredDocs.length;
+      const pageSize = STATE.libPageSize || 30;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      if (STATE.libPage > totalPages) STATE.libPage = totalPages;
+      const startIdx = (STATE.libPage - 1) * pageSize;
+      const pageSlice = filteredDocs.slice(startIdx, startIdx + pageSize);
+
+      document.getElementById('libPageInfo').textContent = `当前筛选共 ${total} 份文件（支持拖拽行至左侧文件夹直接归类）`;
+      document.getElementById('libPageNumText').textContent = `${STATE.libPage} / ${totalPages}`;
+
+      renderBatchBar();
 
       const roleLabelMap = {
         draft: '<span class="badge badge-archived">✍️ 我写的材料</span>',
@@ -1868,13 +2557,18 @@
       };
 
       const tbody = document.getElementById('libraryTableBody');
-      if (filteredDocs.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:28px;color:var(--text-muted);">该分类下暂无公文或材料，可点击右上角上传或直接将文件放入对应的本地文件夹。</td></tr>`;
+      if (pageSlice.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text-muted);">该筛选条件下暂无公文或材料。</td></tr>`;
         return;
       }
 
-      tbody.innerHTML = filteredDocs.map(d => `
-        <tr>
+      tbody.innerHTML = pageSlice.map(d => `
+        <tr draggable="${STATE.can_edit ? 'true' : 'false'}"
+            ondragstart="event.dataTransfer.setData('text/plain', '${d.id}')">
+          <td>
+            <input type="checkbox" ${STATE.libSelectedIds.has(d.id) ? 'checked' : ''}
+                   onchange="toggleLibDocSelect(${d.id}, this.checked)" />
+          </td>
           <td>
             <div style="display:flex;align-items:center;gap:6px;">
               ${d.is_starred ? '<span title="常用参考范文">⭐</span>' : ''}
@@ -1884,22 +2578,24 @@
               </span>
             </div>
             <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
-              ${escapeHtml((d.content_preview || '').slice(0, 75))}...
+              ${escapeHtml((d.content_preview || '').slice(0, 72))}...
             </div>
           </td>
           <td>${roleLabelMap[d.doc_role] || escapeHtml(d.doc_role)}</td>
-          <td><span class="badge badge-cat">📁 ${escapeHtml(d.category)}</span></td>
+          <td><span class="badge badge-routine">📁 ${escapeHtml(d.category)}</span></td>
           <td>
             ${(d.tags || []).map(tag => `<span class="badge badge-routine" style="margin-right:4px;">#${escapeHtml(tag)}</span>`).join('') || '<span style="color:var(--text-muted);font-size:12px;">-</span>'}
           </td>
           <td style="font-size:12px;color:var(--text-muted);white-space:nowrap;">${escapeHtml(d.updated_at)}</td>
           <td>
-            <div style="display:flex;gap:5px;flex-wrap:wrap;">
-              <button class="btn btn-sm" onclick="openDocPreview(${d.id})">📖 预览复制</button>
-              <a class="btn btn-sm" href="/api/docs/${d.id}/download">⬇️ 下载</a>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览/改稿</button>
+              ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${d.id})" title="一键排版导出为 GB/T 9704 国标公文 .docx">📄 国标.docx</button>` : ''}
+              ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${d.id})">🖥️ WPS</button>` : ''}
+              <a class="btn btn-xs" href="/api/docs/${d.id}/download">⬇️ 下载</a>
               ${STATE.can_edit ? `
-                <button class="btn btn-sm" onclick="openDocEditModal(${d.id})">🗂️ 归纳整理</button>
-                <button class="btn btn-sm" onclick="convertDocToTask(${d.id})" title="基于此公文一键用 AI 解析并生成工作台待办事项">⚡ 转待办</button>
+                <button class="btn btn-xs" onclick="openDocEditModal(${d.id})">🗂️ 归纳</button>
+                <button class="btn btn-xs" onclick="convertDocToTask(${d.id})" title="基于此公文一键用 AI 解析并生成工作台待办事项">⚡ 转待办</button>
               ` : ''}
             </div>
           </td>
@@ -1907,16 +2603,123 @@
       `).join('');
     }
 
+    function changeLibPage(delta) {
+      const total = getFilteredLibraryDocs().length;
+      const totalPages = Math.max(1, Math.ceil(total / (STATE.libPageSize || 30)));
+      STATE.libPage = Math.max(1, Math.min(totalPages, STATE.libPage + delta));
+      renderLibrary();
+    }
+
     function selectLibCategory(cat) {
       STATE.libCategoryFilter = cat;
+      STATE.libPage = 1;
       renderLibrary();
     }
 
     function setLibRoleFilter(role, btnEl) {
       STATE.libRoleFilter = role;
-      document.querySelectorAll('#tabLibrary .filter-pill').forEach(b => b.classList.remove('active'));
+      STATE.libPage = 1;
+      document.querySelectorAll('#libRolePills .filter-pill').forEach(b => b.classList.remove('active'));
       if (btnEl) btnEl.classList.add('active');
       renderLibrary();
+    }
+
+    async function handleDropDocToCategory(ev, targetCat) {
+      ev.preventDefault();
+      ev.currentTarget.classList.remove('drag-target');
+      const docId = parseInt(ev.dataTransfer.getData('text/plain'));
+      if (!docId || !targetCat) return;
+      await apiFetch('/api/docs/batch', {
+        method: 'POST',
+        body: JSON.stringify({ doc_ids: [docId], action: 'move_category', category: targetCat })
+      });
+      await loadBootstrap();
+      showToast(`📁 已将文件移入【${targetCat}】并同步移动本地文件！`);
+    }
+
+    function toggleLibDocSelect(docId, checked) {
+      if (checked) STATE.libSelectedIds.add(docId);
+      else STATE.libSelectedIds.delete(docId);
+      renderBatchBar();
+    }
+
+    function toggleLibSelectAll(checked) {
+      const pageDocs = getFilteredLibraryDocs().slice((STATE.libPage - 1) * STATE.libPageSize, STATE.libPage * STATE.libPageSize);
+      pageDocs.forEach(d => {
+        if (checked) STATE.libSelectedIds.add(d.id);
+        else STATE.libSelectedIds.delete(d.id);
+      });
+      renderLibrary();
+    }
+
+    function clearLibSelection() {
+      STATE.libSelectedIds.clear();
+      const allChk = document.getElementById('libSelectAllChk');
+      if (allChk) allChk.checked = false;
+      renderLibrary();
+    }
+
+    function renderBatchBar() {
+      const bar = document.getElementById('libBatchBar');
+      const cnt = STATE.libSelectedIds.size;
+      document.getElementById('batchSelectedCount').textContent = cnt;
+      bar.style.display = (cnt > 0 && STATE.can_edit) ? 'flex' : 'none';
+    }
+
+    async function executeBatchMoveCat() {
+      const targetCat = document.getElementById('batchMoveCatSelect').value;
+      const ids = Array.from(STATE.libSelectedIds);
+      await apiFetch('/api/docs/batch', {
+        method: 'POST',
+        body: JSON.stringify({ doc_ids: ids, action: 'move_category', category: targetCat })
+      });
+      clearLibSelection();
+      await loadBootstrap();
+      showToast(`✅ 已批量移动 ${ids.length} 份文件至【${targetCat}】`);
+    }
+
+    async function executeBatchAddTags() {
+      const raw = prompt('请输入要批量追加的标签（多个标签用空格分隔）：');
+      if (!raw || !raw.trim()) return;
+      const tags = raw.trim().split(/[\s,，、]+/).filter(Boolean);
+      const ids = Array.from(STATE.libSelectedIds);
+      await apiFetch('/api/docs/batch', {
+        method: 'POST',
+        body: JSON.stringify({ doc_ids: ids, action: 'add_tags', tags })
+      });
+      clearLibSelection();
+      await loadBootstrap();
+      showToast(`🏷️ 已为 ${ids.length} 份文件批量添加标签`);
+    }
+
+    async function executeBatchStar() {
+      const ids = Array.from(STATE.libSelectedIds);
+      await apiFetch('/api/docs/batch', {
+        method: 'POST',
+        body: JSON.stringify({ doc_ids: ids, action: 'star', value: true })
+      });
+      clearLibSelection();
+      await loadBootstrap();
+      showToast(`⭐ 已将 ${ids.length} 份文件设为常用范文`);
+    }
+
+    function executeBatchDownloadZip() {
+      const ids = Array.from(STATE.libSelectedIds);
+      if (ids.length === 0) return;
+      window.open(`/api/docs/batch-zip?ids=${ids.join(',')}`, '_blank');
+    }
+
+    async function executeBatchDelete() {
+      const ids = Array.from(STATE.libSelectedIds);
+      if (!confirm(`确定要批量移除这 ${ids.length} 份文件吗？`)) return;
+      const delDisk = confirm('是否同时从本地物理文件夹中删除原文件？\n点【确定】同时删除本地文件；点【取消】仅从索引移除。');
+      await apiFetch('/api/docs/batch', {
+        method: 'POST',
+        body: JSON.stringify({ doc_ids: ids, action: 'delete', delete_disk: delDisk })
+      });
+      clearLibSelection();
+      await loadBootstrap();
+      showToast('已批量移除选中文件');
     }
 
     async function createNewCategoryPrompt() {
@@ -1928,6 +2731,30 @@
       });
       await loadBootstrap();
       showToast('📁 已在本地硬盘创建分类目录并同步！');
+    }
+
+    async function renameCategoryPrompt(oldName) {
+      const newName = prompt(`重命名或合并分类目录【${oldName}】\n（若输入已存在的分类名，则自动将该目录下的事项与文件合并过去）：`, oldName);
+      if (!newName || !newName.trim() || newName.trim() === oldName) return;
+      await apiFetch('/api/categories', {
+        method: 'PUT',
+        body: JSON.stringify({ old_name: oldName, new_name: newName.trim() })
+      });
+      if (STATE.libCategoryFilter === oldName) STATE.libCategoryFilter = newName.trim();
+      await loadBootstrap();
+      showToast(`✅ 已将分类【${oldName}】重命名/合并为【${newName.trim()}】并同步更新本地物理路径！`);
+    }
+
+    async function deleteCategoryPrompt(catName) {
+      if (!confirm(`确定要删除空分类目录【${catName}】吗？`)) return;
+      try {
+        await apiFetch(`/api/categories?name=${encodeURIComponent(catName)}`, { method: 'DELETE' });
+        if (STATE.libCategoryFilter === catName) STATE.libCategoryFilter = '';
+        await loadBootstrap();
+        showToast(`🗑️ 已删除空分类目录【${catName}】`);
+      } catch (err) {
+        alert(err.message);
+      }
     }
 
     function openUploadLibraryModal() {
@@ -1977,19 +2804,20 @@
     async function submitScanLocalDir() {
       const srcDir = document.getElementById('scanSourceDirInput').value.trim();
       const targetCat = document.getElementById('scanTargetCatSelect').value;
+      const smartAuto = document.getElementById('scanSmartAutoCat').checked;
       if (!srcDir) {
         alert('请输入本机文件夹路径');
         return;
       }
-      showToast('正在扫描提取历史公文...');
+      showToast('正在扫描提取历史公文并建立 FTS5 索引...');
       try {
         const res = await apiFetch('/api/docs/scan-local-dir', {
           method: 'POST',
-          body: JSON.stringify({ source_dir: srcDir, category: targetCat })
+          body: JSON.stringify({ source_dir: srcDir, category: targetCat, smart_auto_category: smartAuto })
         });
         document.getElementById('scanDirModalBackdrop').style.display = 'none';
         await loadBootstrap();
-        showToast(`🎉 成功扫描导入 ${res.imported_count} 份历史公文并建立全文索引！`);
+        showToast(`🎉 成功扫描导入 ${res.imported_count} 份历史公文并保留原目录标签！`);
       } catch (err) {
         alert(err.message);
       }
@@ -2030,7 +2858,7 @@
 
     async function deleteCurrentDoc() {
       const docId = document.getElementById('editDocId').value;
-      const delDisk = confirm('是否同时从本地物理文件夹中删除该文件？\n点击【确定】同时删除本地文件；点击【取消】不执行删除。');
+      const delDisk = confirm('是否同时从本地物理文件夹中删除该文件？');
       if (!delDisk) return;
       await apiFetch(`/api/docs/${docId}?delete_disk=1`, { method: 'DELETE' });
       document.getElementById('docEditModalBackdrop').style.display = 'none';
@@ -2046,7 +2874,109 @@
       showToast('✅ 已转为工作台待办事项！');
     }
 
-    // ==================== 搜索（仅标题 vs 标题+正文）& AI 智能搜索 ====================
+    // ==================== 周期性/常态化工作派生管理 ====================
+    function renderRecurring() {
+      document.getElementById('btnAddRecurring').style.display = STATE.can_edit ? 'inline-flex' : 'none';
+      const tbody = document.getElementById('recurringTableBody');
+      const rules = STATE.recurring_rules || [];
+      if (rules.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">暂无周期性工作规则。</td></tr>`;
+        return;
+      }
+      const freqDesc = r => {
+        if (r.freq_type === 'weekly') return `每周周${['一','二','三','四','五','六','日'][(r.freq_value||4)-1] || r.freq_value}触发`;
+        if (r.freq_type === 'monthly') return `每月 ${r.freq_value} 日触发`;
+        if (r.freq_type === 'quarterly') return `每季末月 ${r.freq_value} 日触发`;
+        return `每 ${r.freq_value} 天触发`;
+      };
+      tbody.innerHTML = rules.map(r => `
+        <tr>
+          <td>
+            <span class="badge ${r.enabled ? 'badge-archived' : 'badge-routine'}">${r.enabled ? '✅ 启用中' : '⏸️ 已暂停'}</span>
+          </td>
+          <td>
+            <strong>${escapeHtml(freqDesc(r))}</strong>
+            <div style="font-size:11.5px;color:var(--text-muted);">当前周期: ${escapeHtml(r.current_period || '-')}</div>
+          </td>
+          <td>
+            <div style="font-weight:700;">${escapeHtml(r.title_template)}</div>
+            <div style="font-size:12px;color:var(--text-secondary);">${escapeHtml(r.summary || '')}</div>
+          </td>
+          <td>
+            <span class="badge badge-routine">📁 ${escapeHtml(r.category)}</span>
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">${escapeHtml(r.issuing_org || '')}</div>
+          </td>
+          <td style="font-size:12px;color:var(--text-muted);">
+            <div>已派生周期: <code>${escapeHtml(r.last_spawned_period || '无')}</code></div>
+            <div>时间: ${escapeHtml(r.last_spawned_at || '-')}</div>
+          </td>
+          <td>
+            ${STATE.can_edit ? `
+              <div style="display:flex;gap:5px;flex-wrap:wrap;">
+                <button class="btn btn-xs btn-primary" onclick="spawnRecurringNow(${r.id})">⚡ 立即派生本期事项</button>
+                <button class="btn btn-xs" onclick="toggleRecurringEnable(${r.id}, ${!r.enabled})">${r.enabled ? '暂停' : '启用'}</button>
+                <button class="btn btn-xs btn-danger-ghost" onclick="deleteRecurringRule(${r.id})">删除</button>
+              </div>
+            ` : '-'}
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function openRecurringModal() {
+      document.getElementById('recurringModalBackdrop').style.display = 'flex';
+    }
+
+    async function saveRecurringModal() {
+      const titleTpl = document.getElementById('recTitleTpl').value.trim();
+      if (!titleTpl) { alert('请填写标题模板'); return; }
+      const chkLines = document.getElementById('recChecklist').value.split('\n').map(s => s.trim()).filter(Boolean);
+      await apiFetch('/api/recurring', {
+        method: 'POST',
+        body: JSON.stringify({
+          title_template: titleTpl,
+          category: document.getElementById('recCategory').value,
+          issuing_org: document.getElementById('recOrg').value.trim(),
+          freq_type: document.getElementById('recFreqType').value,
+          freq_value: parseInt(document.getElementById('recFreqVal').value || '4'),
+          summary: document.getElementById('recSummary').value.trim(),
+          checklist: chkLines
+        })
+      });
+      document.getElementById('recurringModalBackdrop').style.display = 'none';
+      await loadBootstrap();
+      showToast('✅ 周期性工作规则已保存！');
+    }
+
+    async function spawnRecurringNow(ruleId) {
+      const res = await apiFetch(`/api/recurring/${ruleId}/spawn`, { method: 'POST', body: '{}' });
+      await loadBootstrap();
+      switchMainTab('workbench');
+      showToast(`⚡ 已为您派生事项《${res.task.title}》并关联上期参考材料！`);
+    }
+
+    async function toggleRecurringEnable(ruleId, enabled) {
+      await apiFetch(`/api/recurring/${ruleId}`, { method: 'PUT', body: JSON.stringify({ enabled }) });
+      await loadBootstrap();
+    }
+
+    async function deleteRecurringRule(ruleId) {
+      if (!confirm('确定要删除该周期规则吗？')) return;
+      await apiFetch(`/api/recurring/${ruleId}`, { method: 'DELETE' });
+      await loadBootstrap();
+    }
+
+    // ==================== 搜索（250ms 防抖 + 关键词 <mark> 高亮 + AI 搜索） ====================
+    function handleSearchDebounce() {
+      clearTimeout(window._searchTimer);
+      const q = document.getElementById('globalSearchInput').value.trim();
+      if (!q) {
+        clearSearch();
+        return;
+      }
+      window._searchTimer = setTimeout(() => { runUserSearch(); }, 260);
+    }
+
     function setSearchScope(scope) {
       STATE.searchScope = scope;
       document.getElementById('scopeTitleBtn').classList.toggle('active', scope === 'title');
@@ -2062,11 +2992,12 @@
         clearSearch();
         return;
       }
+      STATE.searchKeywords = q.split(/\s+/).filter(Boolean);
       const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&scope=${STATE.searchScope}`);
       document.getElementById('searchResultsBox').style.display = 'block';
       document.getElementById('clearSearchBtn').style.display = 'inline-flex';
       document.getElementById('aiSearchAnswerWrap').innerHTML = '';
-      renderSearchResultsList(res.tasks || [], res.documents || [], `常规检索（${STATE.searchScope === 'title' ? '仅标题/文号' : '标题 + 全文内容'}）`);
+      renderSearchResultsList(res.tasks || [], res.documents || [], `常规检索（${STATE.searchScope === 'title' ? '仅标题/文号' : '标题 + 全文内容'}）`, STATE.searchKeywords);
     }
 
     async function runAiSemanticSearch() {
@@ -2077,51 +3008,52 @@
       }
       document.getElementById('searchResultsBox').style.display = 'block';
       document.getElementById('clearSearchBtn').style.display = 'inline-flex';
-      document.getElementById('aiSearchAnswerWrap').innerHTML = `<div class="ai-answer-card">🤖 正在执行两段式全文初筛与 AI 智能语义汇总...</div>`;
+      document.getElementById('aiSearchAnswerWrap').innerHTML = `<div class="ai-answer-card">🤖 正在执行两段式 FTS5 初筛与 AI 智能语义汇总...</div>`;
       const res = await apiFetch('/api/ai/search', {
         method: 'POST',
         body: JSON.stringify({ query: q })
       });
+      STATE.searchKeywords = res.keywords || [q];
       document.getElementById('aiSearchAnswerWrap').innerHTML = `
         <div class="ai-answer-card">
-          <div style="font-weight:700;margin-bottom:6px;color:#4c1d95;">
+          <div style="font-weight:700;margin-bottom:6px;color:var(--purple);">
             🤖 AI 智能检索回答（提取检索词：${(res.keywords || []).map(k => `<code>${escapeHtml(k)}</code>`).join('、')}）
           </div>
-          <div>${escapeHtml(res.answer)}</div>
+          <div>${highlightKeywordsHtml(res.answer, STATE.searchKeywords)}</div>
         </div>
       `;
-      renderSearchResultsList(res.tasks || [], res.documents || [], 'AI 语义关联召回明细');
+      renderSearchResultsList(res.tasks || [], res.documents || [], 'AI 语义关联召回明细', STATE.searchKeywords);
     }
 
-    function renderSearchResultsList(tasks, docs, titleLabel) {
+    function renderSearchResultsList(tasks, docs, titleLabel, kws = []) {
       const box = document.getElementById('searchMatchedContent');
-      let html = `<div style="font-weight:700;margin-bottom:8px;color:#334155;">🔎 ${escapeHtml(titleLabel)}：命中 ${tasks.length} 项工作事项，${docs.length} 份公文与材料</div>`;
+      let html = `<div style="font-weight:700;margin-bottom:8px;color:var(--text-secondary);">🔎 ${escapeHtml(titleLabel)}：命中 ${tasks.length} 项工作事项，${docs.length} 份公文与材料</div>`;
       if (tasks.length > 0) {
         html += `<div style="margin-bottom:10px;display:flex;flex-direction:column;gap:6px;">` + tasks.map(t => `
-          <div style="background:#f8fafc;border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="background:var(--surface-alt);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div>
-              <strong>[事项] ${escapeHtml(t.title)}</strong>
-              <span class="badge badge-cat" style="margin-left:6px;">${escapeHtml(t.category)}</span>
-              ${t.doc_number ? `<span class="badge badge-docnum">${escapeHtml(t.doc_number)}</span>` : ''}
-              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${escapeHtml(t.match_snippet || t.summary || '')}</div>
+              <strong>[事项] ${highlightKeywordsHtml(t.title, kws)}</strong>
+              <span class="badge badge-routine" style="margin-left:6px;">${escapeHtml(t.category)}</span>
+              ${t.doc_number ? `<span class="badge badge-warning">${highlightKeywordsHtml(t.doc_number, kws)}</span>` : ''}
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${highlightKeywordsHtml(t.match_snippet || t.summary || '', kws)}</div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0;">
-              <a class="btn btn-sm" href="/api/tasks/${t.id}/zip">📦 下载事项包</a>
+              <a class="btn btn-xs" href="/api/tasks/${t.id}/zip">📦 下载事项包</a>
             </div>
           </div>
         `).join('') + `</div>`;
       }
       if (docs.length > 0) {
         html += `<div style="display:flex;flex-direction:column;gap:6px;">` + docs.map(d => `
-          <div style="background:#fff;border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div style="background:var(--surface);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div>
-              <span class="file-name-link" style="font-weight:700;" onclick="openDocPreview(${d.id})">📄 ${escapeHtml(d.filename)}</span>
-              <span class="badge badge-cat" style="margin-left:6px;">${escapeHtml(d.category)}</span>
-              <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">匹配摘录：${escapeHtml(d.snippet || '')}</div>
+              <span class="file-name-link" style="font-weight:700;" onclick="openDocPreview(${d.id})">📄 ${highlightKeywordsHtml(d.filename, kws)}</span>
+              <span class="badge badge-routine" style="margin-left:6px;">${escapeHtml(d.category)}</span>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">匹配摘录：${highlightKeywordsHtml(d.snippet || '', kws)}</div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0;">
-              <button class="btn btn-sm" onclick="openDocPreview(${d.id})">📖 预览复制</button>
-              <a class="btn btn-sm" href="/api/docs/${d.id}/download">⬇️ 下载</a>
+              <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览/复制</button>
+              <a class="btn btn-xs" href="/api/docs/${d.id}/download">⬇️ 下载</a>
             </div>
           </div>
         `).join('') + `</div>`;
@@ -2131,33 +3063,170 @@
 
     function clearSearch() {
       document.getElementById('globalSearchInput').value = '';
+      STATE.searchKeywords = [];
       document.getElementById('searchResultsBox').style.display = 'none';
       document.getElementById('clearSearchBtn').style.display = 'none';
     }
 
-    // ==================== 正文预览抽屉 & Agent 撰稿上下文复制 ====================
+    // ==================== 右侧抽屉：排版阅读 / 纯文本 / 在线写稿改稿 ====================
     async function openDocPreview(docId) {
       const res = await apiFetch(`/api/docs/${docId}/preview`);
       const d = res.document;
+      STATE.drawerDoc = d;
+      STATE.drawerTaskId = d.task_id || null;
+
       document.getElementById('drawerTitle').textContent = d.filename;
       document.getElementById('drawerSubMeta').textContent = `所属目录：${d.category} | 类型：${d.file_type || d.doc_role} | 更新：${d.updated_at}`;
-      document.getElementById('drawerPathBar').textContent = `📂 本机物理文件绝对路径：${d.abs_path}`;
-      document.getElementById('drawerTextContent').textContent = d.extracted_text || '（该文件无纯文本内容）';
+      document.getElementById('drawerPathText').textContent = `📂 本机绝对路径：${d.abs_path}`;
+
       const dlLink = document.getElementById('drawerDownloadLink');
       dlLink.href = `/api/docs/${d.id}/download`;
       dlLink.style.display = 'inline-flex';
+      document.getElementById('btnDrawerFormatGw').style.display = STATE.can_edit ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerFormatRedhead').style.display = STATE.can_edit ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerOpenWps').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
+      document.getElementById('drawerTabEditBtn').style.display = STATE.can_edit ? 'inline-block' : 'none';
+
+      document.getElementById('drawerEditorFilename').value = d.filename;
+      document.getElementById('drawerEditorTextarea').value = d.extracted_text || '';
+
+      switchDrawerMode('read');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
+    }
+
+    function openOnlineEditorForTask(taskId) {
+      const t = (STATE.tasks || []).find(x => x.id === taskId);
+      if (!t) return;
+      STATE.drawerDoc = null;
+      STATE.drawerTaskId = taskId;
+      const defaultName = `我县${t.title.replace(/^关于/, '').replace(/的通知$/, '')}总结汇报_初稿.md`;
+
+      document.getElementById('drawerTitle').textContent = `✍️ 在线撰写材料 — 关联事项 #${t.id}`;
+      document.getElementById('drawerSubMeta').textContent = `所属事项：${t.title}`;
+      document.getElementById('drawerPathText').textContent = `📂 将直接保存至本地文件夹：${t.folder_abs_path}`;
+      document.getElementById('drawerDownloadLink').style.display = 'none';
+      document.getElementById('btnDrawerFormatGw').style.display = 'none';
+      document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
+      document.getElementById('btnDrawerOpenWps').style.display = 'none';
+
+      document.getElementById('drawerEditorFilename').value = defaultName;
+      document.getElementById('drawerEditorTextarea').value =
+        `# 关于${t.title.replace(/^关于/, '').replace(/的通知$/, '')}的报告\n\n` +
+        `一、工作开展总体情况\n` +
+        `根据《${t.title}》要求，我单位高度重视，第一时间组织专题研究与排查部署。\n\n` +
+        `二、主要落实措施与进展\n` +
+        `（一）细化责任分工\n` +
+        `${(t.checklist || []).map((c, i) => `${i+1}. ${c.text}；`).join('\n')}\n\n` +
+        `三、下一步工作打算\n` +
+        `持续压实工作责任，确保各项措施闭环落实。\n`;
+
+      switchDrawerMode('edit');
+      document.getElementById('drawerBackdrop').style.display = 'block';
+      document.getElementById('previewDrawer').style.display = 'flex';
+    }
+
+    function openOnlineEditorNewStandalone() {
+      STATE.drawerDoc = null;
+      STATE.drawerTaskId = null;
+      const cat = STATE.libCategoryFilter || '03_综合汇报与总结';
+      document.getElementById('drawerTitle').textContent = `✍️ 在线新建独立材料 (${cat})`;
+      document.getElementById('drawerSubMeta').textContent = `保存目录：${cat}`;
+      document.getElementById('drawerPathText').textContent = `📂 将保存至本地分类目录：${STATE.workspace_root}/${cat}`;
+      document.getElementById('drawerDownloadLink').style.display = 'none';
+      document.getElementById('btnDrawerFormatGw').style.display = 'none';
+      document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
+      document.getElementById('btnDrawerOpenWps').style.display = 'none';
+
+      document.getElementById('drawerEditorFilename').value = `新建综合汇报材料_${new Date().toISOString().slice(0,10)}.md`;
+      document.getElementById('drawerEditorTextarea').value = `# 综合工作汇报材料\n\n一、基本情况\n\n二、存在问题\n\n三、下一步打算\n`;
+      switchDrawerMode('edit');
+      document.getElementById('drawerBackdrop').style.display = 'block';
+      document.getElementById('previewDrawer').style.display = 'flex';
+    }
+
+    function switchDrawerMode(mode) {
+      STATE.drawerMode = mode;
+      document.getElementById('drawerTabReadBtn').classList.toggle('active', mode === 'read');
+      document.getElementById('drawerTabRawBtn').classList.toggle('active', mode === 'raw');
+      document.getElementById('drawerTabEditBtn').classList.toggle('active', mode === 'edit');
+
+      const renderedBox = document.getElementById('drawerRenderedBox');
+      const editorWrap = document.getElementById('drawerEditorWrap');
+      const rawText = STATE.drawerDoc ? (STATE.drawerDoc.extracted_text || '') : document.getElementById('drawerEditorTextarea').value;
+
+      if (mode === 'edit') {
+        renderedBox.style.display = 'none';
+        editorWrap.style.display = 'flex';
+      } else if (mode === 'raw') {
+        editorWrap.style.display = 'none';
+        renderedBox.style.display = 'block';
+        renderedBox.style.whiteSpace = 'pre-wrap';
+        renderedBox.innerHTML = highlightKeywordsHtml(rawText, STATE.searchKeywords);
+      } else {
+        editorWrap.style.display = 'none';
+        renderedBox.style.display = 'block';
+        renderedBox.style.whiteSpace = 'normal';
+        renderedBox.innerHTML = renderSimpleMarkdown(rawText, STATE.searchKeywords);
+      }
+    }
+
+    function adjustDrawerFont(delta) {
+      STATE.drawerFontSize = Math.max(12, Math.min(22, (STATE.drawerFontSize || 15) + delta));
+      document.getElementById('drawerRenderedBox').style.fontSize = `${STATE.drawerFontSize}px`;
+    }
+
+    async function saveDrawerOnlineDraft(alsoExportDocx = false) {
+      const fname = document.getElementById('drawerEditorFilename').value.trim();
+      const content = document.getElementById('drawerEditorTextarea').value;
+      if (!fname) { alert('请输入文件名'); return; }
+
+      const res = await apiFetch('/api/docs/save-text', {
+        method: 'POST',
+        body: JSON.stringify({
+          doc_id: STATE.drawerDoc ? STATE.drawerDoc.id : null,
+          task_id: STATE.drawerTaskId,
+          category: STATE.libCategoryFilter || '03_综合汇报与总结',
+          filename: fname,
+          content
+        })
+      });
+
+      STATE.drawerDoc = res.document;
+      STATE.drawerDoc.extracted_text = content;
+      await loadBootstrap();
+
+      if (alsoExportDocx && res.document && res.document.id) {
+        await quickFormatDocToGw(res.document.id, 'report');
+      } else {
+        switchDrawerMode('read');
+        showToast('💾 已直接写入本地物理文件夹并更新全文检索索引！');
+      }
+    }
+
+    function formatCurrentDrawerDocToGw(mode) {
+      if (!STATE.drawerDoc || !STATE.drawerDoc.id) return;
+      quickFormatDocToGw(STATE.drawerDoc.id, mode);
+    }
+
+    function openCurrentDrawerDocInWps() {
+      if (!STATE.drawerDoc || !STATE.drawerDoc.id) return;
+      openLocalPath('file', STATE.drawerDoc.id);
     }
 
     function previewTaskRawNotice(taskId) {
       const t = STATE.tasks.find(x => x.id === taskId);
       if (!t) return;
+      STATE.drawerDoc = { extracted_text: t.raw_notice_text || t.summary || '', abs_path: t.folder_abs_path };
+      STATE.drawerTaskId = t.id;
       document.getElementById('drawerTitle').textContent = `【原始通知/来文记录】${t.title}`;
       document.getElementById('drawerSubMeta').textContent = `来源：${t.source_channel} | 文号：${t.doc_number || '无'} | 截止：${t.deadline || '常态'}`;
-      document.getElementById('drawerPathBar').textContent = `📂 事项本地专属文件夹：${t.folder_abs_path}`;
-      document.getElementById('drawerTextContent').textContent = t.raw_notice_text || t.summary || '';
+      document.getElementById('drawerPathText').textContent = `📂 事项本地专属文件夹：${t.folder_abs_path}`;
       document.getElementById('drawerDownloadLink').style.display = 'none';
+      document.getElementById('btnDrawerFormatGw').style.display = 'none';
+      document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
+      document.getElementById('btnDrawerOpenWps').style.display = 'none';
+      switchDrawerMode('read');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
     }
@@ -2168,8 +3237,13 @@
     }
 
     function copyDrawerText() {
-      const txt = document.getElementById('drawerTextContent').textContent;
+      const txt = STATE.drawerDoc ? (STATE.drawerDoc.extracted_text || '') : document.getElementById('drawerEditorTextarea').value;
       copyText(txt, '📋 已复制正文内容到剪贴板！');
+    }
+
+    function copyDrawerPath() {
+      const p = STATE.drawerDoc ? STATE.drawerDoc.abs_path : STATE.workspace_root;
+      copyText(p, '📋 已复制本机物理路径！');
     }
 
     function copyAgentDraftingPrompt(taskId) {
@@ -2185,9 +3259,9 @@
         `- 核心要求摘要：${t.summary || ''}`,
         `- 具体待办细项：\n${chk}`,
         refs ? `- 库内关联参考旧稿：\n${refs}` : '',
-        `\n【操作指令】：请先阅读目录下的 AGENT_GUIDE.md 或直接读取上述参考旧稿，按本次通知要求起草材料并保存到该事项的本地文件夹（${t.folder_abs_path}）中，完成后调用 python3 wb.py progress ${t.id} "已完成初稿撰写" 更新工作台进展。`
+        `\n【操作指令】：请直接调用 python3 wb.py draft ${t.id} --filename "材料初稿.md" --content "..." --to-docx 保存材料并自动生成符合 GB/T 9704 国标格式的 .docx 正式公文，然后调用 python3 wb.py progress ${t.id} "已完成初稿撰写与国标排版" 更新进展。`
       ].filter(Boolean).join('\n');
-      copyText(promptText, '🤖 已复制本地 Agent 撰稿指令（含本件要求+本地路径+参考旧稿）！');
+      copyText(promptText, '🤖 已复制本地 Agent 撰稿指令（含国标 .docx 自动排版命令）！');
     }
 
     // ==================== 事项弹窗编辑 ====================
@@ -2209,6 +3283,10 @@
     }
 
     function openEditTaskModal(taskId) {
+      if (!STATE.can_edit) {
+        previewTaskRawNotice(taskId);
+        return;
+      }
       const t = STATE.tasks.find(x => x.id === taskId);
       if (!t) return;
       document.getElementById('taskModalTitle').textContent = `编辑工作事项 #${t.id}`;
@@ -2260,12 +3338,14 @@
         document.getElementById('omniText').value = '';
         STATE.omniFiles = [];
         renderOmniPendingFiles();
+        closeTaskModal();
+        await loadBootstrap();
       } else {
-        await apiFetch(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+        const res = await apiFetch(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(payload) });
+        closeTaskModal();
+        updateSingleTaskInStateAndDOM(res.task);
       }
-      closeTaskModal();
-      await loadBootstrap();
-      showToast('✅ 事项已保存并同步更新本地文件夹！');
+      showToast('✅ 事项已保存并同步更新本地物理文件夹！');
     }
 
     async function deleteCurrentTask() {
@@ -2298,9 +3378,12 @@
 
     function openSettingsModal() {
       document.getElementById('cfgWorkspaceRoot').value = STATE.workspace_root || '';
-      document.getElementById('cfgViewPwd').value = '123456';
-      document.getElementById('cfgEditPwd').value = '8888';
+      // 修复 Bug 1：绝不将密码框硬编码重置为 123456/8888，留空代表保持原密码不变
+      document.getElementById('cfgViewPwd').value = '';
+      document.getElementById('cfgEditPwd').value = '';
+      document.getElementById('cfgAiKey').value = '';
       document.getElementById('cfgLanNotice').value = STATE.lan_notice || '';
+      document.getElementById('cfgXklGwCli').value = STATE.xkl_gw_cli || '';
       document.getElementById('cfgAiBase').value = STATE.ai_api_base || '';
       document.getElementById('cfgAiModel').value = STATE.ai_model || 'deepseek-chat';
       document.getElementById('cfgPrefixArchived').checked = !!STATE.prefix_archived_folder;
@@ -2313,12 +3396,12 @@
         view_password: document.getElementById('cfgViewPwd').value.trim(),
         edit_password: document.getElementById('cfgEditPwd').value.trim(),
         lan_notice: document.getElementById('cfgLanNotice').value.trim(),
+        xkl_gw_cli: document.getElementById('cfgXklGwCli').value.trim(),
         ai_api_base: document.getElementById('cfgAiBase').value.trim(),
+        ai_api_key: document.getElementById('cfgAiKey').value.trim(),
         ai_model: document.getElementById('cfgAiModel').value.trim(),
         prefix_archived_folder: document.getElementById('cfgPrefixArchived').checked
       };
-      const k = document.getElementById('cfgAiKey').value.trim();
-      if (k) payload.ai_api_key = k;
       await apiFetch('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
       document.getElementById('settingsModalBackdrop').style.display = 'none';
       await loadBootstrap();
@@ -2329,7 +3412,13 @@
       const res = await apiFetch('/api/sync', { method: 'POST', body: '{}' });
       await loadBootstrap();
       const st = res.stats || {};
-      showToast(`🔄 本地文件夹同步完成（新增 ${st.added||0} 份，更新 ${st.updated||0} 份）`);
+      showToast(`🔄 本地文件夹同步完成（新增 ${st.added||0} 份，更新 ${st.updated||0} 份，移动追踪 ${st.moved_tasks||0} 项）`);
+    }
+
+    function toggleTheme() {
+      const isDark = document.body.classList.toggle('dark-mode');
+      localStorage.setItem('wb_theme', isDark ? 'dark' : 'light');
+      document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
     }
 
     function copyText(text, msg = '已复制到剪贴板') {
@@ -2350,11 +3439,21 @@
       copyText(STATE.lan_url, `🌐 已复制局域网访问链接 (${STATE.lan_url})，可直接发给同事！`);
     }
 
-    function copyWorkspaceRoot() {
-      copyText(STATE.workspace_root, `📂 已复制本地物理资料库路径 (${STATE.workspace_root})！`);
-    }
+    // 全局快捷键 Ctrl+K 聚焦搜索框
+    window.addEventListener('keydown', ev => {
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
+        ev.preventDefault();
+        document.getElementById('globalSearchInput').focus();
+      }
+    });
 
-    window.addEventListener('DOMContentLoaded', loadBootstrap);
+    window.addEventListener('DOMContentLoaded', () => {
+      if (localStorage.getItem('wb_theme') === 'dark') {
+        document.body.classList.add('dark-mode');
+        document.getElementById('themeBtn').textContent = '☀️';
+      }
+      loadBootstrap();
+    });
   </script>
 </body>
 </html>

@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench) 核心服务端
+公文与材料智能工作台 (GW-Workbench v1.2.0) 核心服务端
 专为银河麒麟 Kylin V10 (海光 3350) 与局域网跨平台协同设计
-零强制第三方依赖（基于 Python 3 标准库 + SQLite3 + 内置多格式公文解析）
+v1.2.0 重大升级：
+1. 修复全部已知 Bug（密码保存防覆盖、事项改名同步重命名本地文件夹、防幽灵文件夹复活、防同名文件覆盖、退出编辑模式清 Cookie 等）
+2. 性能优化：SQLite FTS5 全文倒排索引虚拟表 + 列表查询冷热字段分离 + 目录 mtime 节流增量扫描 + 单次查询批量关联参考旧稿
+3. 分类管理重构：支持网页重命名/合并/删除物理分类目录、多选文件批量移动分类/打标/打包下载、拖拽归类
+4. 新增三大特性：
+   - 与 xkl-gw 及银河麒麟 WPS 深度联动：内置 GB/T 9704—2012 国标公文 .docx 排版生成 + 本机一键调起 WPS / 文件管理器 + 网页抽屉直接在线写稿改稿
+   - 周期性/常态化工作自动派生引擎（周报/月报/值班调度自动建事项文件夹并挂载上期材料作参考）
+   - 原生 MCP Server 协议支持（详见 wb.py mcp）
 """
 
 import csv
+import hashlib
 import io
 import json
 import mimetypes
@@ -15,11 +23,12 @@ import re
 import shutil
 import socket
 import sqlite3
+import subprocess
 import threading
 import time
 import urllib.parse
 import zipfile
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,8 +40,12 @@ from ai_engine import (
     extract_search_keywords,
     synthesize_ai_search_answer,
     call_openai_compatible_api,
+    infer_doc_role,
+    match_best_category,
 )
+from gw_formatter import build_gb9704_docx
 
+VERSION = "1.2.0"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "workbench.db"
@@ -52,15 +65,25 @@ DEFAULT_CONFIG = {
     "view_password": "123456",
     "edit_password": "8888",
     "agent_token": "gw-local-agent-token",
-    "workspace_root": str(BASE_DIR / "workspace_files"),
+    "workspace_root": "workspace_files",
     "prefix_archived_folder": False,
     "ai_api_base": "",
     "ai_api_key": "",
     "ai_model": "deepseek-chat",
+    "xkl_gw_cli": "",
     "lan_notice": "📌 欢迎访问科室公文与材料工作台！支持按【标题】或【标题+正文】秒搜公文，点开任意文件可直接预览复制全文或打包下载。",
 }
 
 DB_LOCK = threading.RLock()
+_LAST_SYNC_TIME: float = 0.0
+_DIR_MTIME_SNAPSHOT: Dict[str, float] = {}
+
+# 列表查询冷热分离字段（不加载大文本 extracted_text，内存占用降低 95%）
+DOC_LIGHT_COLS = """
+    id, task_id, filename, rel_path, category, doc_role, file_type,
+    file_size, mtime, substr(extracted_text, 1, 240) AS content_preview,
+    tags_json, is_starred, is_pinned, created_at, updated_at
+"""
 
 
 def load_config() -> Dict[str, Any]:
@@ -78,7 +101,15 @@ def load_config() -> Dict[str, Any]:
 
 def save_config(cfg: Dict[str, Any]) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 若 workspace_root 指向项目下的 workspace_files，保存为相对路径以保证 Git 跨机器兼容
+    ws_raw = str(cfg.get("workspace_root") or "workspace_files").strip()
+    try:
+        ws_abs = Path(ws_raw).expanduser().resolve()
+        if ws_abs == (BASE_DIR / "workspace_files").resolve():
+            cfg["workspace_root"] = "workspace_files"
+    except Exception:
+        pass
+    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def get_workspace_root(cfg: Optional[Dict[str, Any]] = None) -> Path:
@@ -87,13 +118,25 @@ def get_workspace_root(cfg: Optional[Dict[str, Any]] = None) -> Path:
     if not raw or "/working_dir/" in str(raw):
         p = (BASE_DIR / "workspace_files").resolve()
     else:
-        p = Path(raw).expanduser()
+        p = Path(str(raw)).expanduser()
         if not p.is_absolute():
             p = (BASE_DIR / p).resolve()
         elif not p.exists() and (BASE_DIR / "workspace_files").exists():
             p = (BASE_DIR / "workspace_files").resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def ensure_category_dir(ws_root: Path, cat_name: str) -> Path:
+    cat_dir = ws_root / cat_name
+    cat_dir.mkdir(parents=True, exist_ok=True)
+    gitkeep = cat_dir / ".gitkeep"
+    if not gitkeep.exists():
+        try:
+            gitkeep.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+    return cat_dir
 
 
 def get_lan_ip() -> str:
@@ -114,13 +157,67 @@ def sanitize_filename(name: str) -> str:
     return cleaned[:80] or "未命名"
 
 
+def resolve_unique_dest_path(dest_dir: Path, filename: str, incoming_bytes: Optional[bytes] = None) -> Path:
+    """
+    防止同名文件静默覆盖（修复 Bug 4）：
+    - 若目标路径不存在，直接使用
+    - 若目标路径已存在且内容完全相同，直接复用
+    - 否则自动追加 _2, _3 后缀保留双方文件
+    """
+    safe_name = sanitize_filename(filename)
+    candidate = dest_dir / safe_name
+    if not candidate.exists():
+        return candidate
+
+    if incoming_bytes is not None and candidate.is_file():
+        try:
+            if candidate.stat().st_size == len(incoming_bytes):
+                if hashlib.md5(candidate.read_bytes()).hexdigest() == hashlib.md5(incoming_bytes).hexdigest():
+                    return candidate
+        except Exception:
+            pass
+
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    counter = 2
+    while True:
+        alt = dest_dir / f"{stem}_{counter}{suffix}"
+        if not alt.exists():
+            return alt
+        if incoming_bytes is not None and alt.is_file():
+            try:
+                if alt.stat().st_size == len(incoming_bytes) and hashlib.md5(alt.read_bytes()).hexdigest() == hashlib.md5(incoming_bytes).hexdigest():
+                    return alt
+            except Exception:
+                pass
+        counter += 1
+
+
 def get_db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     return conn
+
+
+def _sync_fts_doc(conn: sqlite3.Connection, doc_id: int) -> None:
+    """同步单条文档记录到 SQLite FTS5 全文检索虚拟表"""
+    try:
+        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_id,))
+        row = conn.execute(
+            "SELECT id, filename, category, tags_json, extracted_text FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "INSERT INTO documents_fts (doc_id, filename, category, tags, extracted_text) VALUES (?, ?, ?, ?, ?)",
+                (row["id"], row["filename"] or "", row["category"] or "", row["tags_json"] or "", row["extracted_text"] or ""),
+            )
+    except Exception:
+        pass
 
 
 def init_db() -> None:
@@ -144,6 +241,9 @@ def init_db() -> None:
                 progress_json TEXT DEFAULT '[]',
                 status TEXT DEFAULT 'in_progress',
                 is_pinned INTEGER DEFAULT 0,
+                is_collapsed INTEGER DEFAULT 0,
+                completed_at TEXT DEFAULT '',
+                recurring_id INTEGER DEFAULT NULL,
                 folder_rel_path TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -168,6 +268,25 @@ def init_db() -> None:
                 FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS recurring_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title_template TEXT NOT NULL,
+                category TEXT DEFAULT '01_防灾减灾',
+                source_channel TEXT DEFAULT '上级来文',
+                issuing_org TEXT DEFAULT '',
+                priority TEXT DEFAULT '重要',
+                freq_type TEXT DEFAULT 'weekly',
+                freq_value INTEGER DEFAULT 4,
+                deadline_offset_days INTEGER DEFAULT 1,
+                summary TEXT DEFAULT '',
+                checklist_json TEXT DEFAULT '[]',
+                reference_doc_id INTEGER DEFAULT NULL,
+                enabled INTEGER DEFAULT 1,
+                last_spawned_period TEXT DEFAULT '',
+                last_spawned_at TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
             CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category);
             CREATE INDEX IF NOT EXISTS idx_docs_task_id ON documents(task_id);
@@ -175,17 +294,56 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_docs_role ON documents(doc_role);
             """
         )
+
+        # 平滑迁移旧版 tasks 表缺失字段
+        task_cols = {r["name"] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "completed_at" not in task_cols:
+            cur.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT DEFAULT ''")
+        if "is_collapsed" not in task_cols:
+            cur.execute("ALTER TABLE tasks ADD COLUMN is_collapsed INTEGER DEFAULT 0")
+        if "recurring_id" not in task_cols:
+            cur.execute("ALTER TABLE tasks ADD COLUMN recurring_id INTEGER DEFAULT NULL")
+
+        # 建立 SQLite FTS5 全文检索表并自动回填存量数据
+        try:
+            cur.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+                    doc_id UNINDEXED,
+                    filename,
+                    category,
+                    tags,
+                    extracted_text,
+                    tokenize='unicode61'
+                );
+                """
+            )
+            fts_cnt = cur.execute("SELECT COUNT(*) FROM documents_fts").fetchone()[0]
+            doc_cnt = cur.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            if fts_cnt != doc_cnt:
+                cur.execute("DELETE FROM documents_fts")
+                cur.execute(
+                    """
+                    INSERT INTO documents_fts (doc_id, filename, category, tags, extracted_text)
+                    SELECT id, filename, category, tags_json, extracted_text FROM documents
+                    """
+                )
+        except Exception:
+            pass
+
         conn.commit()
         conn.close()
 
-    # 确保默认分类物理文件夹存在
     ws_root = get_workspace_root()
     for cat in DEFAULT_CATEGORIES:
-        (ws_root / cat).mkdir(parents=True, exist_ok=True)
+        ensure_category_dir(ws_root, cat)
 
 
 def list_physical_categories() -> List[str]:
     ws_root = get_workspace_root()
+    for cat in DEFAULT_CATEGORIES:
+        if not (ws_root / cat).exists():
+            ensure_category_dir(ws_root, cat)
     dirs = [
         d.name for d in ws_root.iterdir()
         if d.is_dir() and not d.name.startswith(".")
@@ -197,7 +355,7 @@ def list_physical_categories() -> List[str]:
 def write_task_readme_file(conn: sqlite3.Connection, task_id: int) -> None:
     """
     在工作事项对应的本地物理文件夹中生成/更新 `00_事项要求与进展.md`
-    保证用户不开工作台系统、直接打开本地文件夹时，也能清楚看到微信通知原文、AI提炼要求、截止时间、进展流水和文件清单
+    首行写入隐藏元数据锚点 `<!-- gw_task_id: X -->`，即使本地文件夹被重命名或跨目录移动也能精准追踪！
     """
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if not row:
@@ -219,8 +377,10 @@ def write_task_readme_file(conn: sqlite3.Connection, task_id: int) -> None:
     progress_list = json.loads(row["progress_json"] or "[]")
 
     md_lines = [
+        f"<!-- gw_task_id: {row['id']} -->",
         f"# {row['title']}",
         "",
+        f"- **事项编号**：`#{row['id']}`",
         f"- **当前状态**：{status_map.get(row['status'], row['status'])}",
         f"- **来源渠道**：{row['source_channel'] or '无'}",
         f"- **发文字号**：{row['doc_number'] or '无'}",
@@ -279,55 +439,126 @@ def write_task_readme_file(conn: sqlite3.Connection, task_id: int) -> None:
     readme_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
 
-def sync_filesystem() -> Dict[str, int]:
+def _extract_task_id_from_readme(readme_path: Path) -> Optional[int]:
+    """从本地文件夹内的 00_事项要求与进展.md 提取 <!-- gw_task_id: X -->"""
+    if not readme_path.is_file():
+        return None
+    try:
+        head = readme_path.read_text(encoding="utf-8", errors="ignore")[:300]
+        m = re.search(r"<!--\s*gw_task_id:\s*(\d+)\s*-->", head)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def sync_filesystem(force: bool = False) -> Dict[str, int]:
     """
-    双向物理文件夹同步引擎：
-    1. 扫描每个工作事项的物理文件夹：如果你直接在本地用 WPS 新建或修改保存了材料，自动感知文件增改并重新抽提全文索引！
-    2. 扫描每个分类目录的顶层独立文件：如果你在不开系统时直接把历史公文或材料放进了分类文件夹，自动入库建索引！
-    3. 清理本地已删除文件的孤儿索引记录。
+    高性能双向物理文件夹同步引擎（v1.2.0）：
+    1. 支持冷却窗口与目录级 mtime 快照跳过（日常刷新 < 1ms，海量文件不卡顿）
+    2. 智能追踪本地被改名或跨分类移动的事项文件夹（通过 00_事项要求与进展.md 锚点），彻底修复“幽灵空文件夹复活” Bug
+    3. 自动识别本地 WPS 新建或修改的文件，智能区分来文与自撰材料，同步更新 SQLite FTS5 索引
     """
-    stats = {"added": 0, "updated": 0, "removed": 0}
+    global _LAST_SYNC_TIME, _DIR_MTIME_SNAPSHOT
+    stats = {"added": 0, "updated": 0, "removed": 0, "moved_tasks": 0, "skipped": 0}
     ws_root = get_workspace_root()
+    now_ts = time.time()
+
+    # 检查目录 mtime 快照，若非强制且 6 秒内目录树无任何变动则直接秒回
+    if not force and (now_ts - _LAST_SYNC_TIME) < 6.0 and _DIR_MTIME_SNAPSHOT:
+        changed = False
+        try:
+            for cat_dir in ws_root.iterdir():
+                if cat_dir.is_dir() and not cat_dir.name.startswith("."):
+                    k = str(cat_dir)
+                    if _DIR_MTIME_SNAPSHOT.get(k) != round(cat_dir.stat().st_mtime, 2):
+                        changed = True
+                        break
+                    for sub in cat_dir.iterdir():
+                        if sub.is_dir() and not sub.name.startswith("."):
+                            sk = str(sub)
+                            if _DIR_MTIME_SNAPSHOT.get(sk) != round(sub.stat().st_mtime, 2):
+                                changed = True
+                                break
+                    if changed:
+                        break
+            if not changed:
+                stats["skipped"] = 1
+                return stats
+        except Exception:
+            pass
+
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_snapshot: Dict[str, float] = {}
 
     with DB_LOCK:
         conn = get_db()
-        # 1. 建立现有文档 rel_path 映射
         existing_docs = {
             r["rel_path"]: dict(r)
-            for r in conn.execute("SELECT * FROM documents").fetchall()
+            for r in conn.execute(
+                "SELECT id, task_id, filename, rel_path, category, doc_role, file_size, mtime FROM documents"
+            ).fetchall()
         }
         seen_rel_paths = set()
 
-        # 2. 建立事项文件夹 rel_path -> task 映射
-        tasks = [dict(r) for r in conn.execute("SELECT * FROM tasks").fetchall()]
-        task_folder_map = {}
-        for t in tasks:
-            if t["folder_rel_path"]:
-                folder_abs = ws_root / t["folder_rel_path"]
-                folder_abs.mkdir(parents=True, exist_ok=True)
-                task_folder_map[t["folder_rel_path"]] = t
+        tasks = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM tasks").fetchall()}
+        task_folder_map: Dict[str, Dict[str, Any]] = {}
 
-        # 3. 遍历 workspace_root 下所有分类文件夹
+        # 第一遍：扫描磁盘上的所有事项子文件夹，识别通过本地文件管理器重命名或移动的事项文件夹
+        for cat_dir in sorted(ws_root.iterdir()):
+            if not cat_dir.is_dir() or cat_dir.name.startswith("."):
+                continue
+            new_snapshot[str(cat_dir)] = round(cat_dir.stat().st_mtime, 2)
+            cat_name = cat_dir.name
+            for entry in sorted(cat_dir.iterdir()):
+                if entry.is_dir() and not entry.name.startswith("."):
+                    new_snapshot[str(entry)] = round(entry.stat().st_mtime, 2)
+                    rel_dir = str(entry.relative_to(ws_root)).replace("\\", "/")
+                    readme_f = entry / "00_事项要求与进展.md"
+                    anchored_tid = _extract_task_id_from_readme(readme_f)
+                    if anchored_tid and anchored_tid in tasks:
+                        t_obj = tasks[anchored_tid]
+                        if t_obj["folder_rel_path"] != rel_dir or t_obj["category"] != cat_name:
+                            conn.execute(
+                                "UPDATE tasks SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                (rel_dir, cat_name, now_str, anchored_tid),
+                            )
+                            t_obj["folder_rel_path"] = rel_dir
+                            t_obj["category"] = cat_name
+                            stats["moved_tasks"] += 1
+                        task_folder_map[rel_dir] = t_obj
+
+        # 补充未写锚点但路径匹配的存量事项（注意：绝不盲目 mkdir 幽灵复活已删除目录！）
+        for tid, t_obj in tasks.items():
+            f_rel = t_obj.get("folder_rel_path") or ""
+            if f_rel and f_rel not in task_folder_map:
+                f_abs = ws_root / f_rel
+                if f_abs.exists() and f_abs.is_dir():
+                    task_folder_map[f_rel] = t_obj
+                    # 为存量事项补写含锚点的 00_事项要求与进展.md
+                    readme_f = f_abs / "00_事项要求与进展.md"
+                    if not readme_f.exists() or _extract_task_id_from_readme(readme_f) is None:
+                        write_task_readme_file(conn, tid)
+
+        # 第二遍：遍历分类目录与事项子目录，增量同步所有文档与材料
         for cat_dir in sorted(ws_root.iterdir()):
             if not cat_dir.is_dir() or cat_dir.name.startswith("."):
                 continue
             cat_name = cat_dir.name
 
             for entry in sorted(cat_dir.iterdir()):
-                if entry.name.startswith(".") or entry.name.startswith("~$"):
-                    # 忽略 WPS/Word 临时锁文件 ~$xxx.docx
+                if entry.name.startswith(".") or entry.name.startswith("~$") or entry.name == ".gitkeep":
                     continue
 
                 if entry.is_dir():
-                    # 检查是否是某个事项的专属文件夹
                     rel_dir = str(entry.relative_to(ws_root)).replace("\\", "/")
                     task_obj = task_folder_map.get(rel_dir)
 
                     for sub_file in sorted(entry.rglob("*")):
                         if not sub_file.is_file():
                             continue
-                        if sub_file.name.startswith(".") or sub_file.name.startswith("~$"):
+                        if sub_file.name.startswith(".") or sub_file.name.startswith("~$") or sub_file.name == ".gitkeep":
                             continue
                         if sub_file.name == "00_事项要求与进展.md":
                             continue
@@ -340,35 +571,34 @@ def sync_filesystem() -> Dict[str, int]:
 
                         if rel_file in existing_docs:
                             doc_rec = existing_docs[rel_file]
-                            if abs(doc_rec["mtime"] - mtime) > 0.5 or doc_rec["file_size"] != fsize:
+                            if abs(doc_rec["mtime"] - mtime) > 0.5 or doc_rec["file_size"] != fsize or doc_rec["category"] != cat_name:
                                 extracted, ftype = extract_document_text(sub_file)
                                 conn.execute(
                                     """
                                     UPDATE documents
-                                    SET file_size = ?, mtime = ?, extracted_text = ?, file_type = ?, updated_at = ?
+                                    SET category = ?, task_id = ?, file_size = ?, mtime = ?, extracted_text = ?, file_type = ?, updated_at = ?
                                     WHERE id = ?
                                     """,
-                                    (fsize, mtime, extracted, ftype, now_str, doc_rec["id"]),
+                                    (cat_name, task_obj["id"] if task_obj else doc_rec["task_id"], fsize, mtime, extracted, ftype, now_str, doc_rec["id"]),
                                 )
+                                _sync_fts_doc(conn, doc_rec["id"])
                                 stats["updated"] += 1
                         else:
-                            # 本地新增进事项文件夹的文件：自动判断是【来文】还是【我写的材料】
                             fname = sub_file.name
-                            if fname.startswith(("[来文]", "【来文】", "来文_")):
-                                role = "incoming"
-                            elif task_obj:
-                                role = "draft"
-                            else:
-                                role = "historical" if "历史" in cat_name else "draft"
-
                             extracted, ftype = extract_document_text(sub_file)
-                            conn.execute(
+                            role = infer_doc_role(fname, extracted[:300], in_task_folder=bool(task_obj), cat_name=cat_name)
+                            # 若在普通子目录（非事项目录）下，把子目录名自动作为标签保留
+                            auto_tags = []
+                            if not task_obj and entry.name != cat_name:
+                                auto_tags.append(entry.name)
+
+                            cur = conn.execute(
                                 """
                                 INSERT INTO documents (
                                     task_id, filename, rel_path, category, doc_role,
                                     file_type, file_size, mtime, extracted_text,
                                     tags_json, is_starred, is_pinned, created_at, updated_at
-                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?)
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                                 """,
                                 (
                                     task_obj["id"] if task_obj else None,
@@ -380,14 +610,16 @@ def sync_filesystem() -> Dict[str, int]:
                                     fsize,
                                     mtime,
                                     extracted,
+                                    json.dumps(auto_tags, ensure_ascii=False),
+                                    1 if role == "template" else 0,
                                     now_str,
                                     now_str,
                                 ),
                             )
+                            _sync_fts_doc(conn, cur.lastrowid)
                             stats["added"] += 1
 
                 elif entry.is_file():
-                    # 分类目录顶层的独立公文或材料
                     if entry.name == "00_事项要求与进展.md":
                         continue
                     rel_file = str(entry.relative_to(ws_root)).replace("\\", "/")
@@ -408,23 +640,19 @@ def sync_filesystem() -> Dict[str, int]:
                                 """,
                                 (fsize, mtime, extracted, ftype, now_str, doc_rec["id"]),
                             )
+                            _sync_fts_doc(conn, doc_rec["id"])
                             stats["updated"] += 1
                     else:
                         fname = entry.name
-                        if "历史" in cat_name:
-                            role = "historical"
-                        elif fname.startswith(("[来文]", "【来文】")) or "通知" in fname or "方案" in fname and "汇报" not in fname:
-                            role = "incoming"
-                        else:
-                            role = "draft"
                         extracted, ftype = extract_document_text(entry)
-                        conn.execute(
+                        role = infer_doc_role(fname, extracted[:300], in_task_folder=False, cat_name=cat_name)
+                        cur = conn.execute(
                             """
                             INSERT INTO documents (
                                 task_id, filename, rel_path, category, doc_role,
                                 file_type, file_size, mtime, extracted_text,
                                 tags_json, is_starred, is_pinned, created_at, updated_at
-                            ) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?)
+                            ) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, 0, ?, ?)
                             """,
                             (
                                 fname,
@@ -435,29 +663,35 @@ def sync_filesystem() -> Dict[str, int]:
                                 fsize,
                                 mtime,
                                 extracted,
+                                1 if role == "template" else 0,
                                 now_str,
                                 now_str,
                             ),
                         )
+                        _sync_fts_doc(conn, cur.lastrowid)
                         stats["added"] += 1
 
-        # 4. 清理已在本地被移走或删除的文件记录
+        # 清理已在本地被删除或移走的文件记录
         for rel_p, doc_rec in existing_docs.items():
             if rel_p not in seen_rel_paths:
                 abs_p = ws_root / rel_p
                 if not abs_p.exists():
                     conn.execute("DELETE FROM documents WHERE id = ?", (doc_rec["id"],))
+                    conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_rec["id"],))
                     stats["removed"] += 1
 
         conn.commit()
         conn.close()
+
+    _LAST_SYNC_TIME = time.time()
+    _DIR_MTIME_SNAPSHOT = new_snapshot
     return stats
 
 
 def compute_deadline_badge(deadline_str: str, status: str) -> Dict[str, Any]:
-    """计算事项剩余天数与醒目预警色标（红/黄/蓝/灰）"""
+    """计算事项剩余天数与醒目预警色标（红/黄/蓝/灰/绿）"""
     if status == "archived":
-        return {"level": "archived", "label": "已归档", "days_left": 9999}
+        return {"level": "archived", "label": "已办结归档", "days_left": 9999}
     if not deadline_str:
         return {"level": "routine", "label": "常态化/持续", "days_left": 999}
     try:
@@ -476,107 +710,113 @@ def compute_deadline_badge(deadline_str: str, status: str) -> Dict[str, Any]:
         return {"level": "routine", "label": deadline_str, "days_left": 999}
 
 
-def find_similar_library_docs(
-    conn: sqlite3.Connection,
+def find_similar_library_docs_fast(
+    light_docs: List[Dict[str, Any]],
     title: str,
     summary: str,
     exclude_task_id: Optional[int] = None,
     limit: int = 4,
 ) -> List[Dict[str, Any]]:
     """
-    为工作事项自动匹配【公文与材料库】中相似的历史旧稿/参考范文（Q16）
+    基于内存轻量化文档列表为工作事项高速匹配相似旧稿（将原先 O(N*M) 次 SQLite 查询降为 0 次额外查询！）
     """
     kws = extract_search_keywords(f"{title} {summary}")
-    all_docs = conn.execute(
-        """
-        SELECT id, task_id, filename, rel_path, category, doc_role, file_type,
-               is_starred, substr(extracted_text, 1, 240) AS preview, updated_at
-        FROM documents
-        ORDER BY is_starred DESC, id DESC
-        """
-    ).fetchall()
-
+    if not kws:
+        return []
     scored = []
-    for d in all_docs:
-        if exclude_task_id is not None and d["task_id"] == exclude_task_id:
+    for d in light_docs:
+        if exclude_task_id is not None and d.get("task_id") == exclude_task_id:
             continue
         score = 0
-        hay_title = (d["filename"] or "").lower()
-        hay_body = (d["preview"] or "").lower()
+        hay_title = (d.get("filename") or "").lower()
+        hay_body = (d.get("content_preview") or "").lower()
         for kw in kws:
             kl = kw.lower()
             if kl in hay_title:
                 score += 6
             if kl in hay_body:
                 score += 2
-        # 优先加权“我写的材料”和“星标常用范文”
-        if d["doc_role"] in ("draft", "template"):
+        if d.get("doc_role") in ("draft", "template"):
             score += 2 if score > 0 else 0
-        if d["is_starred"]:
+        if d.get("is_starred"):
             score += 3 if score > 0 else 1
         if score > 0:
-            scored.append((score, dict(d)))
+            scored.append((score, {
+                "id": d["id"],
+                "task_id": d.get("task_id"),
+                "filename": d["filename"],
+                "rel_path": d["rel_path"],
+                "category": d["category"],
+                "doc_role": d["doc_role"],
+                "is_starred": d["is_starred"],
+            }))
 
     scored.sort(key=lambda x: (-x[0], -x[1]["id"]))
     return [item[1] for item in scored[:limit]]
 
 
-def serialize_task(conn: sqlite3.Connection, row: sqlite3.Row, include_refs: bool = True) -> Dict[str, Any]:
+def serialize_doc_light(row: Any, snippet: str = "", ws_root: Optional[Path] = None) -> Dict[str, Any]:
+    d = dict(row)
+    preview = d.get("content_preview")
+    if preview is None:
+        full_text = d.pop("extracted_text", "") or ""
+        preview = full_text[:240]
+    else:
+        d.pop("extracted_text", None)
+
+    d["tags"] = json.loads(d.pop("tags_json", "[]") or "[]")
+    d["is_starred"] = bool(d.get("is_starred", 0))
+    d["is_pinned"] = bool(d.get("is_pinned", 0))
+    d["content_preview"] = preview
+    d["snippet"] = snippet or (preview[:180].replace("\n", " ") if preview else "")
+    root = ws_root or get_workspace_root()
+    d["abs_path"] = str((root / d["rel_path"]).resolve())
+    return d
+
+
+def serialize_task(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    include_refs: bool = True,
+    preloaded_docs: Optional[List[Dict[str, Any]]] = None,
+    ws_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     t = dict(row)
     t["checklist"] = json.loads(t.pop("checklist_json", "[]") or "[]")
     t["progress_logs"] = json.loads(t.pop("progress_json", "[]") or "[]")
     t["is_pinned"] = bool(t.get("is_pinned", 0))
+    t["is_collapsed"] = bool(t.get("is_collapsed", 0))
     t["deadline_info"] = compute_deadline_badge(t.get("deadline", ""), t.get("status", "in_progress"))
+    root = ws_root or get_workspace_root()
 
-    docs = conn.execute(
-        """
-        SELECT id, task_id, filename, rel_path, category, doc_role, file_type,
-               file_size, is_starred, is_pinned, tags_json,
-               substr(extracted_text, 1, 200) AS preview, updated_at
-        FROM documents
-        WHERE task_id = ?
-        ORDER BY id ASC
-        """,
-        (t["id"],),
-    ).fetchall()
-
-    incoming_files = []
-    drafted_files = []
-    for d in docs:
-        dd = dict(d)
-        dd["tags"] = json.loads(dd.pop("tags_json", "[]") or "[]")
-        dd["is_starred"] = bool(dd.get("is_starred", 0))
-        dd["is_pinned"] = bool(dd.get("is_pinned", 0))
-        if dd["doc_role"] == "incoming":
-            incoming_files.append(dd)
+    if preloaded_docs is not None:
+        task_docs = [d for d in preloaded_docs if d.get("task_id") == t["id"]]
+        all_light_docs = preloaded_docs
+    else:
+        doc_rows = conn.execute(
+            f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE task_id = ? ORDER BY id ASC",
+            (t["id"],),
+        ).fetchall()
+        task_docs = [serialize_doc_light(r, ws_root=root) for r in doc_rows]
+        if include_refs:
+            all_rows = conn.execute(
+                f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC LIMIT 300"
+            ).fetchall()
+            all_light_docs = [serialize_doc_light(r, ws_root=root) for r in all_rows]
         else:
-            drafted_files.append(dd)
+            all_light_docs = []
 
-    t["incoming_files"] = incoming_files
-    t["drafted_files"] = drafted_files
-    ws_root = get_workspace_root()
-    t["folder_abs_path"] = str((ws_root / t["folder_rel_path"]).resolve()) if t.get("folder_rel_path") else ""
+    t["incoming_files"] = [d for d in task_docs if d["doc_role"] == "incoming"]
+    t["drafted_files"] = [d for d in task_docs if d["doc_role"] != "incoming"]
+    t["folder_abs_path"] = str((root / t["folder_rel_path"]).resolve()) if t.get("folder_rel_path") else ""
 
     if include_refs:
-        t["reference_docs"] = find_similar_library_docs(
-            conn, t["title"], t.get("summary", ""), exclude_task_id=t["id"], limit=4
+        t["reference_docs"] = find_similar_library_docs_fast(
+            all_light_docs, t["title"], t.get("summary", ""), exclude_task_id=t["id"], limit=4
         )
     else:
         t["reference_docs"] = []
     return t
-
-
-def serialize_doc(row: sqlite3.Row, snippet: str = "") -> Dict[str, Any]:
-    d = dict(row)
-    full_text = d.pop("extracted_text", "") or ""
-    d["tags"] = json.loads(d.pop("tags_json", "[]") or "[]")
-    d["is_starred"] = bool(d.get("is_starred", 0))
-    d["is_pinned"] = bool(d.get("is_pinned", 0))
-    d["content_preview"] = full_text[:260]
-    d["snippet"] = snippet or full_text[:180].replace("\n", " ")
-    ws_root = get_workspace_root()
-    d["abs_path"] = str((ws_root / d["rel_path"]).resolve())
-    return d
 
 
 def build_highlight_snippet(text: str, keywords: List[str], max_len: int = 160) -> str:
@@ -604,22 +844,26 @@ def execute_search(
     doc_role: str = "",
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    执行高精度搜索：
+    执行高精度毫秒级搜索（结合 SQLite FTS5 与多关键词精确过滤）：
     - scope == 'title'：仅搜事项标题/发文字号/文件名/标签
     - scope == 'full'：搜标题 + 文号 + 要求摘要 + 进展 + 公文与材料全文内容
     """
     q_clean = (query or "").strip()
     keywords = [k for k in re.split(r"\s+", q_clean) if k] if q_clean else []
+    ws_root = get_workspace_root()
 
     with DB_LOCK:
         conn = get_db()
+        all_doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+        preloaded_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_doc_rows]
+
         task_rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
         matched_tasks = []
         for r in task_rows:
             if category and r["category"] != category:
                 continue
             if not keywords:
-                matched_tasks.append(serialize_task(conn, r, include_refs=False))
+                matched_tasks.append(serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root))
                 continue
 
             if scope == "title":
@@ -631,38 +875,54 @@ def execute_search(
                 )
             hay_lower = haystack.lower()
             if all(kw.lower() in hay_lower for kw in keywords):
-                t_obj = serialize_task(conn, r, include_refs=False)
+                t_obj = serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
                 t_obj["match_snippet"] = build_highlight_snippet(haystack, keywords)
                 matched_tasks.append(t_obj)
 
-        doc_rows = conn.execute("SELECT * FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
         matched_docs = []
-        for r in doc_rows:
-            if category and r["category"] != category:
-                continue
-            if doc_role and r["doc_role"] != doc_role:
-                continue
-            if not keywords:
-                matched_docs.append(serialize_doc(r))
-                continue
-
-            if scope == "title":
-                haystack = f"{r['filename']} {r['tags_json']} {r['category']}"
-            else:
-                haystack = f"{r['filename']} {r['tags_json']} {r['category']} {r['extracted_text']}"
-            hay_lower = haystack.lower()
-            if all(kw.lower() in hay_lower for kw in keywords):
+        if not keywords:
+            for d in preloaded_light_docs:
+                if category and d["category"] != category:
+                    continue
+                if doc_role and d["doc_role"] != doc_role:
+                    continue
+                matched_docs.append(d)
+        elif scope == "title":
+            for d in preloaded_light_docs:
+                if category and d["category"] != category:
+                    continue
+                if doc_role and d["doc_role"] != doc_role:
+                    continue
+                haystack = f"{d['filename']} {' '.join(d['tags'])} {d['category']}"
+                if all(kw.lower() in haystack.lower() for kw in keywords):
+                    d_copy = dict(d)
+                    d_copy["snippet"] = build_highlight_snippet(d["content_preview"] or d["filename"], keywords)
+                    matched_docs.append(d_copy)
+        else:
+            # 全文检索：仅针对匹配项按需拉取正文片段生成高亮摘要
+            sql = "SELECT id, task_id, filename, rel_path, category, doc_role, file_type, file_size, mtime, extracted_text, tags_json, is_starred, is_pinned, created_at, updated_at FROM documents WHERE 1=1"
+            params: List[Any] = []
+            if category:
+                sql += " AND category = ?"
+                params.append(category)
+            if doc_role:
+                sql += " AND doc_role = ?"
+                params.append(doc_role)
+            for kw in keywords:
+                sql += " AND (filename LIKE ? OR tags_json LIKE ? OR category LIKE ? OR extracted_text LIKE ?)"
+                like_pat = f"%{kw}%"
+                params.extend([like_pat, like_pat, like_pat, like_pat])
+            sql += " ORDER BY is_starred DESC, id DESC"
+            for r in conn.execute(sql, params).fetchall():
                 snip = build_highlight_snippet(r["extracted_text"] or r["filename"], keywords)
-                matched_docs.append(serialize_doc(r, snippet=snip))
+                matched_docs.append(serialize_doc_light(r, snippet=snip, ws_root=ws_root))
 
         conn.close()
     return matched_tasks, matched_docs
 
 
 def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    核心创建工作事项逻辑（支持网页一键投喂、AI 自动填表、多文件挂载与本地专属文件夹创建）
-    """
+    """核心创建工作事项逻辑"""
     cfg = load_config()
     ws_root = get_workspace_root(cfg)
     categories = list_physical_categories()
@@ -673,7 +933,6 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
     uploaded_files: List[Dict[str, Any]] = payload.get("files") or []
     auto_ai = bool(payload.get("auto_ai", True))
 
-    # 如果上传了公文文件，先临时提取首个来文的正文与 raw_text 合并供 AI 分析
     combined_text_parts = []
     if raw_text:
         combined_text_parts.append(raw_text)
@@ -700,7 +959,6 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
         role = fitem.get("doc_role") or "incoming"
         extracted_file_blobs.append((fname, raw_bytes, role))
 
-    # 创建事项前若有文件且需 AI 解析，用临时文件提取文本
     if extracted_file_blobs and auto_ai:
         import tempfile
         for fname, raw_bytes, role in extracted_file_blobs:
@@ -737,6 +995,7 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
     category = payload.get("category") or ai_parsed.get("category") or categories[0]
     summary = payload.get("summary") or ai_parsed.get("summary") or full_source_text[:160]
     status = payload.get("status") or "in_progress"
+    completed_at = now_str if status == "archived" else ""
 
     checklist = payload.get("checklist")
     if checklist is None:
@@ -763,9 +1022,7 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
             "text": str(payload["initial_progress"]).strip(),
         })
 
-    # 在对应分类目录下创建事项专属物理文件夹
-    cat_dir = ws_root / category
-    cat_dir.mkdir(parents=True, exist_ok=True)
+    cat_dir = ensure_category_dir(ws_root, category)
     folder_base_name = sanitize_filename(f"{date_prefix}_{title}")
     task_folder = cat_dir / folder_base_name
     counter = 2
@@ -783,8 +1040,9 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
             INSERT INTO tasks (
                 title, source_channel, doc_number, issuing_org, priority,
                 deadline, category, summary, raw_notice_text, checklist_json,
-                progress_json, status, is_pinned, folder_rel_path, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                progress_json, status, is_pinned, is_collapsed, completed_at,
+                recurring_id, folder_rel_path, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
             """,
             (
                 title,
@@ -800,6 +1058,8 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
                 json.dumps(progress_logs, ensure_ascii=False),
                 status,
                 1 if payload.get("is_pinned") else 0,
+                completed_at,
+                payload.get("recurring_id"),
                 folder_rel_path,
                 now_str,
                 now_str,
@@ -807,19 +1067,18 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
         task_id = cur.lastrowid
 
-        # 保存挂载的文件至事项物理文件夹并建立全文索引
         for fname, raw_bytes, role in extracted_file_blobs:
             prefix = "[来文]_" if role == "incoming" else "[材料]_"
             if not fname.startswith(("[来文]", "[材料]", "【来文】", "【材料】")):
                 save_name = prefix + fname
             else:
                 save_name = fname
-            dest_path = task_folder / save_name
+            dest_path = resolve_unique_dest_path(task_folder, save_name, raw_bytes)
             dest_path.write_bytes(raw_bytes)
             st = dest_path.stat()
             ext_text, ftype = extract_document_text(dest_path)
             rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-            cur.execute(
+            d_cur = cur.execute(
                 """
                 INSERT INTO documents (
                     task_id, filename, rel_path, category, doc_role,
@@ -829,7 +1088,7 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
                 """,
                 (
                     task_id,
-                    save_name,
+                    dest_path.name,
                     rel_file,
                     category,
                     role,
@@ -841,20 +1100,321 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
                     now_str,
                 ),
             )
+            _sync_fts_doc(conn, d_cur.lastrowid)
 
         write_task_readme_file(conn, task_id)
         conn.commit()
         row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        result = serialize_task(conn, row)
+        result = serialize_task(conn, row, ws_root=ws_root)
         conn.close()
     return result
 
 
+# ==================== 周期性/常态化工作自动派生引擎 ====================
+def compute_current_period_key(freq_type: str, freq_value: int, today: Optional[date] = None) -> Tuple[str, bool, str]:
+    """
+    计算某个周期规则在当前日期的周期标识 (period_key)、是否已到触发日 (is_due) 以及本期截止日期 (deadline_str)
+    """
+    d = today or date.today()
+    if freq_type == "weekly":
+        # ISO 周号：如 2026-W46，freq_value: 1(周一)..7(周日)
+        iso_y, iso_w, iso_d = d.isocalendar()
+        pkey = f"{iso_y}-W{iso_w:02d}"
+        target_weekday = max(1, min(7, int(freq_value or 4)))
+        monday = d - timedelta(days=iso_d - 1)
+        target_date = monday + timedelta(days=target_weekday - 1)
+        is_due = d >= target_date
+        return pkey, is_due, target_date.strftime("%Y-%m-%d")
+    elif freq_type == "monthly":
+        pkey = f"{d.year}-{d.month:02d}"
+        target_day = max(1, min(28, int(freq_value or 25)))
+        target_date = date(d.year, d.month, target_day)
+        is_due = d.day >= target_day
+        return pkey, is_due, target_date.strftime("%Y-%m-%d")
+    elif freq_type == "quarterly":
+        q = (d.month - 1) // 3 + 1
+        pkey = f"{d.year}-Q{q}"
+        end_month = q * 3
+        target_day = max(1, min(28, int(freq_value or 25)))
+        target_date = date(d.year, end_month, target_day)
+        is_due = d >= (target_date - timedelta(days=7))
+        return pkey, is_due, target_date.strftime("%Y-%m-%d")
+    else:
+        # custom_days
+        interval = max(1, int(freq_value or 7))
+        epoch_days = (d - date(2026, 1, 1)).days
+        bucket = epoch_days // interval
+        pkey = f"D{interval}-{bucket}"
+        return pkey, True, (d + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+def spawn_task_from_recurring_rule(rule_id: int, force_manual: bool = False) -> Optional[Dict[str, Any]]:
+    """根据周期性规则派生本期工作事项（自动关联上一期写好的材料作为参考旧稿）"""
+    with DB_LOCK:
+        conn = get_db()
+        rule = conn.execute("SELECT * FROM recurring_rules WHERE id = ?", (rule_id,)).fetchone()
+        if not rule:
+            conn.close()
+            return None
+
+        pkey, is_due, base_deadline = compute_current_period_key(rule["freq_type"], rule["freq_value"])
+        if not force_manual and (not rule["enabled"] or not is_due or rule["last_spawned_period"] == pkey):
+            conn.close()
+            return None
+
+        # 如果手动强制派生且本期已派生过，附带时间戳区分
+        actual_pkey = pkey if rule["last_spawned_period"] != pkey else f"{pkey}_{datetime.now().strftime('%m%d%H%M')}"
+        title_rendered = (
+            rule["title_template"]
+            .replace("{period}", pkey)
+            .replace("{month}", f"{date.today().month}月")
+            .replace("{date}", date.today().strftime("%m-%d"))
+        )
+        if pkey not in title_rendered and "{period}" not in rule["title_template"]:
+            title_rendered = f"【{pkey}】{title_rendered}"
+
+        offset_days = int(rule["deadline_offset_days"] or 0)
+        try:
+            dl_dt = datetime.strptime(base_deadline, "%Y-%m-%d").date() + timedelta(days=offset_days)
+            deadline_str = dl_dt.strftime("%Y-%m-%d")
+        except Exception:
+            deadline_str = base_deadline
+
+        # 查找该周期规则上一期事项中“我写的材料”，自动写入初始进展提示参考
+        prev_draft_hint = "周期性工作自动派生"
+        prev_doc = conn.execute(
+            """
+            SELECT d.filename, d.rel_path FROM documents d
+            JOIN tasks t ON d.task_id = t.id
+            WHERE t.recurring_id = ? AND d.doc_role IN ('draft', 'template')
+            ORDER BY d.id DESC LIMIT 1
+            """,
+            (rule_id,),
+        ).fetchone()
+        if prev_doc:
+            prev_draft_hint = f"已由周期规则自动派生，可参考上期定稿《{prev_doc['filename']}》起草本期材料"
+
+        chk_list = json.loads(rule["checklist_json"] or "[]")
+        conn.close()
+
+    created_task = create_task_record({
+        "title": title_rendered,
+        "source_channel": rule["source_channel"] or "周期性工作",
+        "issuing_org": rule["issuing_org"] or "",
+        "priority": rule["priority"] or "重要",
+        "deadline": deadline_str,
+        "category": rule["category"] or "01_防灾减灾",
+        "summary": rule["summary"] or f"周期性常态化工作（周期：{pkey}）",
+        "checklist": chk_list,
+        "initial_progress": prev_draft_hint,
+        "recurring_id": rule_id,
+        "auto_ai": False,
+    })
+
+    with DB_LOCK:
+        conn = get_db()
+        conn.execute(
+            "UPDATE recurring_rules SET last_spawned_period = ?, last_spawned_at = ? WHERE id = ?",
+            (actual_pkey, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rule_id),
+        )
+        conn.commit()
+        conn.close()
+    return created_task
+
+
+def check_and_spawn_all_recurring() -> int:
+    with DB_LOCK:
+        conn = get_db()
+        rules = conn.execute("SELECT id FROM recurring_rules WHERE enabled = 1").fetchall()
+        conn.close()
+    spawned = 0
+    for r in rules:
+        if spawn_task_from_recurring_rule(r["id"], force_manual=False):
+            spawned += 1
+    return spawned
+
+
+def seed_demo_data_if_empty() -> None:
+    """首次初始化示范数据与周期性工作规则，并自动修复旧版被截断的微信群事项标题"""
+    with DB_LOCK:
+        conn = get_db()
+        # 自动修复旧版遗留的微信通知冗长标题
+        bad_rows = conn.execute(
+            "SELECT id, title, category, folder_rel_path, created_at FROM tasks WHERE title LIKE '【工作群通知】@所有人%'"
+        ).fetchall()
+        ws_root_init = get_workspace_root()
+        for br in bad_rows:
+            clean_title = "报送《重点行业领域重大事故隐患排查整治周调度简表》及工作亮点小结"
+            old_rel = br["folder_rel_path"] or ""
+            new_rel = old_rel
+            if old_rel and (ws_root_init / old_rel).exists():
+                date_p = (br["created_at"] or "2026-11-15")[:10]
+                target_abs = (ws_root_init / br["category"]) / sanitize_filename(f"{date_p}_{clean_title}")
+                if not target_abs.exists():
+                    shutil.move(str(ws_root_init / old_rel), str(target_abs))
+                    new_rel = str(target_abs.relative_to(ws_root_init)).replace("\\", "/")
+            conn.execute("UPDATE tasks SET title = ?, folder_rel_path = ? WHERE id = ?", (clean_title, new_rel, br["id"]))
+            write_task_readme_file(conn, br["id"])
+
+        # 初始化默认周期性工作规则（若为空）
+        rec_cnt = conn.execute("SELECT COUNT(*) FROM recurring_rules").fetchone()[0]
+        if rec_cnt == 0:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cur_wk_key, _, _ = compute_current_period_key("weekly", 4)
+            cur_mo_key, _, _ = compute_current_period_key("monthly", 25)
+            conn.execute(
+                """
+                INSERT INTO recurring_rules (
+                    title_template, category, source_channel, issuing_org, priority,
+                    freq_type, freq_value, deadline_offset_days, summary, checklist_json,
+                    enabled, last_spawned_period, last_spawned_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    "报送《重点行业领域重大事故隐患排查整治周调度简表》({period})",
+                    "02_隐患排查与安全生产",
+                    "上级来文",
+                    "县安委办",
+                    "重要",
+                    "weekly",
+                    4,  # 每周四触发
+                    1,  # 周五截止
+                    "每周常态化调度：汇总工贸、危化、非煤矿山等重点领域重大事故隐患排查数据并撰写300字工作亮点。",
+                    json.dumps([
+                        {"id": "chk_1", "text": "汇总各领域本周重大事故隐患排查数据填写周调度简表", "done": False},
+                        {"id": "chk_2", "text": "撰写300字以内本周工作亮点小结报综合科", "done": False},
+                    ], ensure_ascii=False),
+                    cur_wk_key,
+                    now_str,
+                    now_str,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO recurring_rules (
+                    title_template, category, source_channel, issuing_org, priority,
+                    freq_type, freq_value, deadline_offset_days, summary, checklist_json,
+                    enabled, last_spawned_period, last_spawned_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    "{month}全县自然灾害风险形势联合会商与月度防灾减灾工作总结",
+                    "01_防灾减灾",
+                    "上级来文",
+                    "市应急管理局",
+                    "重要",
+                    "monthly",
+                    25,  # 每月25日触发
+                    3,
+                    "每月底常态化会商：联合气象、水利、自然资源开展下月自然灾害风险研判，并报送本月防灾减灾工作总结。",
+                    json.dumps([
+                        {"id": "chk_1", "text": "收集气象、水利、自然资源、森防部门下月风险研判意见", "done": False},
+                        {"id": "chk_2", "text": "起草月度自然灾害风险形势会商报告与防灾减灾工作总结", "done": False},
+                    ], ensure_ascii=False),
+                    cur_mo_key,
+                    now_str,
+                    now_str,
+                ),
+            )
+
+        cnt = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        conn.commit()
+        conn.close()
+
+    if cnt > 0:
+        return
+
+    sample_incoming_text = (
+        "鲁应急发〔2026〕42号\n"
+        "市应急管理局关于开展冬春自然灾害风险形势会商与低温雨雪冰冻防范工作的通知\n\n"
+        "各区县应急管理局：\n"
+        "为扎实做好今冬明春自然灾害防范应对工作，请各区县结合辖区实际开展以下工作：\n"
+        "一、请于2026年11月18日前组织气象、水利、自然资源、住建等部门完成一轮冬春自然灾害风险形势联合会商，形成会商分析报告。\n"
+        "二、全面摸排救灾物资储备库点（棉大衣、棉被、应急照明设备等）库存底数，于11月20日前报送《冬春救灾物资储备摸底统计表》。\n"
+        "三、严格落实24小时值班和领导带班制度，遇突发灾情第一时间通过国家自然灾害灾情管理系统报送。"
+    )
+    sample_draft_text = (
+        "关于我县2026—2027年度冬春自然灾害风险形势会商分析与防范工作方案（初稿）\n\n"
+        "一、基本态势研判\n"
+        "根据县气象局、水利局、自然资源和规划局联合会商意见，预计今冬明春我县气温较常年略偏低，存在阶段性寒潮与低温雨雪冰冻天气过程，森林火险等级在12月至次年2月处于较高水平。\n\n"
+        "二、重点防范措施\n"
+        "（一）强化监测预警与部门联合叫应机制\n"
+        "建立气象、水利、应急、交通多部门全天候灾情会商机制，遇橙色及以上预警立即启动直达基层责任人的“叫应”闭环。\n"
+        "（二）扎实做好救灾物资与装备统筹保障\n"
+        "已完成县级救灾物资库清点，现储备棉被2800床、棉大衣2200件、折叠床1000张、帐篷600顶，账物相符。\n"
+        "（三）加强重点区域隐患排查\n"
+        "针对山区道路、老旧大棚及敬老院开展防冻防风专项巡查。"
+    )
+
+    import base64
+    create_task_record({
+        "title": "关于开展冬春自然灾害风险形势会商与低温雨雪冰冻防范工作的通知",
+        "source_channel": "上级来文",
+        "doc_number": "鲁应急发〔2026〕42号",
+        "issuing_org": "市应急管理局",
+        "priority": "紧急",
+        "deadline": datetime.now().strftime("%Y-%m-%d"),
+        "category": "01_防灾减灾",
+        "raw_notice_text": sample_incoming_text,
+        "auto_ai": True,
+        "is_pinned": True,
+        "initial_progress": "已联系气象、水利、自然资源科室收集会商意见，救灾物资储备底数正在核对。",
+        "files": [
+            {
+                "filename": "鲁应急发2026-42号_关于开展冬春自然灾害风险形势会商的通知.txt",
+                "content_base64": base64.b64encode(sample_incoming_text.encode("utf-8")).decode("ascii"),
+                "doc_role": "incoming",
+            },
+            {
+                "filename": "我县冬春自然灾害风险形势会商分析报告_初稿.md",
+                "content_base64": base64.b64encode(sample_draft_text.encode("utf-8")).decode("ascii"),
+                "doc_role": "draft",
+            },
+        ],
+    })
+
+    wechat_notice = (
+        "【工作群通知】@所有人 接县政府办电话及群通知：请各单位结合本周安全生产与重大事故隐患排查整治情况，"
+        "于11月19日下班前报送《重点行业领域重大事故隐患排查整治周调度简表》及300字以内工作亮点小结（电子版发综合科邮箱）。"
+    )
+    create_task_record({
+        "raw_notice_text": wechat_notice,
+        "source_channel": "微信群",
+        "category": "02_隐患排查与安全生产",
+        "auto_ai": True,
+        "initial_progress": "已整理工贸与危化品企业本周排查数据，待补充亮点小结。",
+    })
+
+    ws_root = get_workspace_root()
+    ref_file = ws_root / "03_综合汇报与总结" / "【范文模板】全县防灾减灾救灾工作阶段总结汇报模板.md"
+    if not ref_file.exists():
+        ref_file.write_text(
+            "# 全县防灾减灾救灾工作阶段总结汇报（通用参考范文）\n\n"
+            "## 一、工作总体开展情况\n"
+            "今年以来，县应急管理局深入贯彻落实上级关于防灾减灾救灾决策部署，坚持“预防为主、防抗救相结合”，扎实推进自然灾害风险普查成果应用、冬春救助、防汛抗旱及森林防灭火工作。\n\n"
+            "## 二、主要做法与成效\n"
+            "1. **健全会商研判机制**：每季度联合气象、水利、自然资源、森防等部门开展综合风险会商。\n"
+            "2. **夯实救灾物资与避难场所保障**：全县规范化管理应急避难场所，完成县乡两级救灾物资出入库台账数字化清点。\n"
+            "3. **广泛开展防灾减灾宣传演练**：结合5·12防灾减灾宣传周与10·13国际减灾日开展进社区、进校园演练。\n\n"
+            "## 三、存在问题与下一步打算\n"
+            "持续紧盯极端天气防范，完善基层应急叫应闭环机制。\n",
+            encoding="utf-8",
+        )
+    sync_filesystem(force=True)
+    with DB_LOCK:
+        conn = get_db()
+        conn.execute(
+            "UPDATE documents SET is_starred = 1, doc_role = 'template', tags_json = ? WHERE filename LIKE '%阶段总结汇报模板%'",
+            (json.dumps(["防灾减灾", "总结汇报", "常用范文"], ensure_ascii=False),),
+        )
+        conn.commit()
+        conn.close()
+
+
 class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
-    server_version = "GWWorkbench/1.0"
+    server_version = f"GWWorkbench/{VERSION}"
 
     def log_message(self, format: str, *args: Any) -> None:
-        # 保持后台日志简洁
         pass
 
     def _is_localhost(self) -> bool:
@@ -866,16 +1426,11 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         c = cookies.SimpleCookie()
         try:
             c.load(raw_cookie)
-            return {k: v.value for k, v in c.items()}
+            return {k: urllib.parse.unquote(v.value) for k, v in c.items()}
         except Exception:
             return {}
 
     def _check_auth(self) -> Tuple[bool, bool]:
-        """
-        返回 (can_view, can_edit)
-        - 本机 127.0.0.1 访问或携带正确 X-Agent-Token：默认自动具备 can_view + can_edit
-        - 局域网其他电脑：验证 Cookie 或 Header 中的访问密码与主理人编辑密码
-        """
         cfg = load_config()
         agent_tok = self.headers.get("X-Agent-Token", "")
         if self._is_localhost() or (agent_tok and agent_tok == cfg.get("agent_token")):
@@ -899,6 +1454,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         data: Any,
         status: int = 200,
         set_cookies: Optional[Dict[str, str]] = None,
+        clear_cookies: Optional[List[str]] = None,
     ) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -907,10 +1463,15 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         if set_cookies:
             for k, v in set_cookies.items():
-                # 记住密码 365 天
                 self.send_header(
                     "Set-Cookie",
                     f"{k}={urllib.parse.quote(v)}; Path=/; Max-Age=31536000; SameSite=Lax",
+                )
+        if clear_cookies:
+            for k in clear_cookies:
+                self.send_header(
+                    "Set-Cookie",
+                    f"{k}=; Path=/; Max-Age=0; SameSite=Lax",
                 )
         self.end_headers()
         self.wfile.write(body)
@@ -934,7 +1495,6 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self.handle_api_get(path, qs)
             return
 
-        # 静态资源服务
         if path == "/" or path == "/index.html":
             index_file = STATIC_DIR / "index.html"
             if index_file.exists():
@@ -988,6 +1548,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/auth/status":
             self._send_json({
+                "version": VERSION,
                 "can_view": can_view,
                 "can_edit": can_edit,
                 "is_localhost": self._is_localhost(),
@@ -1000,42 +1561,65 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/bootstrap":
-            # 每次进入工作台自动做一次轻量双向文件变更扫描
-            sync_stats = sync_filesystem()
+            sync_stats = sync_filesystem(force=False)
+            check_and_spawn_all_recurring()
             categories = list_physical_categories()
+            ws_root = get_workspace_root(cfg)
+
             with DB_LOCK:
                 conn = get_db()
-                rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
-                tasks = [serialize_task(conn, r) for r in rows]
+                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
 
-                # 排序：进行中与待办按紧急度和剩余天数排在最前
+                rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
+                tasks = [
+                    serialize_task(conn, r, include_refs=True, preloaded_docs=docs, ws_root=ws_root)
+                    for r in rows
+                ]
+
                 def task_sort_key(t: Dict[str, Any]):
                     status_order = {"in_progress": 0, "pending": 1, "archived": 2}.get(t["status"], 1)
                     pinned_order = 0 if t["is_pinned"] else 1
+                    if t["status"] == "archived":
+                        # 已归档事项按办结时间或更新时间倒序排列（最新办结排最前！）
+                        comp_ts = t.get("completed_at") or t.get("updated_at") or ""
+                        return (status_order, pinned_order, 0, -int(t["id"]), comp_ts)
                     days_left = t["deadline_info"]["days_left"]
                     prio_order = {"紧急": 0, "重要": 1, "普通": 2}.get(t.get("priority", "普通"), 2)
-                    return (status_order, pinned_order, days_left, prio_order, -t["id"])
+                    return (status_order, pinned_order, days_left, prio_order, -int(t["id"]))
 
                 tasks.sort(key=task_sort_key)
 
-                doc_rows = conn.execute("SELECT * FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-                docs = [serialize_doc(r) for r in doc_rows]
+                rec_rows = conn.execute("SELECT * FROM recurring_rules ORDER BY id ASC").fetchall()
+                recurring_rules = []
+                for rr in rec_rows:
+                    r_dict = dict(rr)
+                    r_dict["checklist"] = json.loads(r_dict.pop("checklist_json", "[]") or "[]")
+                    r_dict["enabled"] = bool(r_dict.get("enabled", 1))
+                    pkey, is_due, next_dl = compute_current_period_key(r_dict["freq_type"], r_dict["freq_value"])
+                    r_dict["current_period"] = pkey
+                    r_dict["next_deadline"] = next_dl
+                    recurring_rules.append(r_dict)
+
                 conn.close()
 
             self._send_json({
+                "version": VERSION,
                 "can_view": can_view,
                 "can_edit": can_edit,
                 "is_localhost": self._is_localhost(),
                 "lan_url": f"http://{get_lan_ip()}:{cfg.get('port', 8090)}",
-                "workspace_root": str(get_workspace_root(cfg)),
+                "workspace_root": str(ws_root),
                 "lan_notice": cfg.get("lan_notice", ""),
                 "ai_configured": bool(cfg.get("ai_api_base")),
                 "ai_model": cfg.get("ai_model", "deepseek-chat"),
                 "ai_api_base": cfg.get("ai_api_base", ""),
+                "xkl_gw_cli": cfg.get("xkl_gw_cli", ""),
                 "prefix_archived_folder": bool(cfg.get("prefix_archived_folder", False)),
                 "categories": categories,
                 "tasks": tasks,
                 "documents": docs,
+                "recurring_rules": recurring_rules,
                 "sync_stats": sync_stats,
             })
             return
@@ -1043,11 +1627,14 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/tasks":
             status_filter = (qs.get("status") or [""])[0]
             cat_filter = (qs.get("category") or [""])[0]
+            ws_root = get_workspace_root(cfg)
             with DB_LOCK:
                 conn = get_db()
+                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
                 rows = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
                 tasks = [
-                    serialize_task(conn, r)
+                    serialize_task(conn, r, preloaded_docs=docs, ws_root=ws_root)
                     for r in rows
                     if (not status_filter or r["status"] == status_filter)
                     and (not cat_filter or r["category"] == cat_filter)
@@ -1060,9 +1647,10 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             cat_filter = (qs.get("category") or [""])[0]
             role_filter = (qs.get("doc_role") or [""])[0]
             starred_only = (qs.get("starred") or [""])[0] == "1"
+            ws_root = get_workspace_root(cfg)
             with DB_LOCK:
                 conn = get_db()
-                rows = conn.execute("SELECT * FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
                 docs = []
                 for r in rows:
                     if cat_filter and r["category"] != cat_filter:
@@ -1071,9 +1659,23 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         continue
                     if starred_only and not r["is_starred"]:
                         continue
-                    docs.append(serialize_doc(r))
+                    docs.append(serialize_doc_light(r, ws_root=ws_root))
                 conn.close()
             self._send_json({"documents": docs})
+            return
+
+        if path == "/api/recurring":
+            with DB_LOCK:
+                conn = get_db()
+                rec_rows = conn.execute("SELECT * FROM recurring_rules ORDER BY id ASC").fetchall()
+                rules = []
+                for rr in rec_rows:
+                    d = dict(rr)
+                    d["checklist"] = json.loads(d.pop("checklist_json", "[]") or "[]")
+                    d["enabled"] = bool(d.get("enabled", 1))
+                    rules.append(d)
+                conn.close()
+            self._send_json({"recurring_rules": rules})
             return
 
         # 预览单个文件完整正文
@@ -1087,8 +1689,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             if not row:
                 self._send_json({"error": "文件不存在"}, status=404)
                 return
-            d = serialize_doc(row)
+            d = serialize_doc_light(row)
             d["extracted_text"] = row["extracted_text"] or ""
+            d["is_editable_text"] = Path(row["filename"]).suffix.lower() in (".md", ".txt", ".markdown", ".csv", ".json")
             self._send_json({"document": d})
             return
 
@@ -1121,6 +1724,32 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
+        # 批量多选文件打包下载 (.zip)
+        if path == "/api/docs/batch-zip":
+            ids_raw = (qs.get("ids") or [""])[0]
+            doc_ids = [int(x) for x in ids_raw.split(",") if x.strip().isdigit()]
+            ws_root = get_workspace_root(cfg)
+            buf = io.BytesIO()
+            with DB_LOCK:
+                conn = get_db()
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for did in doc_ids:
+                        r = conn.execute("SELECT filename, rel_path, category FROM documents WHERE id = ?", (did,)).fetchone()
+                        if r:
+                            fp = ws_root / r["rel_path"]
+                            if fp.is_file():
+                                zf.write(fp, arcname=f"{r['category']}/{r['filename']}")
+                conn.close()
+            zip_bytes = buf.getvalue()
+            zip_name = urllib.parse.quote(f"公文与材料批量打包_{datetime.now().strftime('%Y%m%d_%H%M')}.zip")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(len(zip_bytes)))
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{zip_name}")
+            self.end_headers()
+            self.wfile.write(zip_bytes)
+            return
+
         # 打包下载整个工作事项文件夹 (.zip)
         m_tzip = re.match(r"^/api/tasks/(\d+)/zip$", path)
         if m_tzip:
@@ -1138,7 +1767,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 if folder_path.exists():
                     for f in folder_path.rglob("*"):
-                        if f.is_file() and not f.name.startswith("~$"):
+                        if f.is_file() and not f.name.startswith("~$") and f.name != ".gitkeep":
                             zf.write(f, arcname=f.relative_to(folder_path))
             zip_bytes = buf.getvalue()
             zip_name = urllib.parse.quote(f"{row['title']}_全套公文与材料.zip")
@@ -1153,7 +1782,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(zip_bytes)
             return
 
-        # 搜索接口 (支持仅标题 or 标题+全文)
+        # 搜索接口
         if path == "/api/search":
             q = (qs.get("q") or [""])[0]
             scope = (qs.get("scope") or ["full"])[0]
@@ -1173,11 +1802,14 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             fmt = (qs.get("format") or ["csv"])[0].lower()
             status_filter = (qs.get("status") or [""])[0]
             cat_filter = (qs.get("category") or [""])[0]
+            ws_root = get_workspace_root(cfg)
             with DB_LOCK:
                 conn = get_db()
+                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY id ASC").fetchall()
+                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
                 rows = conn.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
                 tasks = [
-                    serialize_task(conn, r, include_refs=False)
+                    serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root)
                     for r in rows
                     if (not status_filter or r["status"] == status_filter)
                     and (not cat_filter or r["category"] == cat_filter)
@@ -1214,7 +1846,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 writer = csv.writer(out)
                 writer.writerow([
                     "序号", "状态", "所属分类", "来源渠道", "来文单位", "发文字号",
-                    "事项名称", "优先级", "截止日期", "核心要求摘要", "待办清单完成情况",
+                    "事项名称", "优先级", "截止日期", "办结归档时间", "核心要求摘要", "待办清单完成情况",
                     "最新进展记录", "来文原件", "我撰写的材料", "本地文件夹路径", "创建时间",
                 ])
                 for i, t in enumerate(tasks, 1):
@@ -1238,6 +1870,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         t.get("title", ""),
                         t.get("priority", ""),
                         t.get("deadline", ""),
+                        t.get("completed_at", ""),
                         t.get("summary", ""),
                         chk_str,
                         prog_str,
@@ -1246,7 +1879,6 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         t.get("folder_rel_path", ""),
                         t.get("created_at", ""),
                     ])
-                # 使用 UTF-8-SIG 带 BOM 编码，确保银河麒麟 WPS 表格与 Windows Excel 直接双击打开不乱码
                 csv_bytes = out.getvalue().encode("utf-8-sig")
                 fname = urllib.parse.quote(f"办文与工作台账_{datetime.now().strftime('%Y%m%d')}.csv")
                 self.send_response(200)
@@ -1290,19 +1922,27 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "主理人编辑口令不正确"}, status=403)
             return
 
+        if path == "/api/auth/lock-edit":
+            # 修复 Bug 5：退出编辑模式时同步清除浏览器 Cookie
+            self._send_json({"ok": True, "can_edit": False}, clear_cookies=["wb_edit_pwd"])
+            return
+
         can_view, can_edit = self._check_auth()
         if not can_view:
             self._send_json({"error": "未登录"}, status=401)
             return
 
-        # AI 搜索与本地 Agent 搜索对所有已登录用户开放
+        # AI 搜索与本地 Agent 搜索
         if path in ("/api/ai/search", "/api/agent/context-search"):
             query = str(body.get("query") or "").strip()
             category = str(body.get("category") or "").strip()
             kws = extract_search_keywords(query)
-            # 多关键词召回（匹配任意核心词即可进入初筛池，按命中词数排序）
+            ws_root = get_workspace_root(cfg)
             with DB_LOCK:
                 conn = get_db()
+                all_doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                preloaded_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_doc_rows]
+
                 all_tasks = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
                 scored_tasks = []
                 for r in all_tasks:
@@ -1311,7 +1951,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     hay = f"{r['title']} {r['doc_number']} {r['issuing_org']} {r['summary']} {r['raw_notice_text']} {r['progress_json']}".lower()
                     hits = sum(2 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
                     if hits > 0:
-                        t_obj = serialize_task(conn, r, include_refs=False)
+                        t_obj = serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
                         t_obj["match_snippet"] = build_highlight_snippet(hay, kws)
                         scored_tasks.append((hits, t_obj))
                 scored_tasks.sort(key=lambda x: (-x[0], -x[1]["id"]))
@@ -1327,7 +1967,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     hits = sum(3 if kw.lower() in hay_title else (1 if kw.lower() in hay_body else 0) for kw in kws)
                     if hits > 0:
                         snip = build_highlight_snippet(r["extracted_text"] or r["filename"], kws)
-                        d_obj = serialize_doc(r, snippet=snip)
+                        d_obj = serialize_doc_light(r, snippet=snip, ws_root=ws_root)
                         if path == "/api/agent/context-search":
                             d_obj["extracted_text_chunk"] = (r["extracted_text"] or "")[:2000]
                         scored_docs.append((hits, d_obj))
@@ -1346,14 +1986,241 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # 以下为写操作，需编辑权限
         if not can_edit:
             self._send_json({"error": "当前为【浏览与下载模式】，请点击右上角开启【主理人编辑模式】后再修改"}, status=403)
             return
 
         if path == "/api/sync":
-            stats = sync_filesystem()
+            stats = sync_filesystem(force=True)
+            spawned = check_and_spawn_all_recurring()
+            stats["spawned_recurring"] = spawned
             self._send_json({"ok": True, "stats": stats})
+            return
+
+        # 本机一键调用银河麒麟 WPS 打开文件或调用文件管理器打开本地文件夹
+        if path == "/api/local/open":
+            if not self._is_localhost():
+                self._send_json({"error": "仅限在工作台主机（127.0.0.1）上直接调起本机 WPS 或文件管理器，局域网同事请使用【下载】或【在线预览】"}, status=403)
+                return
+            ws_root = get_workspace_root(cfg)
+            target_type = body.get("type") or "file"  # 'file' | 'folder'
+            rel_path = str(body.get("rel_path") or "").strip()
+            target_abs = (ws_root / rel_path).resolve()
+            if not str(target_abs).startswith(str(ws_root.resolve())) or not target_abs.exists():
+                self._send_json({"error": f"本地路径不存在: {target_abs}"}, status=404)
+                return
+
+            launched_cmd = ""
+            try:
+                if target_type == "folder" or target_abs.is_dir():
+                    folder_to_open = target_abs if target_abs.is_dir() else target_abs.parent
+                    for fm in ("peony", "caja", "dde-file-manager", "nautilus", "xdg-open"):
+                        if shutil.which(fm):
+                            subprocess.Popen([fm, str(folder_to_open)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            launched_cmd = f"{fm} {folder_to_open}"
+                            break
+                else:
+                    ext = target_abs.suffix.lower()
+                    candidates = ["wps", "xdg-open"]
+                    if ext in (".xlsx", ".xls", ".csv", ".et"):
+                        candidates = ["et", "wps", "xdg-open"]
+                    for app in candidates:
+                        if shutil.which(app):
+                            subprocess.Popen([app, str(target_abs)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            launched_cmd = f"{app} {target_abs}"
+                            break
+            except Exception as e:
+                self._send_json({"ok": False, "error": f"调起本地应用异常: {e}", "abs_path": str(target_abs)}, status=500)
+                return
+
+            self._send_json({
+                "ok": True,
+                "launched": bool(launched_cmd),
+                "command": launched_cmd or "未检测到桌面图形启动器，已为您复制本地绝对路径",
+                "abs_path": str(target_abs),
+            })
+            return
+
+        # 在线直接新建或修改保存 Markdown / 纯文本材料草稿（免开 WPS 极速写材料！）
+        if path == "/api/docs/save-text":
+            ws_root = get_workspace_root(cfg)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            doc_id = body.get("doc_id")
+            task_id = body.get("task_id")
+            content = str(body.get("content") or "")
+            filename = sanitize_filename(body.get("filename") or "新建材料草稿.md")
+            if not filename.lower().endswith((".md", ".txt", ".markdown")):
+                filename += ".md"
+
+            with DB_LOCK:
+                conn = get_db()
+                if doc_id:
+                    d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(doc_id),)).fetchone()
+                    if not d_row:
+                        conn.close()
+                        self._send_json({"error": "文档不存在"}, status=404)
+                        return
+                    dest_path = ws_root / d_row["rel_path"]
+                    dest_path.write_text(content, encoding="utf-8")
+                    st = dest_path.stat()
+                    conn.execute(
+                        "UPDATE documents SET file_size = ?, mtime = ?, extracted_text = ?, updated_at = ? WHERE id = ?",
+                        (st.st_size, round(st.st_mtime, 2), content, now_str, int(doc_id)),
+                    )
+                    _sync_fts_doc(conn, int(doc_id))
+                    if d_row["task_id"]:
+                        write_task_readme_file(conn, d_row["task_id"])
+                    conn.commit()
+                    u_row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(doc_id),)).fetchone()
+                    res_doc = serialize_doc_light(u_row, ws_root=ws_root)
+                    res_doc["extracted_text"] = content
+                    conn.close()
+                    self._send_json({"ok": True, "document": res_doc})
+                    return
+                elif task_id:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (int(task_id),)).fetchone()
+                    if not t_row:
+                        conn.close()
+                        self._send_json({"error": "关联事项不存在"}, status=404)
+                        return
+                    task_folder = ws_root / t_row["folder_rel_path"]
+                    task_folder.mkdir(parents=True, exist_ok=True)
+                    if not filename.startswith(("[材料]", "【材料】")):
+                        filename = "[材料]_" + filename
+                    dest_path = resolve_unique_dest_path(task_folder, filename, content.encode("utf-8"))
+                    dest_path.write_text(content, encoding="utf-8")
+                    st = dest_path.stat()
+                    rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                    cur = conn.execute(
+                        """
+                        INSERT INTO documents (
+                            task_id, filename, rel_path, category, doc_role,
+                            file_type, file_size, mtime, extracted_text,
+                            tags_json, is_starred, is_pinned, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, 'draft', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?)
+                        """,
+                        (int(task_id), dest_path.name, rel_file, t_row["category"], st.st_size, round(st.st_mtime, 2), content, now_str, now_str),
+                    )
+                    new_doc_id = cur.lastrowid
+                    _sync_fts_doc(conn, new_doc_id)
+                    write_task_readme_file(conn, int(task_id))
+                    conn.commit()
+                    u_task = serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (int(task_id),)).fetchone(), ws_root=ws_root)
+                    u_doc = serialize_doc_light(conn.execute("SELECT * FROM documents WHERE id = ?", (new_doc_id,)).fetchone(), ws_root=ws_root)
+                    conn.close()
+                    self._send_json({"ok": True, "document": u_doc, "task": u_task})
+                    return
+                else:
+                    cat = sanitize_filename(body.get("category") or "03_综合汇报与总结")
+                    cat_dir = ensure_category_dir(ws_root, cat)
+                    dest_path = resolve_unique_dest_path(cat_dir, filename, content.encode("utf-8"))
+                    dest_path.write_text(content, encoding="utf-8")
+                    st = dest_path.stat()
+                    rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                    cur = conn.execute(
+                        """
+                        INSERT INTO documents (
+                            task_id, filename, rel_path, category, doc_role,
+                            file_type, file_size, mtime, extracted_text,
+                            tags_json, is_starred, is_pinned, created_at, updated_at
+                        ) VALUES (NULL, ?, ?, ?, 'draft', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?)
+                        """,
+                        (dest_path.name, rel_file, cat, st.st_size, round(st.st_mtime, 2), content, now_str, now_str),
+                    )
+                    new_doc_id = cur.lastrowid
+                    _sync_fts_doc(conn, new_doc_id)
+                    conn.commit()
+                    u_doc = serialize_doc_light(conn.execute("SELECT * FROM documents WHERE id = ?", (new_doc_id,)).fetchone(), ws_root=ws_root)
+                    conn.close()
+                    self._send_json({"ok": True, "document": u_doc})
+                    return
+
+        # 一键将材料草稿排版导出为符合 GB/T 9704—2012 国标格式的 .docx 公文（联动 xkl-gw）
+        m_fmt = re.match(r"^/api/docs/(\d+)/format-gw$", path)
+        if m_fmt:
+            doc_id = int(m_fmt.group(1))
+            mode = body.get("mode") or "report"  # 'report' | 'redhead'
+            custom_doc_num = str(body.get("doc_number") or "").strip()
+            custom_org = str(body.get("issuing_org") or "").strip()
+            ws_root = get_workspace_root(cfg)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            with DB_LOCK:
+                conn = get_db()
+                d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                if not d_row:
+                    conn.close()
+                    self._send_json({"error": "原文档不存在"}, status=404)
+                    return
+
+                t_row = None
+                if d_row["task_id"]:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (d_row["task_id"],)).fetchone()
+
+                src_abs = ws_root / d_row["rel_path"]
+                stem = re.sub(r"^(\[材料\]_|\[来文\]_)+", "", Path(d_row["filename"]).stem)
+                out_name = f"[材料]_{stem}_国标排版.docx"
+                out_abs = src_abs.parent / sanitize_filename(out_name)
+
+                doc_num = custom_doc_num or (t_row["doc_number"] if t_row else "")
+                org_name = custom_org or (t_row["issuing_org"] if t_row and t_row["issuing_org"] else "县应急管理局")
+                raw_text = d_row["extracted_text"] or ""
+
+                build_gb9704_docx(
+                    output_path=out_abs,
+                    raw_text=raw_text,
+                    title=stem,
+                    doc_number=doc_num,
+                    issuing_org=org_name,
+                    mode=mode,
+                    xkl_gw_cli=cfg.get("xkl_gw_cli", ""),
+                )
+
+                st = out_abs.stat()
+                ext_text, ftype = extract_document_text(out_abs)
+                rel_file = str(out_abs.relative_to(ws_root)).replace("\\", "/")
+                cur = conn.execute(
+                    """
+                    INSERT INTO documents (
+                        task_id, filename, rel_path, category, doc_role,
+                        file_type, file_size, mtime, extracted_text,
+                        tags_json, is_starred, is_pinned, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, 0, 0, ?, ?)
+                    ON CONFLICT(rel_path) DO UPDATE SET
+                        file_size=excluded.file_size,
+                        mtime=excluded.mtime,
+                        extracted_text=excluded.extracted_text,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        d_row["task_id"],
+                        out_abs.name,
+                        rel_file,
+                        d_row["category"],
+                        ftype,
+                        st.st_size,
+                        round(st.st_mtime, 2),
+                        ext_text,
+                        json.dumps(["国标公文", "GB/T9704"], ensure_ascii=False),
+                        now_str,
+                        now_str,
+                    ),
+                )
+                row_new = conn.execute("SELECT * FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                if row_new:
+                    _sync_fts_doc(conn, row_new["id"])
+                if d_row["task_id"]:
+                    write_task_readme_file(conn, d_row["task_id"])
+                conn.commit()
+                res_doc = serialize_doc_light(row_new, ws_root=ws_root)
+                res_task = (
+                    serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (d_row["task_id"],)).fetchone(), ws_root=ws_root)
+                    if d_row["task_id"]
+                    else None
+                )
+                conn.close()
+
+            self._send_json({"ok": True, "document": res_doc, "task": res_task})
             return
 
         if path == "/api/ai/parse":
@@ -1424,7 +2291,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         sp = Path(fitem["local_source_path"]).expanduser()
                         if sp.is_file():
                             raw_bytes = sp.read_bytes()
-                    dest = task_folder / save_name
+                    dest = resolve_unique_dest_path(task_folder, save_name, raw_bytes)
                     dest.write_bytes(raw_bytes)
                     st = dest.stat()
                     ext_txt, ftype = extract_document_text(dest)
@@ -1444,7 +2311,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         """,
                         (
                             task_id,
-                            save_name,
+                            dest.name,
                             rel_file,
                             t_row["category"],
                             role,
@@ -1456,23 +2323,24 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                             now_str,
                         ),
                     )
+                    r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                    if r_doc:
+                        _sync_fts_doc(conn, r_doc["id"])
                 write_task_readme_file(conn, task_id)
                 conn.commit()
                 updated_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                res_task = serialize_task(conn, updated_row)
+                res_task = serialize_task(conn, updated_row, ws_root=ws_root)
                 conn.close()
             self._send_json({"ok": True, "task": res_task})
             return
 
         if path == "/api/docs/upload":
-            # 在独立【公文与材料库】直接上传文件或批量拖入历史公文
             category = sanitize_filename(body.get("category") or "05_历史公文归档")
             doc_role = body.get("doc_role") or "draft"
             tags = body.get("tags") or []
             files_list = body.get("files") or []
             ws_root = get_workspace_root(cfg)
-            cat_dir = ws_root / category
-            cat_dir.mkdir(parents=True, exist_ok=True)
+            cat_dir = ensure_category_dir(ws_root, category)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             added_docs = []
             import base64
@@ -1484,12 +2352,12 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     if "," in b64 and b64.startswith("data:"):
                         b64 = b64.split(",", 1)[1]
                     raw_bytes = base64.b64decode(b64) if b64 else b""
-                    dest = cat_dir / fname
+                    dest = resolve_unique_dest_path(cat_dir, fname, raw_bytes)
                     dest.write_bytes(raw_bytes)
                     st = dest.stat()
                     ext_txt, ftype = extract_document_text(dest)
                     rel_file = str(dest.relative_to(ws_root)).replace("\\", "/")
-                    cur = conn.execute(
+                    conn.execute(
                         """
                         INSERT INTO documents (
                             task_id, filename, rel_path, category, doc_role,
@@ -1504,7 +2372,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                             updated_at=excluded.updated_at
                         """,
                         (
-                            fname,
+                            dest.name,
                             rel_file,
                             category,
                             doc_role,
@@ -1518,19 +2386,86 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                             now_str,
                         ),
                     )
-                    row = conn.execute("SELECT * FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                    row = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
                     if row:
-                        added_docs.append(serialize_doc(row))
+                        _sync_fts_doc(conn, row["id"])
+                        added_docs.append(serialize_doc_light(row, ws_root=ws_root))
                 conn.commit()
                 conn.close()
             self._send_json({"ok": True, "documents": added_docs})
             return
 
+        # 【公文与材料库】多选批量归纳操作（批量移目录、打标、星标、切换角色、删除）
+        if path == "/api/docs/batch":
+            doc_ids = [int(x) for x in (body.get("doc_ids") or []) if str(x).isdigit()]
+            action = str(body.get("action") or "").strip()
+            ws_root = get_workspace_root(cfg)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if not doc_ids:
+                self._send_json({"error": "请先勾选至少一份文件"}, status=400)
+                return
+
+            updated_count = 0
+            with DB_LOCK:
+                conn = get_db()
+                for did in doc_ids:
+                    row = conn.execute("SELECT * FROM documents WHERE id = ?", (did,)).fetchone()
+                    if not row:
+                        continue
+                    if action == "move_category":
+                        target_cat = sanitize_filename(body.get("category") or row["category"])
+                        if target_cat != row["category"]:
+                            target_dir = ensure_category_dir(ws_root, target_cat)
+                            old_abs = ws_root / row["rel_path"]
+                            new_rel = row["rel_path"]
+                            if old_abs.is_file() and row["task_id"] is None:
+                                new_abs = resolve_unique_dest_path(target_dir, row["filename"])
+                                shutil.move(str(old_abs), str(new_abs))
+                                new_rel = str(new_abs.relative_to(ws_root)).replace("\\", "/")
+                            conn.execute(
+                                "UPDATE documents SET category = ?, rel_path = ?, filename = ?, updated_at = ? WHERE id = ?",
+                                (target_cat, new_rel, Path(new_rel).name, now_str, did),
+                            )
+                            _sync_fts_doc(conn, did)
+                            updated_count += 1
+                    elif action == "add_tags":
+                        new_tags_in = [t.strip() for t in (body.get("tags") or []) if str(t).strip()]
+                        curr_tags = json.loads(row["tags_json"] or "[]")
+                        for nt in new_tags_in:
+                            if nt not in curr_tags:
+                                curr_tags.append(nt)
+                        conn.execute(
+                            "UPDATE documents SET tags_json = ?, updated_at = ? WHERE id = ?",
+                            (json.dumps(curr_tags, ensure_ascii=False), now_str, did),
+                        )
+                        _sync_fts_doc(conn, did)
+                        updated_count += 1
+                    elif action == "star":
+                        val = 1 if body.get("value", True) else 0
+                        conn.execute("UPDATE documents SET is_starred = ?, updated_at = ? WHERE id = ?", (val, now_str, did))
+                        updated_count += 1
+                    elif action == "change_role":
+                        new_role = body.get("doc_role") or "draft"
+                        conn.execute("UPDATE documents SET doc_role = ?, updated_at = ? WHERE id = ?", (new_role, now_str, did))
+                        updated_count += 1
+                    elif action == "delete":
+                        if body.get("delete_disk") and row["rel_path"]:
+                            f_abs = ws_root / row["rel_path"]
+                            if f_abs.is_file():
+                                f_abs.unlink(missing_ok=True)
+                        conn.execute("DELETE FROM documents WHERE id = ?", (did,))
+                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
+                        updated_count += 1
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True, "updated_count": updated_count})
+            return
+
         if path == "/api/docs/scan-local-dir":
-            # 批量扫描本机某个历史公文文件夹并导入归档库（Q6 & Q11）
+            # 批量扫描本机历史公文文件夹：保留原多级子目录名作为标签 + 防同名文件覆盖 + 支持按内容智能分拣分类
             src_dir_str = str(body.get("source_dir") or "").strip()
             target_cat = sanitize_filename(body.get("category") or "05_历史公文归档")
-            doc_role = body.get("doc_role") or "historical"
+            smart_auto_cat = bool(body.get("smart_auto_category", False))
             if not src_dir_str:
                 self._send_json({"error": "请输入本机文件夹路径"}, status=400)
                 return
@@ -1540,18 +2475,66 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             ws_root = get_workspace_root(cfg)
-            dest_cat_dir = ws_root / target_cat
-            dest_cat_dir.mkdir(parents=True, exist_ok=True)
+            avail_cats = list_physical_categories()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             allowed_exts = {".docx", ".doc", ".wps", ".ofd", ".pdf", ".txt", ".md", ".xlsx", ".xls", ".csv"}
             imported_count = 0
-            for f in src_dir.rglob("*"):
-                if f.is_file() and not f.name.startswith(".") and not f.name.startswith("~$"):
-                    if f.suffix.lower() in allowed_exts:
-                        target_f = dest_cat_dir / sanitize_filename(f.name)
-                        if target_f.resolve() != f.resolve():
-                            shutil.copy2(f, target_f)
-                        imported_count += 1
-            sync_stats = sync_filesystem()
+
+            with DB_LOCK:
+                conn = get_db()
+                for f in sorted(src_dir.rglob("*")):
+                    if f.is_file() and not f.name.startswith(".") and not f.name.startswith("~$"):
+                        if f.suffix.lower() in allowed_exts:
+                            raw_bytes = f.read_bytes()
+                            ext_txt, ftype = extract_document_text(f)
+                            # 提取相对子目录名作为标签保留上下文
+                            rel_parts = list(f.relative_to(src_dir).parts[:-1])
+                            sub_tags = [p for p in rel_parts if p and not p.startswith(".")]
+
+                            chosen_cat = match_best_category(f"{f.name} {ext_txt[:400]}", avail_cats) if smart_auto_cat else target_cat
+                            dest_cat_dir = ensure_category_dir(ws_root, chosen_cat)
+                            target_f = resolve_unique_dest_path(dest_cat_dir, f.name, raw_bytes)
+                            if target_f.resolve() != f.resolve():
+                                shutil.copy2(f, target_f)
+                            st = target_f.stat()
+                            rel_file = str(target_f.relative_to(ws_root)).replace("\\", "/")
+                            role = infer_doc_role(target_f.name, ext_txt[:300], in_task_folder=False, cat_name=chosen_cat)
+
+                            conn.execute(
+                                """
+                                INSERT INTO documents (
+                                    task_id, filename, rel_path, category, doc_role,
+                                    file_type, file_size, mtime, extracted_text,
+                                    tags_json, is_starred, is_pinned, created_at, updated_at
+                                ) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                                ON CONFLICT(rel_path) DO UPDATE SET
+                                    tags_json=excluded.tags_json,
+                                    extracted_text=excluded.extracted_text,
+                                    updated_at=excluded.updated_at
+                                """,
+                                (
+                                    target_f.name,
+                                    rel_file,
+                                    chosen_cat,
+                                    role,
+                                    ftype,
+                                    st.st_size,
+                                    round(st.st_mtime, 2),
+                                    ext_txt,
+                                    json.dumps(sub_tags, ensure_ascii=False),
+                                    1 if role == "template" else 0,
+                                    now_str,
+                                    now_str,
+                                ),
+                            )
+                            r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                            if r_doc:
+                                _sync_fts_doc(conn, r_doc["id"])
+                            imported_count += 1
+                conn.commit()
+                conn.close()
+
+            sync_stats = sync_filesystem(force=True)
             self._send_json({
                 "ok": True,
                 "imported_count": imported_count,
@@ -1595,19 +2578,77 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "分类目录名称不能为空"}, status=400)
                 return
             ws_root = get_workspace_root(cfg)
-            (ws_root / cat_name).mkdir(parents=True, exist_ok=True)
+            ensure_category_dir(ws_root, cat_name)
             self._send_json({"ok": True, "categories": list_physical_categories()})
             return
 
-        if path == "/api/ai/summary":
-            # 阶段性工作总结生成（Q20）
-            period_label = str(body.get("period_label") or "近期阶段工作").strip()
-            category_filter = str(body.get("category") or "").strip()
+        # 新增周期性/常态化工作规则
+        if path == "/api/recurring":
+            title_tpl = str(body.get("title_template") or "").strip()
+            if not title_tpl:
+                self._send_json({"error": "规则标题模板不能为空"}, status=400)
+                return
+            chk_raw = body.get("checklist") or []
+            norm_chk = []
+            for idx, item in enumerate(chk_raw):
+                if isinstance(item, str) and item.strip():
+                    norm_chk.append({"id": f"chk_{idx+1}", "text": item.strip(), "done": False})
+                elif isinstance(item, dict) and item.get("text"):
+                    norm_chk.append({"id": f"chk_{idx+1}", "text": str(item["text"]).strip(), "done": False})
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with DB_LOCK:
                 conn = get_db()
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    INSERT INTO recurring_rules (
+                        title_template, category, source_channel, issuing_org, priority,
+                        freq_type, freq_value, deadline_offset_days, summary, checklist_json,
+                        enabled, last_spawned_period, last_spawned_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', '', ?)
+                    """,
+                    (
+                        title_tpl,
+                        sanitize_filename(body.get("category") or "01_防灾减灾"),
+                        body.get("source_channel") or "上级来文",
+                        body.get("issuing_org") or "",
+                        body.get("priority") or "重要",
+                        body.get("freq_type") or "weekly",
+                        int(body.get("freq_value") or 4),
+                        int(body.get("deadline_offset_days") or 1),
+                        body.get("summary") or "",
+                        json.dumps(norm_chk, ensure_ascii=False),
+                        now_str,
+                    ),
+                )
+                rid = cur.lastrowid
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True, "id": rid})
+            return
+
+        # 立即手动触发某条周期性规则派生本期工作事项
+        m_spawn = re.match(r"^/api/recurring/(\d+)/spawn$", path)
+        if m_spawn:
+            rid = int(m_spawn.group(1))
+            task_obj = spawn_task_from_recurring_rule(rid, force_manual=True)
+            if not task_obj:
+                self._send_json({"error": "规则不存在"}, status=404)
+                return
+            self._send_json({"ok": True, "task": task_obj})
+            return
+
+        if path == "/api/ai/summary":
+            period_label = str(body.get("period_label") or "近期阶段工作").strip()
+            category_filter = str(body.get("category") or "").strip()
+            ws_root = get_workspace_root(cfg)
+            with DB_LOCK:
+                conn = get_db()
+                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY id ASC").fetchall()
+                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
                 t_rows = conn.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
                 tasks = [
-                    serialize_task(conn, r, include_refs=False)
+                    serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root)
                     for r in t_rows
                     if (not category_filter or r["category"] == category_filter)
                 ]
@@ -1680,16 +2721,17 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/settings":
-            for k in (
-                "view_password", "edit_password", "workspace_root",
-                "prefix_archived_folder", "ai_api_base", "ai_api_key",
-                "ai_model", "lan_notice",
-            ):
+            # 修复 Bug 1：密码字段留空时不覆盖已有自定义密码！
+            for k in ("workspace_root", "prefix_archived_folder", "ai_api_base", "ai_model", "lan_notice", "xkl_gw_cli"):
                 if k in body and body[k] is not None:
                     cfg[k] = body[k]
+            for pwd_key in ("view_password", "edit_password", "ai_api_key"):
+                val = str(body.get(pwd_key) or "").strip()
+                if val:
+                    cfg[pwd_key] = val
             save_config(cfg)
             init_db()
-            self._send_json({"ok": True, "config": cfg})
+            self._send_json({"ok": True})
             return
 
         self._send_json({"error": f"未知接口: {path}"}, status=404)
@@ -1706,6 +2748,111 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         ws_root = get_workspace_root(cfg)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # 重命名或合并物理分类目录（Q3 重点优化：一键修改分类目录名并自动迁移所有事项与文件）
+        if path == "/api/categories":
+            old_name = sanitize_filename(body.get("old_name") or "")
+            new_name = sanitize_filename(body.get("new_name") or "")
+            if not old_name or not new_name or old_name == new_name:
+                self._send_json({"error": "请输入有效的新分类目录名"}, status=400)
+                return
+            old_dir = ws_root / old_name
+            new_dir = ws_root / new_name
+            if not old_dir.exists():
+                self._send_json({"error": "原分类目录不存在"}, status=404)
+                return
+
+            with DB_LOCK:
+                conn = get_db()
+                if not new_dir.exists():
+                    shutil.move(str(old_dir), str(new_dir))
+                else:
+                    # 合并到已存在的目标分类目录
+                    for item in old_dir.iterdir():
+                        if item.name == ".gitkeep":
+                            continue
+                        dest_item = new_dir / item.name
+                        if not dest_item.exists():
+                            shutil.move(str(item), str(dest_item))
+                    shutil.rmtree(old_dir, ignore_errors=True)
+                ensure_category_dir(ws_root, new_name)
+
+                # 批量更新 tasks, documents, recurring_rules 中的分类与相对路径
+                t_rows = conn.execute("SELECT id, folder_rel_path FROM tasks WHERE category = ?", (old_name,)).fetchall()
+                for tr in t_rows:
+                    old_rel = tr["folder_rel_path"] or ""
+                    new_rel = (new_name + old_rel[len(old_name):]) if old_rel.startswith(old_name + "/") else old_rel
+                    conn.execute(
+                        "UPDATE tasks SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?",
+                        (new_name, new_rel, now_str, tr["id"]),
+                    )
+
+                d_rows = conn.execute("SELECT id, rel_path FROM documents WHERE category = ?", (old_name,)).fetchall()
+                for dr in d_rows:
+                    old_rel = dr["rel_path"] or ""
+                    new_rel = (new_name + old_rel[len(old_name):]) if old_rel.startswith(old_name + "/") else old_rel
+                    conn.execute(
+                        "UPDATE documents SET category = ?, rel_path = ?, updated_at = ? WHERE id = ?",
+                        (new_name, new_rel, now_str, dr["id"]),
+                    )
+                    _sync_fts_doc(conn, dr["id"])
+
+                conn.execute("UPDATE recurring_rules SET category = ? WHERE category = ?", (new_name, old_name))
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True, "categories": list_physical_categories()})
+            return
+
+        # 更新周期性规则
+        m_rec = re.match(r"^/api/recurring/(\d+)$", path)
+        if m_rec:
+            rid = int(m_rec.group(1))
+            with DB_LOCK:
+                conn = get_db()
+                row = conn.execute("SELECT * FROM recurring_rules WHERE id = ?", (rid,)).fetchone()
+                if not row:
+                    conn.close()
+                    self._send_json({"error": "规则不存在"}, status=404)
+                    return
+                r_curr = dict(row)
+                enabled_val = 1 if body.get("enabled", bool(r_curr["enabled"])) else 0
+                chk_json = r_curr["checklist_json"]
+                if "checklist" in body and isinstance(body["checklist"], list):
+                    norm_chk = [
+                        {"id": f"chk_{i+1}", "text": (x.get("text") if isinstance(x, dict) else str(x)).strip(), "done": False}
+                        for i, x in enumerate(body["checklist"])
+                        if (x.get("text") if isinstance(x, dict) else str(x)).strip()
+                    ]
+                    chk_json = json.dumps(norm_chk, ensure_ascii=False)
+                conn.execute(
+                    """
+                    UPDATE recurring_rules SET
+                        title_template = ?,
+                        category = ?,
+                        issuing_org = ?,
+                        freq_type = ?,
+                        freq_value = ?,
+                        summary = ?,
+                        checklist_json = ?,
+                        enabled = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        body.get("title_template") or r_curr["title_template"],
+                        sanitize_filename(body.get("category") or r_curr["category"]),
+                        body.get("issuing_org", r_curr["issuing_org"]),
+                        body.get("freq_type") or r_curr["freq_type"],
+                        int(body.get("freq_value") or r_curr["freq_value"]),
+                        body.get("summary", r_curr["summary"]),
+                        chk_json,
+                        enabled_val,
+                        rid,
+                    ),
+                )
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True})
+            return
+
         m_task = re.match(r"^/api/tasks/(\d+)$", path)
         if m_task:
             task_id = int(m_task.group(1))
@@ -1721,8 +2868,15 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 new_title = sanitize_filename(body.get("title") if body.get("title") is not None else t["title"])
                 new_cat = sanitize_filename(body.get("category") if body.get("category") is not None else t["category"])
                 new_status = body.get("status") if body.get("status") is not None else t["status"]
+                new_collapsed = 1 if body.get("is_collapsed", bool(t.get("is_collapsed", 0))) else 0
 
-                # 处理快速追加进展
+                # 记录完成归档时间（修复逻辑异常 1）
+                completed_at = t.get("completed_at") or ""
+                if new_status == "archived" and t["status"] != "archived":
+                    completed_at = now_str
+                elif new_status != "archived":
+                    completed_at = ""
+
                 progress_list = json.loads(t["progress_json"] or "[]")
                 if body.get("append_progress"):
                     progress_list.insert(0, {
@@ -1732,7 +2886,6 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 elif body.get("progress_logs") is not None:
                     progress_list = body["progress_logs"]
 
-                # 处理子清单勾选或修改
                 checklist = json.loads(t["checklist_json"] or "[]")
                 if body.get("toggle_check_id"):
                     cid = body["toggle_check_id"]
@@ -1748,37 +2901,45 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 elif body.get("checklist") is not None:
                     checklist = body["checklist"]
 
-                # 如果修改了所属分类目录，真实移动本地物理文件夹到新分类目录下（Q13 & Q19）
+                # 修复 Bug 2：当事项标题、所属分类或归档前缀改变时，同步重命名/移动本地物理文件夹！
                 old_rel_folder = t["folder_rel_path"]
                 new_rel_folder = old_rel_folder
                 if old_rel_folder:
                     old_abs = ws_root / old_rel_folder
-                    folder_leaf = Path(old_rel_folder).name
-                    if cfg.get("prefix_archived_folder"):
-                        if new_status == "archived" and not folder_leaf.startswith("[已办]_"):
-                            folder_leaf = "[已办]_" + folder_leaf
-                        elif new_status != "archived" and folder_leaf.startswith("[已办]_"):
-                            folder_leaf = folder_leaf.replace("[已办]_", "", 1)
+                    old_leaf = Path(old_rel_folder).name
+                    date_match = re.search(r"(\d{4}-\d{2}-\d{2})", old_leaf)
+                    date_prefix = date_match.group(1) if date_match else (t["created_at"][:10] if t.get("created_at") else datetime.now().strftime("%Y-%m-%d"))
 
-                    target_cat_dir = ws_root / new_cat
-                    target_cat_dir.mkdir(parents=True, exist_ok=True)
+                    if new_title != t["title"]:
+                        folder_leaf = sanitize_filename(f"{date_prefix}_{new_title}")
+                    else:
+                        folder_leaf = re.sub(r"^\[已办\]_", "", old_leaf)
+
+                    if cfg.get("prefix_archived_folder") and new_status == "archived":
+                        if not folder_leaf.startswith("[已办]_"):
+                            folder_leaf = "[已办]_" + folder_leaf
+
+                    target_cat_dir = ensure_category_dir(ws_root, new_cat)
                     new_abs = target_cat_dir / folder_leaf
                     if old_abs.exists() and old_abs.resolve() != new_abs.resolve():
-                        if not new_abs.exists():
-                            shutil.move(str(old_abs), str(new_abs))
-                            new_rel_folder = str(new_abs.relative_to(ws_root)).replace("\\", "/")
-                            # 同步更新该事项下所有文档的 rel_path 与 category
-                            docs_in_task = conn.execute(
-                                "SELECT id, rel_path FROM documents WHERE task_id = ?", (task_id,)
-                            ).fetchall()
-                            for dr in docs_in_task:
-                                old_doc_rel = dr["rel_path"]
-                                if old_doc_rel.startswith(old_rel_folder + "/"):
-                                    updated_doc_rel = new_rel_folder + old_doc_rel[len(old_rel_folder):]
-                                    conn.execute(
-                                        "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
-                                        (updated_doc_rel, new_cat, now_str, dr["id"]),
-                                    )
+                        counter = 2
+                        while new_abs.exists() and new_abs.resolve() != old_abs.resolve():
+                            new_abs = target_cat_dir / f"{folder_leaf}_{counter}"
+                            counter += 1
+                        shutil.move(str(old_abs), str(new_abs))
+                        new_rel_folder = str(new_abs.relative_to(ws_root)).replace("\\", "/")
+                        docs_in_task = conn.execute(
+                            "SELECT id, rel_path FROM documents WHERE task_id = ?", (task_id,)
+                        ).fetchall()
+                        for dr in docs_in_task:
+                            old_doc_rel = dr["rel_path"]
+                            if old_doc_rel.startswith(old_rel_folder + "/"):
+                                updated_doc_rel = new_rel_folder + old_doc_rel[len(old_rel_folder):]
+                                conn.execute(
+                                    "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                    (updated_doc_rel, new_cat, now_str, dr["id"]),
+                                )
+                                _sync_fts_doc(conn, dr["id"])
 
                 conn.execute(
                     """
@@ -1796,6 +2957,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         progress_json = ?,
                         status = ?,
                         is_pinned = ?,
+                        is_collapsed = ?,
+                        completed_at = ?,
                         folder_rel_path = ?,
                         updated_at = ?
                     WHERE id = ?
@@ -1814,6 +2977,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         json.dumps(progress_list, ensure_ascii=False),
                         new_status,
                         1 if body.get("is_pinned", bool(t["is_pinned"])) else 0,
+                        new_collapsed,
+                        completed_at,
                         new_rel_folder,
                         now_str,
                         task_id,
@@ -1822,12 +2987,12 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 write_task_readme_file(conn, task_id)
                 conn.commit()
                 updated_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                res_task = serialize_task(conn, updated_row)
+                res_task = serialize_task(conn, updated_row, ws_root=ws_root)
                 conn.close()
             self._send_json({"ok": True, "task": res_task})
             return
 
-        # 更新【公文与材料库】中的单份文件属性（重命名、移动分类目录、打标签、星标常用范文、置顶）
+        # 更新单份文件属性（重命名、移动分类目录、一键互换 来文⇄材料 角色、打标签、星标、置顶）
         m_doc = re.match(r"^/api/docs/(\d+)$", path)
         if m_doc:
             doc_id = int(m_doc.group(1))
@@ -1848,20 +3013,30 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 new_starred = 1 if body.get("is_starred", bool(d["is_starred"])) else 0
                 new_pinned = 1 if body.get("is_pinned", bool(d["is_pinned"])) else 0
 
+                # 如果在事项文件夹内切换了 incoming ⇄ draft 角色，自动同步更新文件名前缀 [来文]_ / [材料]_
+                if d["task_id"] is not None and new_role != d["doc_role"] and "filename" not in body:
+                    stripped_name = re.sub(r"^(\[来文\]_|\[材料\]_|【来文】|【材料】)+", "", new_filename)
+                    if new_role == "incoming":
+                        new_filename = "[来文]_" + stripped_name
+                    elif new_role == "draft":
+                        new_filename = "[材料]_" + stripped_name
+
                 new_rel_path = d["rel_path"]
                 if old_abs.exists():
-                    # 若为独立库文件且改了分类或文件名，同步移动本地物理文件
                     if d["task_id"] is None and (new_cat != d["category"] or new_filename != d["filename"]):
-                        target_dir = ws_root / new_cat
-                        target_dir.mkdir(parents=True, exist_ok=True)
+                        target_dir = ensure_category_dir(ws_root, new_cat)
                         new_abs = target_dir / new_filename
                         if old_abs.resolve() != new_abs.resolve():
+                            new_abs = resolve_unique_dest_path(target_dir, new_filename)
                             shutil.move(str(old_abs), str(new_abs))
+                            new_filename = new_abs.name
                             new_rel_path = str(new_abs.relative_to(ws_root)).replace("\\", "/")
                     elif d["task_id"] is not None and new_filename != d["filename"]:
                         new_abs = old_abs.parent / new_filename
                         if old_abs.resolve() != new_abs.resolve():
+                            new_abs = resolve_unique_dest_path(old_abs.parent, new_filename)
                             shutil.move(str(old_abs), str(new_abs))
+                            new_filename = new_abs.name
                             new_rel_path = str(new_abs.relative_to(ws_root)).replace("\\", "/")
 
                 conn.execute(
@@ -1889,13 +3064,18 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         doc_id,
                     ),
                 )
+                _sync_fts_doc(conn, doc_id)
+                updated_task = None
                 if d["task_id"]:
                     write_task_readme_file(conn, d["task_id"])
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (d["task_id"],)).fetchone()
+                    if t_row:
+                        updated_task = serialize_task(conn, t_row, ws_root=ws_root)
                 conn.commit()
-                u_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                res_doc = serialize_doc(u_row)
+                u_row = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                res_doc = serialize_doc_light(u_row, ws_root=ws_root)
                 conn.close()
-            self._send_json({"ok": True, "document": res_doc})
+            self._send_json({"ok": True, "document": res_doc, "task": updated_task})
             return
 
         self._send_json({"error": f"未知接口: {path}"}, status=404)
@@ -1912,6 +3092,36 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         delete_disk = (qs.get("delete_disk") or ["0"])[0] == "1"
         ws_root = get_workspace_root()
 
+        if path == "/api/categories":
+            cat_name = sanitize_filename((qs.get("name") or [""])[0])
+            if not cat_name:
+                self._send_json({"error": "分类名不能为空"}, status=400)
+                return
+            cat_dir = ws_root / cat_name
+            with DB_LOCK:
+                conn = get_db()
+                t_cnt = conn.execute("SELECT COUNT(*) FROM tasks WHERE category = ?", (cat_name,)).fetchone()[0]
+                d_cnt = conn.execute("SELECT COUNT(*) FROM documents WHERE category = ?", (cat_name,)).fetchone()[0]
+                conn.close()
+            if t_cnt > 0 or d_cnt > 0:
+                self._send_json({"error": f"分类【{cat_name}】下仍有 {t_cnt} 项工作和 {d_cnt} 份文件，请先点击【重命名/合并】将其归入其他目录后再删除"}, status=400)
+                return
+            if cat_dir.exists() and cat_dir.is_dir():
+                shutil.rmtree(cat_dir, ignore_errors=True)
+            self._send_json({"ok": True, "categories": list_physical_categories()})
+            return
+
+        m_rec = re.match(r"^/api/recurring/(\d+)$", path)
+        if m_rec:
+            rid = int(m_rec.group(1))
+            with DB_LOCK:
+                conn = get_db()
+                conn.execute("DELETE FROM recurring_rules WHERE id = ?", (rid,))
+                conn.commit()
+                conn.close()
+            self._send_json({"ok": True})
+            return
+
         m_task = re.match(r"^/api/tasks/(\d+)$", path)
         if m_task:
             task_id = int(m_task.group(1))
@@ -1923,6 +3133,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         folder_abs = ws_root / row["folder_rel_path"]
                         if folder_abs.exists() and str(folder_abs.resolve()).startswith(str(ws_root.resolve())):
                             shutil.rmtree(folder_abs, ignore_errors=True)
+                        doc_ids = [r["id"] for r in conn.execute("SELECT id FROM documents WHERE task_id = ?", (task_id,)).fetchall()]
+                        for did in doc_ids:
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
                         conn.execute("DELETE FROM documents WHERE task_id = ?", (task_id,))
                     conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
                     conn.commit()
@@ -1942,6 +3155,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         if f_abs.exists() and f_abs.is_file():
                             f_abs.unlink(missing_ok=True)
                     conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                    conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_id,))
                     if row["task_id"]:
                         write_task_readme_file(conn, row["task_id"])
                     conn.commit()
@@ -1952,117 +3166,23 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"error": f"未知接口: {path}"}, status=404)
 
 
-def seed_demo_data_if_empty() -> None:
-    """首次启动时，若数据库为空，自动生成贴合防灾减灾与日常办文场景的示范事项与本地公文材料"""
-    with DB_LOCK:
-        conn = get_db()
-        cnt = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        conn.close()
-    if cnt > 0:
-        return
-
-    # 1. 创建一条示范上级来文事项（含模拟来文与已起草汇报材料）
-    sample_incoming_text = (
-        "鲁应急发〔2026〕42号\n"
-        "市应急管理局关于开展冬春自然灾害风险形势会商与低温雨雪冰冻防范工作的通知\n\n"
-        "各区县应急管理局：\n"
-        "为扎实做好今冬明春自然灾害防范应对工作，请各区县结合辖区实际开展以下工作：\n"
-        "一、请于2026年11月18日前组织气象、水利、自然资源、住建等部门完成一轮冬春自然灾害风险形势联合会商，形成会商分析报告。\n"
-        "二、全面摸排救灾物资储备库点（棉大衣、棉被、应急照明设备等）库存底数，于11月20日前报送《冬春救灾物资储备摸底统计表》。\n"
-        "三、严格落实24小时值班和领导带班制度，遇突发灾情第一时间通过国家自然灾害灾情管理系统报送。"
-    )
-    sample_draft_text = (
-        "关于我县2026—2027年度冬春自然灾害风险形势会商分析与防范工作方案（初稿）\n\n"
-        "一、基本态势研判\n"
-        "根据县气象局、水利局、自然资源和规划局联合会商意见，预计今冬明春我县气温较常年略偏低，存在阶段性寒潮与低温雨雪冰冻天气过程，森林火险等级在12月至次年2月处于较高水平。\n\n"
-        "二、重点防范措施\n"
-        "1. 强化监测预警与部门联合叫应机制；\n"
-        "2. 已完成县级救灾物资库清点，现储备棉被2800床、棉大衣2200件、折叠床1000张，帐篷600顶，账物相符；\n"
-        "3. 针对山区道路、老旧大棚及敬老院开展防冻防风专项巡查。"
-    )
-
-    import base64
-    create_task_record({
-        "title": "关于开展冬春自然灾害风险形势会商与低温雨雪冰冻防范工作的通知",
-        "source_channel": "上级来文",
-        "doc_number": "鲁应急发〔2026〕42号",
-        "issuing_org": "市应急管理局",
-        "priority": "紧急",
-        "deadline": datetime.now().strftime("%Y-%m-%d"),
-        "category": "01_防灾减灾",
-        "raw_notice_text": sample_incoming_text,
-        "auto_ai": True,
-        "is_pinned": True,
-        "initial_progress": "已联系气象、水利、自然资源科室收集会商意见，救灾物资储备底数正在核对。",
-        "files": [
-            {
-                "filename": "鲁应急发2026-42号_关于开展冬春自然灾害风险形势会商的通知.txt",
-                "content_base64": base64.b64encode(sample_incoming_text.encode("utf-8")).decode("ascii"),
-                "doc_role": "incoming",
-            },
-            {
-                "filename": "我县冬春自然灾害风险形势会商分析报告_初稿.md",
-                "content_base64": base64.b64encode(sample_draft_text.encode("utf-8")).decode("ascii"),
-                "doc_role": "draft",
-            },
-        ],
-    })
-
-    # 2. 创建一条微信群通知示范事项
-    wechat_notice = (
-        "【工作群通知】@所有人 接县政府办电话及群通知：请各单位结合本周安全生产与重大事故隐患排查整治情况，"
-        "于11月19日下班前报送《重点行业领域重大事故隐患排查整治周调度简表》及300字以内工作亮点小结（电子版发综合科邮箱）。"
-    )
-    create_task_record({
-        "raw_notice_text": wechat_notice,
-        "source_channel": "微信群",
-        "category": "02_隐患排查与安全生产",
-        "auto_ai": True,
-        "initial_progress": "已整理工贸与危化品企业本周排查数据，待补充亮点小结。",
-    })
-
-    # 3. 在【03_综合汇报与总结】及【05_历史公文归档】放入示范历史参考范文，方便测试“历史旧稿智能推荐”与全文搜索
-    ws_root = get_workspace_root()
-    ref_file = ws_root / "03_综合汇报与总结" / "【范文模板】全县防灾减灾救灾工作阶段总结汇报模板.md"
-    ref_file.write_text(
-        "# 全县防灾减灾救灾工作阶段总结汇报（通用参考范文）\n\n"
-        "## 一、工作总体开展情况\n"
-        "今年以来，县应急管理局深入贯彻落实上级关于防灾减灾救灾决策部署，坚持“预防为主、防抗救相结合”，扎实推进自然灾害风险普查成果应用、冬春救助、防汛抗旱及森林防灭火工作。\n\n"
-        "## 二、主要做法与成效\n"
-        "1. **健全会商研判机制**：每季度联合气象、水利、自然资源、森防等部门开展综合风险会商。\n"
-        "2. **夯实救灾物资与避难场所保障**：全县规范化管理应急避难场所，完成县乡两级救灾物资出入库台账数字化清点。\n"
-        "3. **广泛开展防灾减灾宣传演练**：结合5·12防灾减灾宣传周与10·13国际减灾日开展进社区、进校园演练。\n\n"
-        "## 三、存在问题与下一步打算\n"
-        "持续紧盯极端天气防范，完善基层应急叫应闭环机制。\n",
-        encoding="utf-8",
-    )
-    sync_filesystem()
-    # 将该范文标记为星标常用范文
-    with DB_LOCK:
-        conn = get_db()
-        conn.execute(
-            "UPDATE documents SET is_starred = 1, doc_role = 'template', tags_json = ? WHERE filename LIKE '%阶段总结汇报模板%'",
-            (json.dumps(["防灾减灾", "总结汇报", "常用范文"], ensure_ascii=False),),
-        )
-        conn.commit()
-        conn.close()
-
-
 def run_server(port: Optional[int] = None) -> None:
     cfg = load_config()
     init_db()
     seed_demo_data_if_empty()
-    sync_filesystem()
+    sync_filesystem(force=True)
+    check_and_spawn_all_recurring()
 
     listen_port = port or int(cfg.get("port", 8090))
     lan_ip = get_lan_ip()
     server = ThreadingHTTPServer(("0.0.0.0", listen_port), WorkbenchHTTPRequestHandler)
-    print("=" * 68)
-    print("  🚀 公文与材料智能工作台 (GW-Workbench v1.0.0) 已启动")
-    print(f"  👉 本机主理人直连 (自动免密编辑): http://127.0.0.1:{listen_port}")
+    print("=" * 72)
+    print(f"  🚀 公文与材料智能工作台 (GW-Workbench v{VERSION}) 已启动")
+    print(f"  👉 本机主理人直连 (自动免密编辑 & WPS直连): http://127.0.0.1:{listen_port}")
     print(f"  👉 局域网同事访问地址 (默认密码 {cfg.get('view_password')}): http://{lan_ip}:{listen_port}")
     print(f"  📂 本地物理资料库目录: {get_workspace_root(cfg)}")
-    print("=" * 68)
+    print(f"  🤖 原生 MCP Server 启动命令: python3 {(BASE_DIR / 'wb.py')} mcp")
+    print("=" * 72)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

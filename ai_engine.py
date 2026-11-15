@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与通知 AI 解析、两段式智能检索与阶段总结引擎
-支持：
-1. 任意兼容 OpenAI 接口的在线大模型 API (DeepSeek / 通义千问 / Moonshot / 智谱) 或局域网本地模型 (Ollama / vLLM)
-2. 内置高精度“政务公文规则拆解引擎”（未配置 API Key 或内网离线环境下同样秒级提取文号、截止时间、待办清单与分类）
-3. 完整支持外部本地 Agent 直接通过 REST API / CLI 接管所有 AI 解析与检索环节
+公文与通知 AI 解析、两段式智能检索、文件角色智能判别与阶段总结引擎 (v1.2.0)
 """
 
 import json
@@ -13,7 +9,7 @@ import re
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 
 def call_openai_compatible_api(
@@ -34,9 +30,7 @@ def call_openai_compatible_api(
         return None
 
     url = api_base if api_base.endswith("/chat/completions") else f"{api_base}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
@@ -80,6 +74,82 @@ def _extract_json_from_llm(raw_text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool = False, cat_name: str = "") -> str:
+    """
+    智能判别本地新增或扫描文件的性质角色 ('incoming' | 'draft' | 'template' | 'historical')
+    修复 v1.0 中“凡是不带[来文]前缀一律当成我写的材料”的死板逻辑
+    """
+    fn = (filename or "").strip()
+    combined = f"{fn} {(text_preview or '')[:300]}"
+
+    if fn.startswith(("[来文]", "【来文】", "来文_")):
+        return "incoming"
+    if fn.startswith(("[材料]", "【材料】", "材料_")):
+        return "draft"
+    if any(k in fn for k in ("范文", "模板", "参考样例", "通用格式", "[模板]", "【范文")):
+        return "template"
+    if "历史" in cat_name and not in_task_folder:
+        return "historical"
+
+    # 自撰材料强特征词
+    draft_Feature = (
+        "我县", "我局", "我科", "我办", "本单位", "初稿", "定稿", "修改稿",
+        "汇报", "总结", "小结", "自查报告", "整改报告", "落实情况", "发言", "讲话稿", "心得",
+    )
+    # 上级来文强特征词
+    incoming_feature = (
+        "关于开展", "关于做好", "关于印发", "关于报送", "关于转发", "的通知", "的方案",
+        "的函", "的通报", "上级", "来文", "明电",
+    )
+    if any(k in fn for k in draft_Feature):
+        return "draft"
+    if fn.lower().endswith(".ofd") or re.search(r"[〔\[\(（]20\d{2}[〕\]\)）]\s*\d+\s*号", combined):
+        if not any(k in fn for k in ("初稿", "定稿", "我县", "我局", "汇报", "总结")):
+            return "incoming"
+    if any(k in fn for k in incoming_feature):
+        return "incoming"
+
+    return "draft" if in_task_folder else ("historical" if "历史" in cat_name else "draft")
+
+
+def match_best_category(text_and_title: str, categories: Optional[List[str]] = None) -> str:
+    """根据主题词智能推荐物理分类目录"""
+    avail_cats = categories or [
+        "01_防灾减灾",
+        "02_隐患排查与安全生产",
+        "03_综合汇报与总结",
+        "04_上级日常通知",
+        "05_历史公文归档",
+    ]
+    if not avail_cats:
+        return "01_防灾减灾"
+
+    # 1. 先检查分类目录名自身的核心词是否直接出现在文本中
+    for c in avail_cats:
+        clean_c = re.sub(r"^\d+[_\-\s]*", "", c)
+        for seg in re.split(r"[与和及_\-\s/]+", clean_c):
+            if len(seg) >= 2 and seg in text_and_title:
+                return c
+
+    # 2. 行业领域关键词库匹配
+    if any(k in text_and_title for k in ("防灾", "减灾", "救灾", "防汛", "抗旱", "森林防火", "森林防灭火", "森防", "地震", "地质灾害", "低温雨雪", "冰冻", "台风", "自然灾害", "冬春")):
+        for c in avail_cats:
+            if "防灾" in c or "减灾" in c:
+                return c
+    if any(k in text_and_title for k in ("隐患", "安全生产", "重大事故", "危化", "工贸", "非煤矿山", "消防", "火灾", "排查", "整治", "督导", "执法", "安委")):
+        for c in avail_cats:
+            if "隐患" in c or "安全" in c:
+                return c
+    if any(k in text_and_title for k in ("总结", "汇报", "述职", "讲话", "工作要点", "计划", "季报", "月报", "年终", "范文", "模板")):
+        for c in avail_cats:
+            if "汇报" in c or "总结" in c:
+                return c
+    for c in avail_cats:
+        if "日常" in c or "通知" in c:
+            return c
+    return avail_cats[0]
+
+
 def _rule_based_parse_document(
     text: str,
     filename: str = "",
@@ -87,7 +157,8 @@ def _rule_based_parse_document(
     categories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    内置政务公文与碎片通知高精度规则解析引擎（零 Token 消耗、毫秒级响应）
+    内置政务公文与碎片通知高精度规则解析引擎（v1.2.0 增强版）
+    针对微信群/电话碎片通知自动提炼干净的核心动作标题，杜绝把“【工作群通知】@所有人...”整段截断当标题
     """
     now = datetime.now()
     clean_text = (text or "").strip()
@@ -105,16 +176,16 @@ def _rule_based_parse_document(
     # 2. 判断来源渠道
     source_channel = source_hint
     if not source_channel:
-        if doc_number or filename.lower().endswith((".ofd", ".docx", ".pdf", ".doc", ".wps")):
-            source_channel = "上级来文"
-        elif any(k in clean_text[:120] for k in ("微信", "@所有人", "群通知", "接群通知", "工作群")):
+        if any(k in clean_text[:120] for k in ("微信", "@所有人", "群通知", "接群通知", "工作群")):
             source_channel = "微信群"
         elif any(k in clean_text[:120] for k in ("来电", "电话通知", "口头通知", "电话要求")):
             source_channel = "电话通知"
+        elif doc_number or filename.lower().endswith((".ofd", ".docx", ".pdf", ".doc", ".wps")):
+            source_channel = "上级来文"
         else:
             source_channel = "上级来文" if len(clean_text) > 180 else "微信群"
 
-    # 3. 提取事项标题
+    # 3. 提取事项标题（大幅优化微信群/电话通知标题提炼）
     title = ""
     if filename:
         stem = re.sub(r"\.[a-zA-Z0-9]+$", "", filename)
@@ -123,14 +194,41 @@ def _rule_based_parse_document(
             title = stem
 
     if not title:
-        about_match = re.search(r"(关于[\u4e00-\u9fa50-9A-Za-z《》“”‘’、，—\-]{4,45}?(?:的通知|的方案|的函|的请示|的报告|的工作要求|的提示|的通报))", clean_text)
+        # 优先匹配正式公文标题“关于……的通知/方案/函/请示/报告”
+        about_match = re.search(
+            r"(关于[\u4e00-\u9fa50-9A-Za-z《》“”‘’、，—\-]{4,42}?(?:的通知|的方案|的函|的请示|的报告|的工作要求|的提示|的通报))",
+            clean_text,
+        )
         if about_match:
             title = about_match.group(1)
+
+    if not title:
+        # 针对微信群/电话通知：匹配“报送/提交/填报/开展《……》……”或书名号核心材料
+        action_book_match = re.search(
+            r"((?:报送|提交|填报|上报|开展|组织|起草|汇总)[\u4e00-\u9fa50-9A-Za-z]*?《[^》]{3,30}》[\u4e00-\u9fa50-9A-Za-z及与和]{0,12})",
+            clean_text,
+        )
+        if action_book_match:
+            title = action_book_match.group(1).strip("，。；： ")
         else:
-            for ln in lines[:6]:
-                if ln != doc_number and len(ln) >= 5 and not re.match(r"^(各镇街|各科室|各有关单位|同志们|@所有人)", ln):
-                    title = ln[:45]
-                    break
+            book_only = re.search(r"《([^》]{4,32})》", clean_text)
+            if book_only:
+                title = f"办理《{book_only.group(1)}》相关工作"
+
+    if not title:
+        for ln in lines[:6]:
+            if ln == doc_number:
+                continue
+            # 剥离微信群前缀噪音
+            stripped = re.sub(
+                r"^(\[[^\]]+\]|【[^】]+】|@所有人|@全体成员|同志们|各镇街|各科室|各有关单位|接[^：:]{2,15}[：:]|请各单位|请各科室|[\s，。：:])+",
+                "",
+                ln,
+            ).strip()
+            if len(stripped) >= 5:
+                title = stripped[:38]
+                break
+
     if not title:
         title = "未命名工作事项_" + now.strftime("%m%d")
 
@@ -138,6 +236,7 @@ def _rule_based_parse_document(
     issuing_org = ""
     org_patterns = [
         r"(?:来文单位|发文机关|发文单位|签发单位)[：:]\s*([\u4e00-\u9fa5]{3,20})",
+        r"接([\u4e00-\u9fa5]{2,14}(?:政府办|安委办|应急局|应急管理局|森防办|防指|减灾委|市委办|县委办|办公室|局|委))(?:电话|通知|群通知|要求)",
         r"([\u4e00-\u9fa5]{2,14}(?:应急管理局|委员会办公室|人民政府办公室|安委会办公室|减灾委员会|森防指办公室|防汛抗旱指挥部|办公室|厅|局|委|部))(?=\s*关于|\n)",
     ]
     for pat in org_patterns:
@@ -193,14 +292,18 @@ def _rule_based_parse_document(
     checklist_items: List[str] = []
     action_keywords = (
         "报送", "上报", "提交", "汇总", "填写", "填报", "起草", "撰写", "拟定", "制定",
-        "排查", "自查", "整改", "摸底", "统计", "台账", "名单", "方案", "总结", "报告", "材料",
+        "排查", "自查", "整改", "摸底", "统计", "台账", "名单", "方案", "总结", "报告", "材料", "小结",
     )
     raw_sentences = re.split(r"[\n；;。！!]+", clean_text)
     for sent in raw_sentences:
         s = sent.strip()
-        if len(s) < 6 or len(s) > 120:
+        if len(s) < 6 or len(s) > 130:
             continue
-        s_clean = re.sub(r"^([一二三四五六七八九十]+[、\.]|\([一二三四五六七八九十0-9]+\)|（[一二三四五六七八九十0-9]+）|\d+[、\.\)]|[①②③④⑤⑥⑦⑧])\s*", "", s)
+        s_clean = re.sub(
+            r"^([一二三四五六七八九十]+[、\.]|\([一二三四五六七八九十0-9]+\)|（[一二三四五六七八九十0-9]+）|\d+[、\.\)]|[①②③④⑤⑥⑦⑧]|【[^】]+】|@所有人\s*)\s*",
+            "",
+            s,
+        ).strip()
         if any(kw in s_clean for kw in action_keywords):
             if not any(fluff in s_clean for fluff in ("重要意义", "指导思想", "以习近平", "深刻汲取")):
                 if s_clean not in checklist_items:
@@ -224,34 +327,7 @@ def _rule_based_parse_document(
     summary = " | ".join(summary_parts)
 
     # 9. 智能匹配推荐业务分类目录
-    avail_cats = categories or [
-        "01_防灾减灾",
-        "02_隐患排查与安全生产",
-        "03_综合汇报与总结",
-        "04_上级日常通知",
-        "05_历史公文归档",
-    ]
-    selected_cat = avail_cats[0] if avail_cats else "01_防灾减灾"
-    if any(k in clean_text + title for k in ("防灾", "减灾", "救灾", "防汛", "抗旱", "森林防火", "森林防灭火", "森防", "地震", "地质灾害", "低温雨雪", "台风", "自然灾害", "冬春")):
-        for c in avail_cats:
-            if "防灾" in c or "减灾" in c:
-                selected_cat = c
-                break
-    elif any(k in clean_text + title for k in ("隐患", "安全生产", "重大事故", "危化", "工贸", "非煤矿山", "消防", "火灾", "排查", "整治", "督导", "执法")):
-        for c in avail_cats:
-            if "隐患" in c or "安全" in c:
-                selected_cat = c
-                break
-    elif any(k in clean_text + title for k in ("总结", "汇报", "述职", "讲话", "工作要点", "计划", "季报", "月报", "年终")):
-        for c in avail_cats:
-            if "汇报" in c or "总结" in c:
-                selected_cat = c
-                break
-    else:
-        for c in avail_cats:
-            if "日常" in c or "通知" in c:
-                selected_cat = c
-                break
+    selected_cat = match_best_category(clean_text + " " + title, categories)
 
     return {
         "title": title,
@@ -294,7 +370,7 @@ def parse_incoming_content(
     sys_prompt = (
         "你是一个专业的政务公文与工作通知分析助手。请从用户提供的公文或微信/电话通知中提取工作台字段，"
         f"当前参考日期为 {today_str}。必须严格输出 JSON 对象，包含以下字段：\n"
-        "- title: 简明事项名称（不超过35字）\n"
+        "- title: 简明事项名称（不超过35字，去掉@所有人等前缀）\n"
         "- source_channel: '上级来文' | '微信群' | '电话通知' | '自建'\n"
         "- doc_number: 发文字号（如无则为空字符串）\n"
         "- issuing_org: 来文或通知单位（如无则为空字符串）\n"
@@ -346,9 +422,11 @@ def extract_search_keywords(natural_query: str) -> List[str]:
     for p in parts:
         if len(p) >= 2 and p not in generic_tail and p not in tokens:
             tokens.append(p)
-        # 对较长复合词补充拆分常用业务词根，提高召回率
         if len(p) >= 4:
-            for sub_kw in ("防灾减灾", "森林防灭火", "森林防火", "冬春", "自然灾害", "隐患排查", "安全生产", "救灾物资", "总结", "汇报", "方案", "台账"):
+            for sub_kw in (
+                "防灾减灾", "森林防灭火", "森林防火", "冬春", "自然灾害",
+                "隐患排查", "安全生产", "救灾物资", "总结", "汇报", "方案", "台账", "调度",
+            ):
                 if sub_kw in p and sub_kw not in tokens:
                     tokens.append(sub_kw)
     if not tokens and natural_query.strip():
@@ -363,17 +441,15 @@ def synthesize_ai_search_answer(
     matched_docs: List[Dict[str, Any]],
     config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    两段式 AI 搜索的第二阶段：根据初筛召回的工作事项与公文/材料片段，生成结构化解答与推荐引用
-    """
+    """两段式 AI 搜索的第二阶段：根据初筛召回的工作事项与公文/材料片段，生成结构化解答与推荐引用"""
     cfg = config or {}
     context_blocks = []
-    for idx, t in enumerate(matched_tasks[:10]):
+    for t in matched_tasks[:10]:
         context_blocks.append(
             f"[事项 #{t['id']}] 标题：{t['title']} | 文号：{t.get('doc_number') or '无'} | 状态：{t['status']} | "
             f"截止：{t.get('deadline') or '无'} | 要求摘要：{t.get('summary') or ''} | 分类：{t.get('category') or ''}"
         )
-    for idx, d in enumerate(matched_docs[:15]):
+    for d in matched_docs[:15]:
         snippet = (d.get("snippet") or d.get("content_preview") or "")[:300].replace("\n", " ")
         context_blocks.append(
             f"[文件 #{d['id']}] 名称：{d['filename']} | 类型：{d['doc_role']} | 分类目录：{d['category']} | "

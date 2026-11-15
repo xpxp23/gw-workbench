@@ -49,3 +49,7 @@ venv.bak/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# GW-Workbench runtime
+data/server.pid
+data/server.log
