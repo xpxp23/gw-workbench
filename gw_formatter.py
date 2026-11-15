@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GB/T 9704—2012 党政机关公文标准排版与 xkl-gw 联动引擎 (gw_formatter.py v1.2.0 二次精修版)
+GB/T 9704—2012 党政机关公文标准排版与 xkl-gw 联动引擎 (gw_formatter.py v2.0.0)
 专为银河麒麟 Kylin V10 (海光 3350) + WPS Office Linux 打造：
 1. 支持直接调用本机已安装的 `xkl-gw` 公文排版助手 CLI 脚本（若配置了路径或环境变量）
 2. 内置零依赖纯 Python OpenXML (.docx) 国标公文生成器：
@@ -9,9 +9,9 @@ GB/T 9704—2012 党政机关公文标准排版与 xkl-gw 联动引擎 (gw_forma
    - 支持【正式红头公文模式 (redhead)】与【综合汇报/方案材料模式 (report)】
    - 自动识别 Markdown / 纯文本中的公文标题（二号方正小标宋简体）、主送机关、
      一级标题（一、-> 三号黑体）、二级标题（（一）-> 三号楷体_GB2312）、
-     三级标题（1. -> 三号仿宋_GB2312加粗）、Markdown 表格（自动转为标准公文三线/网格表格 <w:tbl>）
+     三级标题（1. -> 三号仿宋_GB2312加粗）、Markdown 表格（自动转为标准公文内嵌表格 <w:tbl>）
      及正文段落（三号仿宋_GB2312，首行缩进2字符，固定行距28磅）
-   - 自动排版落款署名与成文日期
+   - 内置国标页脚 `word/footer1.xml`（四号宋体“— 1 —”自动页码域）与 `word/settings.xml` 版心网格对齐
 """
 
 import html
@@ -20,7 +20,7 @@ import subprocess
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Union
+from typing import Dict, Any, List, Tuple
 
 
 def _clean_md_inline(text: str) -> str:
@@ -64,13 +64,11 @@ def parse_draft_structure(
             idx += 1
             continue
 
-        # 识别 Markdown 表格块 (| col1 | col2 |)
         if ln.startswith("|") and ln.endswith("|") and ln.count("|") >= 2:
             table_rows: List[List[str]] = []
             while idx < len(non_empty) and non_empty[idx].startswith("|") and non_empty[idx].endswith("|"):
                 row_str = non_empty[idx].strip("|")
                 cells = [_clean_md_inline(c) for c in row_str.split("|")]
-                # 跳过 | :--- | :--- | 分隔行
                 if not all(re.match(r"^[:\-\s]+$", c) for c in cells if c):
                     table_rows.append(cells)
                 idx += 1
@@ -182,7 +180,6 @@ def _make_w_p(
 
 
 def _make_w_tbl(rows: List[List[str]]) -> str:
-    """构造标准公文内嵌表格 <w:tbl>（小四号仿宋_GB2312，首行加粗居中）"""
     if not rows:
         return ""
     col_count = max(len(r) for r in rows)
@@ -211,7 +208,7 @@ def _make_w_tbl(rows: List[List[str]]) -> str:
             p_cell = _make_w_p(
                 cell_txt,
                 font_east_asia="黑体" if is_header else "仿宋_GB2312",
-                size_half_pt=24,  # 小四号 12pt
+                size_half_pt=24,
                 bold=is_header,
                 align="center" if is_header else "left",
                 first_line_indent_twips=0,
@@ -326,11 +323,13 @@ def build_gb9704_docx(
         else:
             p_nodes.append(_make_w_p(b_val, font_east_asia="仿宋_GB2312", size_half_pt=32, first_line_indent_twips=640, line_twips=560))
 
+    # 关联国标页码页脚 rId2 (footer1.xml) 与版心网格 (每页22行，每行28字)
     sect_pr = (
         '<w:sectPr>'
+        '<w:footerReference w:type="default" r:id="rId2"/>'
         '<w:pgSz w:w="11906" w:h="16838"/>'
-        '<w:pgMar w:top="2098" w:right="1474" w:bottom="1984" w:left="1587" w:header="851" w:footer="992" w:gutter="0"/>'
-        '<w:docGrid w:type="lines" w:linePitch="560"/>'
+        '<w:pgMar w:top="2098" w:right="1474" w:bottom="1984" w:left="1587" w:header="851" w:footer="1417" w:gutter="0"/>'
+        '<w:docGrid w:type="linesAndChars" w:linePitch="560" w:charSpace="0"/>'
         '</w:sectPr>'
     )
 
@@ -344,6 +343,39 @@ def build_gb9704_docx(
         + "</w:body></w:document>"
     )
 
+    # GB/T 9704—2012 四号宋体 (14pt = 28 half-points) “— 1 —” 页码页脚
+    footer1_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:p>'
+        '<w:pPr><w:jc w:val="center"/></w:pPr>'
+        '<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+        '<w:t xml:space="preserve">— </w:t></w:r>'
+        '<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+        '<w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+        '<w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+        '<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+        '<w:fldChar w:fldCharType="separate"/></w:r>'
+        '<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+        '<w:t>1</w:t></w:r>'
+        '<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+        '<w:fldChar w:fldCharType="end"/></w:r>'
+        '<w:r><w:rPr><w:rFonts w:ascii="宋体" w:hAnsi="宋体" w:eastAsia="宋体"/><w:sz w:val="28"/><w:szCs w:val="28"/></w:rPr>'
+        '<w:t xml:space="preserve"> —</w:t></w:r>'
+        '</w:p>'
+        '</w:ftr>'
+    )
+
+    settings_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:displayHorizontalDrawingGridEvery w:val="0"/>'
+        '<w:displayVerticalDrawingGridEvery w:val="2"/>'
+        '<w:characterSpacingControl w:val="compressPunctuation"/>'
+        '</w:settings>'
+    )
+
     content_types_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -351,6 +383,8 @@ def build_gb9704_docx(
         '<Default Extension="xml" ContentType="application/xml"/>'
         '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
         '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        '<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>'
+        '<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>'
         '</Types>'
     )
 
@@ -365,6 +399,8 @@ def build_gb9704_docx(
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
         '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>'
         '</Relationships>'
     )
 
@@ -385,6 +421,8 @@ def build_gb9704_docx(
         zf.writestr("_rels/.rels", rels_xml.encode("utf-8"))
         zf.writestr("word/_rels/document.xml.rels", word_rels_xml.encode("utf-8"))
         zf.writestr("word/styles.xml", styles_xml.encode("utf-8"))
+        zf.writestr("word/settings.xml", settings_xml.encode("utf-8"))
+        zf.writestr("word/footer1.xml", footer1_xml.encode("utf-8"))
         zf.writestr("word/document.xml", document_xml.encode("utf-8"))
 
     return output_path

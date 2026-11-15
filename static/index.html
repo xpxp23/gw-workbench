@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>公文与材料智能工作台 (GW-Workbench v1.2.0)</title>
+  <title>公文与材料智能工作台 (GW-Workbench v2.0.0)</title>
   <style>
     :root {
       --bg: #f1f5f9;
@@ -75,6 +75,15 @@
       padding: 0 3px;
       border-radius: 3px;
       font-weight: 700;
+    }
+
+    @keyframes pulseLocate {
+      0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.7); border-color: var(--primary); }
+      50% { box-shadow: 0 0 0 10px rgba(37, 99, 235, 0); border-color: #f59e0b; }
+      100% { box-shadow: var(--shadow); }
+    }
+    .pulse-locate {
+      animation: pulseLocate 1.8s ease-out 2;
     }
 
     /* 顶部导航栏 */
@@ -509,6 +518,23 @@
       gap: 8px;
     }
 
+    /* 视觉完成度进度条 */
+    .chk-progress-track {
+      height: 4px;
+      background: var(--border);
+      border-radius: 99px;
+      overflow: hidden;
+      margin: 7px 0 4px;
+    }
+    .chk-progress-fill {
+      height: 100%;
+      background: var(--primary);
+      transition: width 0.25s ease, background 0.25s ease;
+    }
+    .chk-progress-fill.complete {
+      background: var(--success);
+    }
+
     .badge {
       padding: 2px 8px;
       border-radius: 5px;
@@ -530,13 +556,13 @@
       background: var(--surface-alt);
       padding: 7px 11px;
       border-radius: 7px;
-      margin: 9px 0;
+      margin: 6px 0 9px;
       border: 1px solid var(--border);
     }
 
     .task-body-grid {
       display: grid;
-      grid-template-columns: 1.1fr 0.95fr 1.45fr;
+      grid-template-columns: 1.12fr 0.93fr 1.45fr;
       gap: 11px;
       align-items: stretch;
     }
@@ -572,20 +598,37 @@
     .chk-item {
       display: flex;
       align-items: flex-start;
+      justify-content: space-between;
       gap: 6px;
       font-size: 12.5px;
+      padding: 2px 4px;
+      border-radius: 5px;
+    }
+    .chk-item:hover { background: var(--surface-hover); }
+    .chk-item-left {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
       cursor: pointer;
+      flex: 1;
     }
     .chk-item input[type="checkbox"] {
       margin-top: 3px;
       cursor: pointer;
       width: 14px;
       height: 14px;
+      flex-shrink: 0;
     }
-    .chk-item.done span {
+    .chk-item.done .chk-text {
       text-decoration: line-through;
       color: var(--text-muted);
     }
+    .chk-ops {
+      display: none;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .chk-item:hover .chk-ops { display: inline-flex; }
 
     .inline-input-row {
       display: flex;
@@ -767,7 +810,6 @@
     }
     .cat-item:hover .cat-ops { display: inline-flex; }
 
-    /* 批量操作浮动条 */
     .batch-bar {
       background: #1e293b;
       color: #fff;
@@ -781,7 +823,6 @@
       gap: 10px;
     }
 
-    /* 分页栏 */
     .pagination-bar {
       display: flex;
       align-items: center;
@@ -795,11 +836,11 @@
       color: var(--text-muted);
     }
 
-    /* 右侧滑出正文预览与在线写稿抽屉 */
+    /* 右侧滑出抽屉 & 双栏对照撰稿工作台 */
     .drawer-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.4);
+      background: rgba(15, 23, 42, 0.42);
       z-index: 200;
       display: none;
     }
@@ -808,12 +849,16 @@
       top: 0;
       right: 0;
       bottom: 0;
-      width: min(740px, 94vw);
+      width: min(760px, 95vw);
       background: var(--surface);
       z-index: 201;
       box-shadow: -4px 0 24px rgba(0,0,0,0.22);
       display: none;
       flex-direction: column;
+      transition: width 0.22s ease;
+    }
+    .drawer.split-mode {
+      width: min(1260px, 97vw);
     }
     .drawer-header {
       padding: 12px 18px;
@@ -835,41 +880,75 @@
       background: var(--surface);
     }
     .drawer-body {
-      padding: 16px 18px;
+      padding: 14px 18px;
       overflow-y: auto;
       flex: 1;
       display: flex;
       flex-direction: column;
     }
+    .drawer-split-container {
+      display: flex;
+      gap: 14px;
+      flex: 1;
+      min-height: 0;
+    }
+    .split-left-pane {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      background: var(--surface-alt);
+      overflow: hidden;
+    }
+    .drawer.split-mode .split-left-pane {
+      display: flex;
+    }
+    .split-right-pane {
+      flex: 1.15;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
     .preview-rendered-box {
       background: var(--surface-alt);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 18px 22px;
+      padding: 16px 20px;
       font-size: 15px;
       line-height: 1.8;
       color: var(--text);
       flex: 1;
       overflow-y: auto;
     }
-    .preview-rendered-box h1 { font-size: 20px; text-align: center; margin-bottom: 14px; }
-    .preview-rendered-box h2 { font-size: 16.5px; margin: 14px 0 6px; color: var(--primary); }
-    .preview-rendered-box h3 { font-size: 15px; margin: 10px 0 4px; }
+    .preview-rendered-box h1 { font-size: 19px; text-align: center; margin-bottom: 12px; }
+    .preview-rendered-box h2 { font-size: 16px; margin: 12px 0 6px; color: var(--primary); }
+    .preview-rendered-box h3 { font-size: 14.5px; margin: 9px 0 4px; }
     .preview-rendered-box p { margin-bottom: 8px; text-indent: 2em; }
     .preview-rendered-box ul { padding-left: 22px; margin-bottom: 8px; }
     .editor-textarea {
       width: 100%;
       flex: 1;
-      min-height: 420px;
+      min-height: 380px;
       padding: 14px;
       font-size: 14.5px;
-      line-height: 1.7;
+      line-height: 1.72;
       border: 1.5px solid var(--primary);
       border-radius: 8px;
       background: var(--surface);
       color: var(--text);
       font-family: inherit;
       resize: none;
+    }
+    .snippet-toolbar {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 5px 8px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
     }
 
     /* 弹窗 Modal */
@@ -954,7 +1033,7 @@
     <div class="brand">
       <div class="brand-title">
         🏛️ 公文与材料智能工作台
-        <span class="ver-tag" id="verBadge">v1.2.0</span>
+        <span class="ver-tag" id="verBadge">v2.0.0</span>
       </div>
       <span class="lan-badge" id="lanUrlBadge" onclick="copyLanUrl()" title="点击复制局域网访问链接发给同事">
         🌐 局域网共享加载中...
@@ -972,8 +1051,8 @@
     </div>
 
     <div class="top-actions">
-      <button class="btn btn-sm" onclick="triggerDiskSync()" title="扫描本地文件夹中直接用 WPS 新建或修改的公文与材料">
-        🔄 同步目录
+      <button class="btn btn-sm" onclick="triggerDiskSync()" title="双向同步本地文件夹（含本地对 00_事项要求与进展.md 的修改与新增 WPS 材料）">
+        🔄 双向同步目录
       </button>
       <button class="btn btn-sm" onclick="toggleTheme()" id="themeBtn" title="切换政务蓝白 / 护眼深色模式">🌙</button>
       <span class="mode-pill mode-view" id="modeBadge" onclick="toggleEditMode()">
@@ -1042,7 +1121,7 @@
         </div>
         <div class="scope-group">
           <button class="scope-btn" id="scopeTitleBtn" onclick="setSearchScope('title')">仅搜标题/文号</button>
-          <button class="scope-btn active" id="scopeFullBtn" onclick="setSearchScope('full')">标题 + 正文内容</button>
+          <button class="scope-btn active" id="scopeFullBtn" onclick="setSearchScope('full')">标题 + 正文内容(FTS5)</button>
         </div>
         <button class="btn btn-primary" onclick="runUserSearch()">🔍 检索</button>
         <button class="btn btn-purple" onclick="runAiSemanticSearch()">🤖 AI 智能搜索与问答</button>
@@ -1057,14 +1136,15 @@
 
     <!-- ==================== TAB 1: 工作台待办与台账 ==================== -->
     <section id="tabWorkbench">
-      <!-- 全能极速投喂框 -->
+      <!-- 全能极速投喂框（支持粘贴文字、Ctrl+V 直接粘贴微信截图或拖拽文件） -->
       <div class="omnibox" id="omniboxPanel"
            ondragover="event.preventDefault(); this.classList.add('dragover');"
            ondragleave="this.classList.remove('dragover');"
            ondrop="handleOmniboxDrop(event)">
         <div class="omnibox-top">
           <textarea id="omniText" class="omnibox-textarea"
-            placeholder="⚡ 全能投喂台：直接在此粘贴【微信群通知 / 电话记录 / 公文正文】，或直接把上级来文 (.ofd / .docx / .pdf / .wps / .txt) 拖入此区域，AI 一键拆解文号、截止期与待办清单并自动创建本地专属文件夹！"></textarea>
+            onpaste="handleOmniboxPaste(event)"
+            placeholder="⚡ 全能投喂台：直接在此粘贴【微信群通知文字 / 电话记录 / Ctrl+V 粘贴微信通知截图】，或把上级来文 (.ofd / .docx / .pdf / .wps / .txt) 拖入此区域，AI 一键拆解文号、截止期与待办清单并自动创建本地专属文件夹！"></textarea>
           <div class="omnibox-controls">
             <button class="btn btn-primary" onclick="quickCreateFromOmnibox(false)">🤖 AI 一键解析入库</button>
             <button class="btn btn-sm" onclick="quickCreateFromOmnibox(true)">📝 预览/微调后入库</button>
@@ -1074,7 +1154,7 @@
         <div class="omnibox-meta">
           <div>
             <label class="btn btn-sm" style="cursor:pointer;">
-              📎 挂载来文或附件 (.ofd/.docx/.pdf/.wps)
+              📎 挂载来文或附件 (.ofd/.docx/.pdf/.wps/截图)
               <input type="file" id="omniFileInput" multiple style="display:none;" onchange="handleOmniFileSelect(this.files)" />
             </label>
             <span style="margin-left:8px;">来源预设：</span>
@@ -1086,7 +1166,7 @@
               <option value="自建">日常自建</option>
             </select>
           </div>
-          <span>💡 支持直接点击卡片上的【✍️ 在线写材料】免 WPS 撰稿并一键排版为符合 GB/T 9704 国标的 .docx 公文！</span>
+          <span>💡 支持【✍️ 双栏对照在线写材料】+ 一键排版为带 `— 1 —` 页码的 GB/T 9704 国标 .docx 公文！</span>
         </div>
       </div>
 
@@ -1111,14 +1191,12 @@
         </div>
       </div>
 
-      <!-- 工作事项列表容器 -->
       <div id="tasksContainer"></div>
     </section>
 
     <!-- ==================== TAB 2: 独立【公文与材料库（分类归纳中心）】 ==================== -->
     <section id="tabLibrary" style="display:none;">
       <div class="library-layout">
-        <!-- 左侧物理分类目录树（支持拖拽文件直接归入分类、支持重命名与合并） -->
         <aside class="cat-sidebar">
           <div style="display:flex;align-items:center;justify-content:space-between;">
             <strong style="font-size:13.5px;">📁 本地物理分类目录</strong>
@@ -1130,7 +1208,6 @@
           <ul class="cat-list" id="libCategoryList"></ul>
         </aside>
 
-        <!-- 右侧材料库主面板 -->
         <div>
           <div class="filter-bar" style="background:var(--surface);padding:10px 14px;border-radius:var(--radius);border:1px solid var(--border);">
             <div class="pill-group" id="libRolePills">
@@ -1142,7 +1219,7 @@
             </div>
             <div class="pill-group">
               <input type="text" id="libQuickFilterInput" class="form-control" style="padding:4px 10px;width:170px;font-size:12.5px;"
-                     placeholder="🔍 过滤当前库文件名/标签..." oninput=" STATE.libPage=1; renderLibrary();" />
+                     placeholder="🔍 过滤当前库文件名/标签..." oninput="STATE.libPage=1; renderLibrary();" />
               <div id="libEditActions" style="display:inline-flex;gap:6px;flex-wrap:wrap;">
                 <button class="btn btn-xs btn-success" onclick="openOnlineEditorNewStandalone()">✍️ 在线新建材料</button>
                 <button class="btn btn-primary btn-xs" onclick="openUploadLibraryModal()">📤 上传文件</button>
@@ -1151,7 +1228,6 @@
             </div>
           </div>
 
-          <!-- 多选批量归纳操作栏 -->
           <div class="batch-bar" id="libBatchBar">
             <div>
               已勾选 <strong id="batchSelectedCount">0</strong> 份文件
@@ -1186,7 +1262,6 @@
             </table>
           </div>
 
-          <!-- 分页控制栏（海量文件防卡顿） -->
           <div class="pagination-bar">
             <div id="libPageInfo">共 0 份文件</div>
             <div style="display:flex;align-items:center;gap:8px;">
@@ -1213,7 +1288,7 @@
           <div>
             <h3>🔁 周期性 / 常态化工作自动派生引擎（周调度表 / 月度总结 / 风险会商 / 值班报送）</h3>
             <p style="font-size:13px;color:var(--text-secondary);margin-top:3px;">
-              配置好周期规则后，系统会在每个周期自动为您创建对应的事项专属文件夹，并自动关联上一期写好的定稿材料作为本期参考底稿；您也可随时点【⚡ 立即派生本期事项】。
+              配置好周期规则后，系统会在每个周期自动为您创建对应的事项专属文件夹，并自动关联上一期写好的定稿材料作为本期参考底稿；您也可随时点【⚡ 立即派生本期事项】或【✏️ 编辑】修改规则。
             </p>
           </div>
           <button class="btn btn-primary" onclick="openRecurringModal()" id="btnAddRecurring">+ 新增周期性工作规则</button>
@@ -1259,7 +1334,7 @@
     </section>
   </main>
 
-  <!-- 右侧滑出：正文预览 / 在线写稿改稿 / 一键国标公文排版抽屉 -->
+  <!-- 右侧滑出：双栏对照撰稿工作台 / 正文预览 / 一键国标公文排版抽屉 -->
   <div class="drawer-backdrop" id="drawerBackdrop" onclick="closePreviewDrawer()"></div>
   <aside class="drawer" id="previewDrawer">
     <div class="drawer-header">
@@ -1268,6 +1343,9 @@
         <div id="drawerSubMeta" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
+        <button class="btn btn-xs" id="btnToggleSplit" onclick="toggleSplitDraftingStudio()" title="开启左看参考旧稿/来文、右写新材料的双栏对照撰稿模式">
+          📖 开启双栏对照
+        </button>
         <button class="btn btn-xs" onclick="adjustDrawerFont(-1)">A-</button>
         <button class="btn btn-xs" onclick="adjustDrawerFont(1)">A+</button>
         <button class="btn btn-primary btn-sm" onclick="copyDrawerText()">📋 复制全文</button>
@@ -1283,7 +1361,7 @@
         <button class="scope-btn" id="drawerTabEditBtn" onclick="switchDrawerMode('edit')">✍️ 在线写稿/改稿</button>
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;" id="drawerActionBtns">
-        <button class="btn btn-xs btn-success" id="btnDrawerFormatGw" onclick="formatCurrentDrawerDocToGw('report')" title="按 GB/T 9704—2012 国标公文标准（二号小标宋标题+三号仿宋正文+28磅行距）导出 .docx">
+        <button class="btn btn-xs btn-success" id="btnDrawerFormatGw" onclick="formatCurrentDrawerDocToGw('report')" title="按 GB/T 9704—2012 国标公文标准（二号小标宋标题+三号仿宋正文+28磅行距+页码）导出 .docx">
           📄 导出国标公文(.docx)
         </button>
         <button class="btn btn-xs btn-purple" id="btnDrawerFormatRedhead" onclick="formatCurrentDrawerDocToGw('redhead')" title="生成带红色版头与发文字号的正式红头文件 .docx">
@@ -1301,21 +1379,52 @@
         <button class="btn btn-xs" onclick="copyDrawerPath()">复制路径</button>
       </div>
 
-      <!-- 阅读模式 -->
-      <div class="preview-rendered-box" id="drawerRenderedBox"></div>
-
-      <!-- 在线编辑/新建材料草稿模式 -->
-      <div id="drawerEditorWrap" style="display:none;flex-direction:column;flex:1;gap:8px;">
-        <div style="display:flex;gap:8px;align-items:center;">
-          <label style="font-size:12px;font-weight:600;">保存文件名：</label>
-          <input type="text" id="drawerEditorFilename" class="form-control" style="flex:1;" placeholder="如：我县冬春防灾减灾总结汇报_初稿.md" />
+      <div class="drawer-split-container">
+        <!-- 左栏：对照参考区（来文要求 / 库内参考旧稿 / 常用范文） -->
+        <div class="split-left-pane" id="drawerSplitLeftPane">
+          <div style="padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;gap:6px;align-items:center;justify-content:space-between;">
+            <select id="splitRefSelect" class="form-control" style="flex:1;padding:4px 8px;font-size:12px;" onchange="loadSplitReferenceContent(this.value)"></select>
+            <button class="btn btn-xs btn-primary" onclick="insertSelectedReferenceToEditor()" title="在下方左栏选中任意句子或段落后，点击即可插入右侧草稿光标处">
+              ➕ 插入选中段落至右栏
+            </button>
+          </div>
+          <div id="splitLeftContentBox" class="preview-rendered-box" style="border:none;border-radius:0;font-size:13.5px;white-space:pre-wrap;"></div>
         </div>
-        <textarea id="drawerEditorTextarea" class="editor-textarea" placeholder="在此直接撰写材料正文（支持一、/（一）/1. 自动识别国标公文标题层级）..."></textarea>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
-          <span style="font-size:12px;color:var(--text-muted);">💡 保存后将直接写入对应的本地物理文件夹并刷新全文索引</span>
-          <div style="display:flex;gap:8px;">
-            <button class="btn btn-primary" onclick="saveDrawerOnlineDraft(false)">💾 保存至本地文件夹</button>
-            <button class="btn btn-success" onclick="saveDrawerOnlineDraft(true)">📄 保存并导出国标 .docx</button>
+
+        <!-- 右栏：阅读预览或在线写稿编辑器 -->
+        <div class="split-right-pane">
+          <div class="preview-rendered-box" id="drawerRenderedBox"></div>
+
+          <div id="drawerEditorWrap" style="display:none;flex-direction:column;flex:1;gap:7px;">
+            <div style="display:flex;gap:8px;align-items:center;">
+              <label style="font-size:12px;font-weight:600;white-space:nowrap;">文件名：</label>
+              <input type="text" id="drawerEditorFilename" class="form-control" style="flex:1;" placeholder="如：我县冬春防灾减灾总结汇报_初稿.md" />
+            </div>
+
+            <!-- 公文结构快捷插入工具条 -->
+            <div class="snippet-toolbar">
+              <span style="font-size:11.5px;color:var(--text-muted);font-weight:600;">快捷插入：</span>
+              <button class="btn btn-xs" onclick="insertEditorSnippet('\n一、工作开展总体情况\n')">+ 一级标题(黑体)</button>
+              <button class="btn btn-xs" onclick="insertEditorSnippet('\n（一）重点排查整治情况\n')">+ 二级标题(楷体)</button>
+              <button class="btn btn-xs" onclick="insertEditorSnippet('\n1. 强化责任落实。')">+ 三级要点(仿宋)</button>
+              <button class="btn btn-xs" onclick="insertEditorSnippet('\n| 序号 | 排查领域/单位 | 发现隐患数 | 已整改数 | 整改率 |\n| :--- | :--- | :--- | :--- | :--- |\n| 1 | 重点工贸企业 | 12 | 12 | 100% |\n')">+ 📊 统计表格</button>
+              <button class="btn btn-xs" onclick="insertEditorSignDate()">+ ✒️ 落款与日期</button>
+            </div>
+
+            <textarea id="drawerEditorTextarea" class="editor-textarea"
+                      oninput="updateEditorWordCount()"
+                      onkeydown="if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveDrawerOnlineDraft(false);}"
+                      placeholder="在此直接撰写材料正文（支持 Ctrl+S 极速保存，支持一、/（一）/1. 自动匹配国标公文字号与缩进）..."></textarea>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:2px;">
+              <div id="editorWordCountBar" style="font-size:12px;color:var(--text-muted);font-weight:600;">
+                字数统计：0 字
+              </div>
+              <div style="display:flex;gap:8px;">
+                <button class="btn btn-primary" onclick="saveDrawerOnlineDraft(false)">💾 保存至本地文件夹 (Ctrl+S)</button>
+                <button class="btn btn-success" onclick="saveDrawerOnlineDraft(true)">📄 保存并导出国标 .docx</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1474,7 +1583,7 @@
           <input type="text" id="editDocFilename" class="form-control" />
         </div>
         <div class="form-group">
-          <label>所属物理分类目录（修改后同步移动本地文件）</label>
+          <label>所属物理分类目录（修改后同步移动本地物理文件或所属事项文件夹）</label>
           <select id="editDocCategory" class="form-control"></select>
         </div>
         <div class="form-group">
@@ -1511,13 +1620,14 @@
     </div>
   </div>
 
-  <!-- 弹窗：新增周期性工作派生规则 -->
+  <!-- 弹窗：新增 / 编辑周期性工作派生规则 -->
   <div class="modal-backdrop" id="recurringModalBackdrop">
     <div class="modal">
       <div class="modal-header">
-        <span>🔁 新增周期性 / 常态化工作派生规则</span>
+        <span id="recModalHeaderTitle">🔁 新增周期性 / 常态化工作派生规则</span>
         <button class="btn btn-sm" onclick="document.getElementById('recurringModalBackdrop').style.display='none'">✖</button>
       </div>
+      <input type="hidden" id="recEditId" />
       <div class="form-grid">
         <div class="form-group full">
           <label>派生事项标题模板 *（可用 <code>{period}</code> 代表周/月标识，<code>{month}</code> 代表当前月份）</label>
@@ -1613,6 +1723,31 @@
     </div>
   </div>
 
+  <!-- 弹窗：统一优雅非阻塞自定义对话框（彻底替换简陋的原生 prompt/confirm） -->
+  <div class="modal-backdrop" id="customDialogBackdrop" style="z-index:400;">
+    <div class="modal" style="max-width:440px;">
+      <div class="modal-header">
+        <span id="customDialogTitle">操作确认</span>
+        <button class="btn btn-sm" onclick="closeCustomDialog(null)">✖</button>
+      </div>
+      <div id="customDialogMessage" style="font-size:13.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6;"></div>
+      <div class="form-group" id="customDialogInputWrap" style="display:none;">
+        <input type="text" id="customDialogInput" class="form-control"
+               onkeydown="if(event.key==='Enter') confirmCustomDialog()" />
+      </div>
+      <div class="form-group" id="customDialogCheckWrap" style="display:none;">
+        <label style="display:flex;align-items:center;gap:7px;cursor:pointer;font-size:13px;color:var(--danger);">
+          <input type="checkbox" id="customDialogCheckbox" />
+          <span id="customDialogCheckLabel">同时删除本地硬盘上的对应物理文件/文件夹</span>
+        </label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+        <button class="btn" onclick="closeCustomDialog(null)">取消</button>
+        <button class="btn btn-primary" id="customDialogConfirmBtn" onclick="confirmCustomDialog()">确定</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 弹窗：局域网访问密码登录 -->
   <div class="modal-backdrop" id="loginModalBackdrop">
     <div class="modal" style="max-width:400px;">
@@ -1634,7 +1769,7 @@
 
   <script>
     let STATE = {
-      version: '1.2.0',
+      version: '2.0.0',
       can_view: true,
       can_edit: false,
       is_localhost: false,
@@ -1659,8 +1794,65 @@
       drawerDoc: null,
       drawerTaskId: null,
       drawerMode: 'read',
+      drawerSplit: false,
       drawerFontSize: 15
     };
+
+    // ==================== 统一优雅非阻塞自定义对话框 ====================
+    let _dialogResolver = null;
+    function showCustomDialog({ title = '提示', message = '', inputDefault = null, inputType = 'text', inputPlaceholder = '', checkLabel = null, checkDefault = false, danger = false }) {
+      return new Promise(resolve => {
+        _dialogResolver = resolve;
+        document.getElementById('customDialogTitle').textContent = title;
+        document.getElementById('customDialogMessage').textContent = message;
+
+        const inpWrap = document.getElementById('customDialogInputWrap');
+        const inpEl = document.getElementById('customDialogInput');
+        if (inputDefault !== null) {
+          inpWrap.style.display = 'flex';
+          inpEl.type = inputType;
+          inpEl.value = inputDefault;
+          inpEl.placeholder = inputPlaceholder;
+          setTimeout(() => inpEl.focus(), 40);
+        } else {
+          inpWrap.style.display = 'none';
+        }
+
+        const chkWrap = document.getElementById('customDialogCheckWrap');
+        const chkEl = document.getElementById('customDialogCheckbox');
+        if (checkLabel) {
+          chkWrap.style.display = 'flex';
+          chkEl.checked = checkDefault;
+          document.getElementById('customDialogCheckLabel').textContent = checkLabel;
+        } else {
+          chkWrap.style.display = 'none';
+        }
+
+        const btn = document.getElementById('customDialogConfirmBtn');
+        btn.className = danger ? 'btn btn-danger-ghost' : 'btn btn-primary';
+        document.getElementById('customDialogBackdrop').style.display = 'flex';
+      });
+    }
+
+    function closeCustomDialog(val) {
+      document.getElementById('customDialogBackdrop').style.display = 'none';
+      if (_dialogResolver) {
+        const r = _dialogResolver;
+        _dialogResolver = null;
+        r(val);
+      }
+    }
+
+    function confirmCustomDialog() {
+      const inpWrap = document.getElementById('customDialogInputWrap');
+      const chkWrap = document.getElementById('customDialogCheckWrap');
+      const res = {
+        confirmed: true,
+        value: inpWrap.style.display !== 'none' ? document.getElementById('customDialogInput').value : null,
+        checked: chkWrap.style.display !== 'none' ? document.getElementById('customDialogCheckbox').checked : false
+      };
+      closeCustomDialog(res);
+    }
 
     function showToast(msg, duration = 2600) {
       const el = document.getElementById('toastBox');
@@ -1761,8 +1953,8 @@
     }
 
     /**
-     * 乐观局部更新：当修改单条事项（勾选细项、填进展、改状态、置顶、折叠）时，
-     * 仅就地更新内存中该事项及对应卡片 DOM，绝不重刷整页或丢失其它输入框焦点！
+     * 乐观局部更新（修复 Bug 5）：不仅就地更新 STATE.tasks 与单张卡片 DOM，
+     * 同时将该事项下的 incoming_files 与 drafted_files 同步合并进 STATE.documents！
      */
     function updateSingleTaskInStateAndDOM(updatedTask) {
       if (!updatedTask || !updatedTask.id) return;
@@ -1772,6 +1964,18 @@
       } else {
         STATE.tasks.unshift(updatedTask);
       }
+
+      // 同步合并该事项下的所有文件至 STATE.documents
+      const taskFiles = [...(updatedTask.incoming_files || []), ...(updatedTask.drafted_files || [])];
+      const taskFileIds = new Set(taskFiles.map(f => f.id));
+      STATE.documents = (STATE.documents || []).filter(d => d.task_id !== updatedTask.id || taskFileIds.has(d.id));
+      taskFiles.forEach(tf => {
+        const dIdx = STATE.documents.findIndex(d => d.id === tf.id);
+        if (dIdx !== -1) STATE.documents[dIdx] = { ...STATE.documents[dIdx], ...tf };
+        else STATE.documents.unshift(tf);
+      });
+
+      renderHeaderAndAuth();
       renderKpiStrip();
       renderLanBanner();
 
@@ -1826,7 +2030,7 @@
     }
 
     function renderHeaderAndAuth() {
-      document.getElementById('verBadge').textContent = `v${STATE.version || '1.2.0'}`;
+      document.getElementById('verBadge').textContent = `v${STATE.version || '2.0.0'}`;
       document.getElementById('lanUrlBadge').textContent = `🌐 局域网共享: ${STATE.lan_url}`;
       document.getElementById('localDirBadge').textContent = STATE.is_localhost
         ? `📂 打开本地资料库 (${STATE.workspace_root})`
@@ -1893,19 +2097,25 @@
         renderTasks();
         renderLibrary();
         renderRecurring();
-        showToast('🔒 已切回防误触【浏览下载模式】并清除编辑状态');
+        showToast('🔒 已切回防误触【浏览下载模式】');
         return;
       }
       if (STATE.can_edit && STATE.is_localhost) {
         showToast('本机直连 (127.0.0.1) 默认常驻主理人编辑模式');
         return;
       }
-      const pwd = prompt('请输入主理人编辑模式口令（默认 8888）：', '');
-      if (pwd === null) return;
+      const dlg = await showCustomDialog({
+        title: '🔓 开启主理人编辑模式',
+        message: '请输入主理人编辑模式口令（默认 8888）：',
+        inputDefault: '',
+        inputType: 'password',
+        inputPlaceholder: '输入口令...'
+      });
+      if (!dlg || !dlg.confirmed) return;
       try {
         await apiFetch('/api/auth/unlock-edit', {
           method: 'POST',
-          body: JSON.stringify({ password: pwd })
+          body: JSON.stringify({ password: dlg.value })
         });
         STATE.can_edit = true;
         renderHeaderAndAuth();
@@ -1914,7 +2124,7 @@
         renderRecurring();
         showToast('✍️ 已开启主理人编辑模式');
       } catch (err) {
-        alert(err.message);
+        showToast('❌ ' + err.message);
       }
     }
 
@@ -1928,11 +2138,11 @@
         await loadBootstrap();
         showToast('登录成功！');
       } catch (err) {
-        alert(err.message);
+        showToast('❌ ' + err.message);
       }
     }
 
-    // ==================== 全能极速投喂台 (Omnibox) ====================
+    // ==================== 全能极速投喂台 (含 Ctrl+V 微信截图粘贴) ====================
     function fileToBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -1952,6 +2162,28 @@
         });
       }
       renderOmniPendingFiles();
+    }
+
+    async function handleOmniboxPaste(ev) {
+      if (!ev.clipboardData || !ev.clipboardData.files || ev.clipboardData.files.length === 0) return;
+      const files = [];
+      const ts = new Date().toISOString().replace(/[:T\-]/g, '').slice(0, 14);
+      for (const f of ev.clipboardData.files) {
+        let name = f.name;
+        if (!name || name === 'image.png') {
+          const ext = (f.type && f.type.split('/')[1]) || 'png';
+          name = `微信通知截图_${ts}.${ext}`;
+        }
+        const b64 = await fileToBase64(f);
+        STATE.omniFiles.push({
+          filename: name,
+          content_base64: b64,
+          doc_role: 'incoming'
+        });
+        files.push(name);
+      }
+      renderOmniPendingFiles();
+      showToast(`📸 已从剪贴板粘贴附件：${files.join(', ')}`);
     }
 
     async function handleOmniboxDrop(ev) {
@@ -1976,7 +2208,7 @@
       const text = document.getElementById('omniText').value.trim();
       const sourceHint = document.getElementById('omniSourceSelect').value;
       if (!text && STATE.omniFiles.length === 0) {
-        showToast('请先粘贴微信/电话通知文字，或拖入一份公文文件');
+        showToast('请先粘贴微信/电话通知文字、截图，或拖入一份公文文件');
         return;
       }
 
@@ -2053,6 +2285,7 @@
 
       const doneCnt = (t.checklist || []).filter(x => x.done).length;
       const totalCnt = (t.checklist || []).length;
+      const pct = totalCnt > 0 ? Math.round((doneCnt / totalCnt) * 100) : (t.status === 'archived' ? 100 : 0);
       const latestProg = (t.progress_logs && t.progress_logs[0])
         ? `[${t.progress_logs[0].time}] ${t.progress_logs[0].text}`
         : '暂无进展';
@@ -2065,7 +2298,6 @@
         t.completed_at ? `办结于：${t.completed_at}` : ''
       ].filter(Boolean);
 
-      // 折叠紧凑态
       if (t.is_collapsed) {
         return `
           <article class="task-card level-${dl.level}" id="task_card_${t.id}" style="padding:10px 15px;">
@@ -2073,7 +2305,7 @@
               <div class="task-title-line" style="flex:1;">
                 <span class="badge ${badgeClass}">${escapeHtml(dl.label)}</span>
                 <span class="task-title" onclick="toggleTaskCollapse(${t.id}, false)">${escapeHtml(t.title)}</span>
-                <span class="badge badge-routine">清单 ${doneCnt}/${totalCnt}</span>
+                <span class="badge badge-routine">清单 ${doneCnt}/${totalCnt} (${pct}%)</span>
                 <span style="font-size:12px;color:var(--text-muted);">最新进展：${escapeHtml(latestProg)}</span>
               </div>
               <div style="display:flex;gap:6px;align-items:center;">
@@ -2086,9 +2318,17 @@
       }
 
       const chkHtml = (t.checklist || []).map(c => `
-        <li class="chk-item ${c.done ? 'done' : ''}" onclick="${STATE.can_edit ? `toggleCheckItem(${t.id}, '${escapeHtml(c.id)}')` : ''}">
-          <input type="checkbox" ${c.done ? 'checked' : ''} ${STATE.can_edit ? '' : 'disabled'} />
-          <span>${escapeHtml(c.text)}</span>
+        <li class="chk-item ${c.done ? 'done' : ''}">
+          <div class="chk-item-left" onclick="${STATE.can_edit ? `toggleCheckItem(${t.id}, '${escapeHtml(c.id)}')` : ''}">
+            <input type="checkbox" ${c.done ? 'checked' : ''} ${STATE.can_edit ? '' : 'disabled'} />
+            <span class="chk-text">${escapeHtml(c.text)}</span>
+          </div>
+          ${STATE.can_edit ? `
+            <span class="chk-ops">
+              <button class="btn btn-xs" style="padding:0 4px;" onclick="editCheckItemPrompt(${t.id}, '${escapeHtml(c.id)}')" title="修改此条待办细项文字">✏️</button>
+              <button class="btn btn-xs" style="padding:0 4px;" onclick="deleteCheckItem(${t.id}, '${escapeHtml(c.id)}')" title="删除此条细项">×</button>
+            </span>
+          ` : ''}
         </li>
       `).join('');
 
@@ -2111,7 +2351,7 @@
 
       const draftFilesHtml = (t.drafted_files || []).map(f => `
         <div class="file-item">
-          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、在线改稿或导出国标公文">✍️ ${escapeHtml(f.filename)}</span>
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、双栏在线改稿或导出国标公文">✍️ ${escapeHtml(f.filename)}</span>
           <div style="display:flex;gap:3px;flex-shrink:0;">
             ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${f.id})" title="按 GB/T 9704 国标公文排版导出 .docx">国标</button>` : ''}
             ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开编辑">WPS</button>` : ''}
@@ -2119,7 +2359,7 @@
             <a class="btn btn-xs" href="/api/docs/${f.id}/download">下</a>
           </div>
         </div>
-      `).join('') || `<div style="color:var(--text-muted);font-size:12px;">暂未放入材料（可点右上【+在线写稿】或拖入）</div>`;
+      `).join('') || `<div style="color:var(--text-muted);font-size:12px;">暂未放入材料（可点右上【✍️双栏写稿】或直接把文件拖到本卡片上）</div>`;
 
       const refsHtml = (t.reference_docs || []).map(r => `
         <span class="ref-chip" onclick="openDocPreview(${r.id})" title="点击对比预览库内历史参考材料">
@@ -2146,7 +2386,7 @@
 
             <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
               ${STATE.can_edit ? `
-                <button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id})" title="直接在网页抽屉里为此事项撰写材料并可一键导出国标 .docx">✍️ 在线写材料</button>
+                <button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id}, true)" title="开启左看要求/参考旧稿、右写新材料的双栏对照撰稿工作台">✍️ 双栏对照写材料</button>
               ` : ''}
               ${STATE.is_localhost ? `
                 <button class="btn btn-xs" onclick="openTaskLocalFolder(${t.id})" title="在麒麟文件管理器中直接打开本事项物理文件夹">📂 打开目录</button>
@@ -2164,6 +2404,10 @@
               ` : ''}
               <button class="btn btn-xs" onclick="toggleTaskCollapse(${t.id}, true)" title="收起卡片详情">▲ 收起</button>
             </div>
+          </div>
+
+          <div class="chk-progress-track" title="待办清单完成度 ${pct}%">
+            <div class="chk-progress-fill ${pct === 100 ? 'complete' : ''}" style="width:${pct}%;"></div>
           </div>
 
           <div class="task-summary">
@@ -2225,7 +2469,7 @@
                     <span>✍️ 我写的材料</span>
                     ${STATE.can_edit ? `
                       <div style="display:flex;gap:6px;">
-                        <span style="color:var(--success);cursor:pointer;font-size:11px;" onclick="openOnlineEditorForTask(${t.id})">+在线写稿</span>
+                        <span style="color:var(--success);cursor:pointer;font-size:11px;" onclick="openOnlineEditorForTask(${t.id}, true)">+双栏写稿</span>
                         <label style="color:var(--primary);cursor:pointer;font-size:11px;">
                           +上传
                           <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'draft', this.files)" />
@@ -2300,7 +2544,7 @@
                     </td>
                     <td>
                       <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                        ${STATE.can_edit ? `<button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id})">✍️写稿</button>` : ''}
+                        ${STATE.can_edit ? `<button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id}, true)">✍️写稿</button>` : ''}
                         <a class="btn btn-xs" href="/api/tasks/${t.id}/zip">📦 ZIP</a>
                         ${STATE.can_edit ? `<button class="btn btn-xs" onclick="openEditTaskModal(${t.id})">编辑</button>` : ''}
                       </div>
@@ -2320,6 +2564,33 @@
         body: JSON.stringify({ toggle_check_id: checkId })
       });
       updateSingleTaskInStateAndDOM(res.task);
+    }
+
+    async function editCheckItemPrompt(taskId, checkId) {
+      const t = STATE.tasks.find(x => x.id === taskId);
+      const item = (t?.checklist || []).find(c => c.id === checkId);
+      if (!item) return;
+      const dlg = await showCustomDialog({
+        title: '✏️ 修改待办细项内容',
+        message: '请修改该条待办要求细项：',
+        inputDefault: item.text
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ edit_check_item: { id: checkId, text: dlg.value.trim() } })
+      });
+      updateSingleTaskInStateAndDOM(res.task);
+      showToast('✅ 细项已更新并同步写入本地 00_事项要求与进展.md');
+    }
+
+    async function deleteCheckItem(taskId, checkId) {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ delete_check_id: checkId })
+      });
+      updateSingleTaskInStateAndDOM(res.task);
+      showToast('已移除该条待办细项');
     }
 
     async function appendCheckItem(taskId, inputEl) {
@@ -2447,7 +2718,7 @@
           copyText(res.abs_path, `📋 已复制本机绝对路径 (${res.abs_path})`);
         }
       } catch (err) {
-        alert(err.message);
+        showToast('❌ ' + err.message);
       }
     }
 
@@ -2471,7 +2742,7 @@
     }
 
     async function quickFormatDocToGw(docId, mode = 'report') {
-      showToast('📄 正在按 GB/T 9704—2012 国标公文标准排版生成 .docx...');
+      showToast('📄 正在按 GB/T 9704—2012 国标公文标准（含页码与版心网格）排版生成 .docx...');
       try {
         const res = await apiFetch(`/api/docs/${docId}/format-gw`, {
           method: 'POST',
@@ -2481,7 +2752,7 @@
         showToast(`✅ 已生成国标公文《${res.document.filename}》并存入本地文件夹！`);
         window.open(`/api/docs/${res.document.id}/download`, '_blank');
       } catch (err) {
-        alert(err.message);
+        showToast('❌ ' + err.message);
       }
     }
 
@@ -2634,7 +2905,7 @@
         body: JSON.stringify({ doc_ids: [docId], action: 'move_category', category: targetCat })
       });
       await loadBootstrap();
-      showToast(`📁 已将文件移入【${targetCat}】并同步移动本地文件！`);
+      showToast(`📁 已将文件（及关联事项文件夹）同步移入【${targetCat}】！`);
     }
 
     function toggleLibDocSelect(docId, checked) {
@@ -2679,9 +2950,14 @@
     }
 
     async function executeBatchAddTags() {
-      const raw = prompt('请输入要批量追加的标签（多个标签用空格分隔）：');
-      if (!raw || !raw.trim()) return;
-      const tags = raw.trim().split(/[\s,，、]+/).filter(Boolean);
+      const dlg = await showCustomDialog({
+        title: '🏷️ 批量追加归纳标签',
+        message: '请输入要批量添加的标签（多个标签用空格分隔）：',
+        inputDefault: '',
+        inputPlaceholder: '如：防灾减灾 汇报稿 2026'
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
+      const tags = dlg.value.trim().split(/[\s,，、]+/).filter(Boolean);
       const ids = Array.from(STATE.libSelectedIds);
       await apiFetch('/api/docs/batch', {
         method: 'POST',
@@ -2711,11 +2987,17 @@
 
     async function executeBatchDelete() {
       const ids = Array.from(STATE.libSelectedIds);
-      if (!confirm(`确定要批量移除这 ${ids.length} 份文件吗？`)) return;
-      const delDisk = confirm('是否同时从本地物理文件夹中删除原文件？\n点【确定】同时删除本地文件；点【取消】仅从索引移除。');
+      const dlg = await showCustomDialog({
+        title: '🗑️ 批量移除文件确认',
+        message: `确定要批量移除选中的 ${ids.length} 份文件吗？`,
+        checkLabel: '同时从本机物理文件夹中永久删除原文件',
+        checkDefault: false,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
       await apiFetch('/api/docs/batch', {
         method: 'POST',
-        body: JSON.stringify({ doc_ids: ids, action: 'delete', delete_disk: delDisk })
+        body: JSON.stringify({ doc_ids: ids, action: 'delete', delete_disk: dlg.checked })
       });
       clearLibSelection();
       await loadBootstrap();
@@ -2723,37 +3005,51 @@
     }
 
     async function createNewCategoryPrompt() {
-      const name = prompt('请输入新建物理分类文件夹名称（例如：06_森林防灭火专项）：');
-      if (!name || !name.trim()) return;
+      const dlg = await showCustomDialog({
+        title: '📁 新建本地物理分类目录',
+        message: '请输入新分类文件夹名称（将在 workspace_files 下真实创建物理目录）：',
+        inputDefault: '',
+        inputPlaceholder: '例如：06_森林防灭火专项'
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
       await apiFetch('/api/categories', {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim() })
+        body: JSON.stringify({ name: dlg.value.trim() })
       });
       await loadBootstrap();
       showToast('📁 已在本地硬盘创建分类目录并同步！');
     }
 
     async function renameCategoryPrompt(oldName) {
-      const newName = prompt(`重命名或合并分类目录【${oldName}】\n（若输入已存在的分类名，则自动将该目录下的事项与文件合并过去）：`, oldName);
-      if (!newName || !newName.trim() || newName.trim() === oldName) return;
+      const dlg = await showCustomDialog({
+        title: '✏️ 重命名或合并物理分类目录',
+        message: `将分类【${oldName}】重命名为（若输入已存在的分类名，则自动将该目录下的事项与文件合并过去）：`,
+        inputDefault: oldName
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim() || dlg.value.trim() === oldName) return;
       await apiFetch('/api/categories', {
         method: 'PUT',
-        body: JSON.stringify({ old_name: oldName, new_name: newName.trim() })
+        body: JSON.stringify({ old_name: oldName, new_name: dlg.value.trim() })
       });
-      if (STATE.libCategoryFilter === oldName) STATE.libCategoryFilter = newName.trim();
+      if (STATE.libCategoryFilter === oldName) STATE.libCategoryFilter = dlg.value.trim();
       await loadBootstrap();
-      showToast(`✅ 已将分类【${oldName}】重命名/合并为【${newName.trim()}】并同步更新本地物理路径！`);
+      showToast(`✅ 已将分类【${oldName}】重命名/合并为【${dlg.value.trim()}】并同步更新本地物理路径！`);
     }
 
     async function deleteCategoryPrompt(catName) {
-      if (!confirm(`确定要删除空分类目录【${catName}】吗？`)) return;
+      const dlg = await showCustomDialog({
+        title: '🗑️ 删除空分类目录',
+        message: `确定要删除空分类目录【${catName}】吗？`,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
       try {
         await apiFetch(`/api/categories?name=${encodeURIComponent(catName)}`, { method: 'DELETE' });
         if (STATE.libCategoryFilter === catName) STATE.libCategoryFilter = '';
         await loadBootstrap();
         showToast(`🗑️ 已删除空分类目录【${catName}】`);
       } catch (err) {
-        alert(err.message);
+        showToast('❌ ' + err.message);
       }
     }
 
@@ -2769,7 +3065,7 @@
       const tags = rawTags ? rawTags.split(/[\s,，、]+/).filter(Boolean) : [];
       const fileInput = document.getElementById('libUploadFilesInput');
       if (!fileInput.files || fileInput.files.length === 0) {
-        alert('请先选择要上传的文件');
+        showToast('请先选择要上传的文件');
         return;
       }
       showToast('正在上传并抽取正文索引...');
@@ -2806,7 +3102,7 @@
       const targetCat = document.getElementById('scanTargetCatSelect').value;
       const smartAuto = document.getElementById('scanSmartAutoCat').checked;
       if (!srcDir) {
-        alert('请输入本机文件夹路径');
+        showToast('请输入本机文件夹路径');
         return;
       }
       showToast('正在扫描提取历史公文并建立 FTS5 索引...');
@@ -2819,7 +3115,7 @@
         await loadBootstrap();
         showToast(`🎉 成功扫描导入 ${res.imported_count} 份历史公文并保留原目录标签！`);
       } catch (err) {
-        alert(err.message);
+        showToast('❌ ' + err.message);
       }
     }
 
@@ -2858,12 +3154,18 @@
 
     async function deleteCurrentDoc() {
       const docId = document.getElementById('editDocId').value;
-      const delDisk = confirm('是否同时从本地物理文件夹中删除该文件？');
-      if (!delDisk) return;
-      await apiFetch(`/api/docs/${docId}?delete_disk=1`, { method: 'DELETE' });
+      const dlg = await showCustomDialog({
+        title: '🗑️ 移除文件确认',
+        message: '确定要移除该文件记录吗？',
+        checkLabel: '同时从本机硬盘物理文件夹中永久删除该文件',
+        checkDefault: true,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      await apiFetch(`/api/docs/${docId}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
       document.getElementById('docEditModalBackdrop').style.display = 'none';
       await loadBootstrap();
-      showToast('已删除该文件');
+      showToast('已移除该文件');
     }
 
     async function convertDocToTask(docId) {
@@ -2874,7 +3176,7 @@
       showToast('✅ 已转为工作台待办事项！');
     }
 
-    // ==================== 周期性/常态化工作派生管理 ====================
+    // ==================== 周期性/常态化工作派生管理（含全字段编辑弹窗回填） ====================
     function renderRecurring() {
       document.getElementById('btnAddRecurring').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       const tbody = document.getElementById('recurringTableBody');
@@ -2913,7 +3215,8 @@
           <td>
             ${STATE.can_edit ? `
               <div style="display:flex;gap:5px;flex-wrap:wrap;">
-                <button class="btn btn-xs btn-primary" onclick="spawnRecurringNow(${r.id})">⚡ 立即派生本期事项</button>
+                <button class="btn btn-xs btn-primary" onclick="spawnRecurringNow(${r.id})">⚡ 立即派生本期</button>
+                <button class="btn btn-xs" onclick="openRecurringModal(${r.id})">✏️ 编辑</button>
                 <button class="btn btn-xs" onclick="toggleRecurringEnable(${r.id}, ${!r.enabled})">${r.enabled ? '暂停' : '启用'}</button>
                 <button class="btn btn-xs btn-danger-ghost" onclick="deleteRecurringRule(${r.id})">删除</button>
               </div>
@@ -2923,26 +3226,51 @@
       `).join('');
     }
 
-    function openRecurringModal() {
+    function openRecurringModal(ruleId = null) {
+      if (ruleId) {
+        const r = (STATE.recurring_rules || []).find(x => x.id === ruleId);
+        if (!r) return;
+        document.getElementById('recModalHeaderTitle').textContent = `✏️ 编辑周期性工作规则 #${r.id}`;
+        document.getElementById('recEditId').value = r.id;
+        document.getElementById('recTitleTpl').value = r.title_template || '';
+        document.getElementById('recCategory').value = r.category || STATE.categories[0];
+        document.getElementById('recOrg').value = r.issuing_org || '';
+        document.getElementById('recFreqType').value = r.freq_type || 'weekly';
+        document.getElementById('recFreqVal').value = r.freq_value || 4;
+        document.getElementById('recSummary').value = r.summary || '';
+        document.getElementById('recChecklist').value = (r.checklist || []).map(c => c.text || c).join('\n');
+      } else {
+        document.getElementById('recModalHeaderTitle').textContent = '🔁 新增周期性 / 常态化工作派生规则';
+        document.getElementById('recEditId').value = '';
+        document.getElementById('recTitleTpl').value = '';
+        document.getElementById('recOrg').value = '';
+        document.getElementById('recFreqType').value = 'weekly';
+        document.getElementById('recFreqVal').value = 4;
+        document.getElementById('recSummary').value = '';
+        document.getElementById('recChecklist').value = '';
+      }
       document.getElementById('recurringModalBackdrop').style.display = 'flex';
     }
 
     async function saveRecurringModal() {
+      const editId = document.getElementById('recEditId').value;
       const titleTpl = document.getElementById('recTitleTpl').value.trim();
-      if (!titleTpl) { alert('请填写标题模板'); return; }
+      if (!titleTpl) { showToast('请填写标题模板'); return; }
       const chkLines = document.getElementById('recChecklist').value.split('\n').map(s => s.trim()).filter(Boolean);
-      await apiFetch('/api/recurring', {
-        method: 'POST',
-        body: JSON.stringify({
-          title_template: titleTpl,
-          category: document.getElementById('recCategory').value,
-          issuing_org: document.getElementById('recOrg').value.trim(),
-          freq_type: document.getElementById('recFreqType').value,
-          freq_value: parseInt(document.getElementById('recFreqVal').value || '4'),
-          summary: document.getElementById('recSummary').value.trim(),
-          checklist: chkLines
-        })
-      });
+      const payload = {
+        title_template: titleTpl,
+        category: document.getElementById('recCategory').value,
+        issuing_org: document.getElementById('recOrg').value.trim(),
+        freq_type: document.getElementById('recFreqType').value,
+        freq_value: parseInt(document.getElementById('recFreqVal').value || '4'),
+        summary: document.getElementById('recSummary').value.trim(),
+        checklist: chkLines
+      };
+      if (editId) {
+        await apiFetch(`/api/recurring/${editId}`, { method: 'PUT', body: JSON.stringify(payload) });
+      } else {
+        await apiFetch('/api/recurring', { method: 'POST', body: JSON.stringify(payload) });
+      }
       document.getElementById('recurringModalBackdrop').style.display = 'none';
       await loadBootstrap();
       showToast('✅ 周期性工作规则已保存！');
@@ -2961,12 +3289,17 @@
     }
 
     async function deleteRecurringRule(ruleId) {
-      if (!confirm('确定要删除该周期规则吗？')) return;
+      const dlg = await showCustomDialog({
+        title: '🗑️ 删除周期规则确认',
+        message: '确定要删除该条周期性工作规则吗？',
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
       await apiFetch(`/api/recurring/${ruleId}`, { method: 'DELETE' });
       await loadBootstrap();
     }
 
-    // ==================== 搜索（250ms 防抖 + 关键词 <mark> 高亮 + AI 搜索） ====================
+    // ==================== 搜索（含定位事项脉冲跳转） ====================
     function handleSearchDebounce() {
       clearTimeout(window._searchTimer);
       const q = document.getElementById('globalSearchInput').value.trim();
@@ -2997,7 +3330,7 @@
       document.getElementById('searchResultsBox').style.display = 'block';
       document.getElementById('clearSearchBtn').style.display = 'inline-flex';
       document.getElementById('aiSearchAnswerWrap').innerHTML = '';
-      renderSearchResultsList(res.tasks || [], res.documents || [], `常规检索（${STATE.searchScope === 'title' ? '仅标题/文号' : '标题 + 全文内容'}）`, STATE.searchKeywords);
+      renderSearchResultsList(res.tasks || [], res.documents || [], `常规检索（${STATE.searchScope === 'title' ? '仅标题/文号' : '标题 + 全文内容 FTS5'}）`, STATE.searchKeywords);
     }
 
     async function runAiSemanticSearch() {
@@ -3038,6 +3371,7 @@
               <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${highlightKeywordsHtml(t.match_snippet || t.summary || '', kws)}</div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0;">
+              <button class="btn btn-xs btn-primary" onclick="locateTaskCard(${t.id})">🎯 定位事项</button>
               <a class="btn btn-xs" href="/api/tasks/${t.id}/zip">📦 下载事项包</a>
             </div>
           </div>
@@ -3061,6 +3395,29 @@
       box.innerHTML = html;
     }
 
+    function locateTaskCard(taskId) {
+      switchMainTab('workbench');
+      const t = STATE.tasks.find(x => x.id === taskId);
+      if (t) {
+        t.is_collapsed = false;
+        if (!doesTaskMatchCurrentFilter(t)) {
+          const allBtn = document.querySelector('#wbStatusPills .filter-pill[data-status="all"]');
+          setTaskStatusFilter('all', allBtn);
+        } else {
+          renderTasks();
+        }
+      }
+      setTimeout(() => {
+        const el = document.getElementById(`task_card_${taskId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.remove('pulse-locate');
+          void el.offsetWidth;
+          el.classList.add('pulse-locate');
+        }
+      }, 80);
+    }
+
     function clearSearch() {
       document.getElementById('globalSearchInput').value = '';
       STATE.searchKeywords = [];
@@ -3068,7 +3425,112 @@
       document.getElementById('clearSearchBtn').style.display = 'none';
     }
 
-    // ==================== 右侧抽屉：排版阅读 / 纯文本 / 在线写稿改稿 ====================
+    // ==================== 双栏对照撰稿工作台 & 正文预览抽屉 ====================
+    function populateSplitRefSelector(taskId) {
+      const sel = document.getElementById('splitRefSelect');
+      const t = (STATE.tasks || []).find(x => x.id === taskId);
+      let opts = [];
+      if (t) {
+        opts.push(`<option value="task_raw_${t.id}">📋 [本件要求与通知原文] ${escapeHtml(t.title)}</option>`);
+        (t.incoming_files || []).forEach(f => {
+          opts.push(`<option value="doc_${f.id}">📄 [本件来文原件] ${escapeHtml(f.filename)}</option>`);
+        });
+        (t.reference_docs || []).forEach(r => {
+          opts.push(`<option value="doc_${r.id}">💡 [关联参考旧稿] ${escapeHtml(r.filename)}</option>`);
+        });
+      }
+      (STATE.documents || []).filter(d => d.is_starred || d.doc_role === 'template' || d.doc_role === 'draft').slice(0, 25).forEach(d => {
+        const val = `doc_${d.id}`;
+        if (!opts.some(o => o.includes(`value="${val}"`))) {
+          opts.push(`<option value="${val}">${d.is_starred ? '⭐ [常用范文]' : '✍️ [历史材料]'} ${escapeHtml(d.filename)}</option>`);
+        }
+      });
+      sel.innerHTML = opts.join('') || `<option value="">暂无参考文档</option>`;
+      if (sel.value) loadSplitReferenceContent(sel.value);
+    }
+
+    async function loadSplitReferenceContent(val) {
+      const box = document.getElementById('splitLeftContentBox');
+      if (!val) { box.textContent = '暂无对照内容'; return; }
+      if (val.startsWith('task_raw_')) {
+        const tid = parseInt(val.replace('task_raw_', ''));
+        const t = (STATE.tasks || []).find(x => x.id === tid);
+        if (t) {
+          const chkStr = (t.checklist || []).map((c, i) => `${i+1}. [${c.done ? '√' : ' '}] ${c.text}`).join('\n');
+          box.textContent =
+            `【事项标题】${t.title}\n` +
+            `【来文单位与文号】${t.issuing_org || '无'} ${t.doc_number || ''}\n` +
+            `【截止日期】${t.deadline || '常态化'}\n` +
+            `【核心要求摘要】\n${t.summary || ''}\n\n` +
+            `【待办细项清单】\n${chkStr}\n\n` +
+            `【原始来文/通知全文】\n${t.raw_notice_text || '（无）'}`;
+        }
+      } else if (val.startsWith('doc_')) {
+        const did = parseInt(val.replace('doc_', ''));
+        box.textContent = '正在加载参考文档正文...';
+        const res = await apiFetch(`/api/docs/${did}/preview`);
+        box.textContent = res.document.extracted_text || '（该文件无纯文本内容）';
+      }
+    }
+
+    function toggleSplitDraftingStudio(forceState = null) {
+      const drawer = document.getElementById('previewDrawer');
+      STATE.drawerSplit = forceState !== null ? forceState : !STATE.drawerSplit;
+      drawer.classList.toggle('split-mode', STATE.drawerSplit);
+      document.getElementById('btnToggleSplit').textContent = STATE.drawerSplit ? '📕 关闭双栏对照' : '📖 开启双栏对照';
+      if (STATE.drawerSplit) {
+        populateSplitRefSelector(STATE.drawerTaskId);
+      }
+    }
+
+    function insertSelectedReferenceToEditor() {
+      const sel = window.getSelection();
+      let selectedText = sel ? sel.toString().trim() : '';
+      if (!selectedText) {
+        selectedText = document.getElementById('splitLeftContentBox').textContent.trim();
+      }
+      if (!selectedText) {
+        showToast('请先在左侧参考区用鼠标选中要摘抄的句子或段落');
+        return;
+      }
+      if (STATE.drawerMode !== 'edit') {
+        switchDrawerMode('edit');
+      }
+      insertEditorSnippet(selectedText + '\n');
+      showToast('➕ 已将选中参考段落插入右侧草稿！');
+    }
+
+    function insertEditorSnippet(snippet) {
+      const ta = document.getElementById('drawerEditorTextarea');
+      const start = ta.selectionStart || 0;
+      const end = ta.selectionEnd || 0;
+      const val = ta.value;
+      ta.value = val.slice(0, start) + snippet + val.slice(end);
+      ta.selectionStart = ta.selectionEnd = start + snippet.length;
+      ta.focus();
+      updateEditorWordCount();
+    }
+
+    function insertEditorSignDate() {
+      const now = new Date();
+      const t = (STATE.tasks || []).find(x => x.id === STATE.drawerTaskId);
+      const org = (t && t.issuing_org) ? '县应急管理局' : '县应急管理局';
+      insertEditorSnippet(`\n\n${org}\n${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日\n`);
+    }
+
+    function updateEditorWordCount() {
+      const val = document.getElementById('drawerEditorTextarea').value || '';
+      const cleanChars = val.replace(/\s+/g, '').length;
+      const paras = val.split(/\n+/).filter(s => s.trim()).length;
+      let hint = '';
+      if (cleanChars > 0 && cleanChars <= 300) {
+        hint = ' · <span style="color:var(--success);">✅ 符合 300 字以内简报/亮点要求</span>';
+      } else if (cleanChars > 300) {
+        hint = ' · <span>📄 标准汇报/方案篇幅</span>';
+      }
+      document.getElementById('editorWordCountBar').innerHTML = `实时字数：<strong>${cleanChars}</strong> 字 | 段落：<strong>${paras}</strong> 段${hint}`;
+    }
+
     async function openDocPreview(docId) {
       const res = await apiFetch(`/api/docs/${docId}/preview`);
       const d = res.document;
@@ -3089,20 +3551,22 @@
 
       document.getElementById('drawerEditorFilename').value = d.filename;
       document.getElementById('drawerEditorTextarea').value = d.extracted_text || '';
+      updateEditorWordCount();
 
+      toggleSplitDraftingStudio(false);
       switchDrawerMode('read');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
     }
 
-    function openOnlineEditorForTask(taskId) {
+    function openOnlineEditorForTask(taskId, enableSplit = true) {
       const t = (STATE.tasks || []).find(x => x.id === taskId);
       if (!t) return;
       STATE.drawerDoc = null;
       STATE.drawerTaskId = taskId;
       const defaultName = `我县${t.title.replace(/^关于/, '').replace(/的通知$/, '')}总结汇报_初稿.md`;
 
-      document.getElementById('drawerTitle').textContent = `✍️ 在线撰写材料 — 关联事项 #${t.id}`;
+      document.getElementById('drawerTitle').textContent = `✍️ 双栏对照撰稿台 — 关联事项 #${t.id}`;
       document.getElementById('drawerSubMeta').textContent = `所属事项：${t.title}`;
       document.getElementById('drawerPathText').textContent = `📂 将直接保存至本地文件夹：${t.folder_abs_path}`;
       document.getElementById('drawerDownloadLink').style.display = 'none';
@@ -3120,8 +3584,10 @@
         `${(t.checklist || []).map((c, i) => `${i+1}. ${c.text}；`).join('\n')}\n\n` +
         `三、下一步工作打算\n` +
         `持续压实工作责任，确保各项措施闭环落实。\n`;
+      updateEditorWordCount();
 
       switchDrawerMode('edit');
+      toggleSplitDraftingStudio(enableSplit);
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
     }
@@ -3140,7 +3606,9 @@
 
       document.getElementById('drawerEditorFilename').value = `新建综合汇报材料_${new Date().toISOString().slice(0,10)}.md`;
       document.getElementById('drawerEditorTextarea').value = `# 综合工作汇报材料\n\n一、基本情况\n\n二、存在问题\n\n三、下一步打算\n`;
+      updateEditorWordCount();
       switchDrawerMode('edit');
+      toggleSplitDraftingStudio(true);
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
     }
@@ -3158,6 +3626,7 @@
       if (mode === 'edit') {
         renderedBox.style.display = 'none';
         editorWrap.style.display = 'flex';
+        updateEditorWordCount();
       } else if (mode === 'raw') {
         editorWrap.style.display = 'none';
         renderedBox.style.display = 'block';
@@ -3179,7 +3648,7 @@
     async function saveDrawerOnlineDraft(alsoExportDocx = false) {
       const fname = document.getElementById('drawerEditorFilename').value.trim();
       const content = document.getElementById('drawerEditorTextarea').value;
-      if (!fname) { alert('请输入文件名'); return; }
+      if (!fname) { showToast('请输入文件名'); return; }
 
       const res = await apiFetch('/api/docs/save-text', {
         method: 'POST',
@@ -3194,13 +3663,19 @@
 
       STATE.drawerDoc = res.document;
       STATE.drawerDoc.extracted_text = content;
-      await loadBootstrap();
+      document.getElementById('btnDrawerFormatGw').style.display = 'inline-flex';
+      document.getElementById('btnDrawerFormatRedhead').style.display = 'inline-flex';
+
+      if (res.task) {
+        updateSingleTaskInStateAndDOM(res.task);
+      } else {
+        await loadBootstrap();
+      }
 
       if (alsoExportDocx && res.document && res.document.id) {
         await quickFormatDocToGw(res.document.id, 'report');
       } else {
-        switchDrawerMode('read');
-        showToast('💾 已直接写入本地物理文件夹并更新全文检索索引！');
+        showToast('💾 已直接写入本地物理文件夹并更新 FTS5 全文检索索引！');
       }
     }
 
@@ -3226,6 +3701,7 @@
       document.getElementById('btnDrawerFormatGw').style.display = 'none';
       document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
+      toggleSplitDraftingStudio(false);
       switchDrawerMode('read');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
@@ -3351,9 +3827,15 @@
     async function deleteCurrentTask() {
       const id = document.getElementById('editTaskId').value;
       if (!id) return;
-      if (!confirm('确定要删除该工作事项吗？')) return;
-      const delDisk = confirm('是否同时删除本地硬盘上的对应事项文件夹？\n点【确定】同时删除本地文件夹；点【取消】仅移除网页台账但保留本地文件夹。');
-      await apiFetch(`/api/tasks/${id}?delete_disk=${delDisk ? '1' : '0'}`, { method: 'DELETE' });
+      const dlg = await showCustomDialog({
+        title: '🗑️ 删除工作事项确认',
+        message: '确定要删除该工作事项吗？',
+        checkLabel: '同时删除本机硬盘上的对应事项物理文件夹及内部文件',
+        checkDefault: false,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      await apiFetch(`/api/tasks/${id}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
       closeTaskModal();
       await loadBootstrap();
       showToast('已删除该工作事项');
@@ -3378,7 +3860,6 @@
 
     function openSettingsModal() {
       document.getElementById('cfgWorkspaceRoot').value = STATE.workspace_root || '';
-      // 修复 Bug 1：绝不将密码框硬编码重置为 123456/8888，留空代表保持原密码不变
       document.getElementById('cfgViewPwd').value = '';
       document.getElementById('cfgEditPwd').value = '';
       document.getElementById('cfgAiKey').value = '';
@@ -3412,7 +3893,7 @@
       const res = await apiFetch('/api/sync', { method: 'POST', body: '{}' });
       await loadBootstrap();
       const st = res.stats || {};
-      showToast(`🔄 本地文件夹同步完成（新增 ${st.added||0} 份，更新 ${st.updated||0} 份，移动追踪 ${st.moved_tasks||0} 项）`);
+      showToast(`🔄 双向同步完成（新增 ${st.added||0} 份，更新 ${st.updated||0} 份，本地进展反向同步 ${st.reverse_synced_tasks||0} 项）`);
     }
 
     function toggleTheme() {
@@ -3439,7 +3920,6 @@
       copyText(STATE.lan_url, `🌐 已复制局域网访问链接 (${STATE.lan_url})，可直接发给同事！`);
     }
 
-    // 全局快捷键 Ctrl+K 聚焦搜索框
     window.addEventListener('keydown', ev => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
         ev.preventDefault();
