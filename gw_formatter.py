@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-GB/T 9704—2012 党政机关公文标准排版与 xkl-gw 联动引擎 (gw_formatter.py v2.0.0)
+GB/T 9704—2012 党政机关公文标准排版与 xkl-gw 联动引擎 (gw_formatter.py v3.0.0)
 专为银河麒麟 Kylin V10 (海光 3350) + WPS Office Linux 打造：
 1. 支持直接调用本机已安装的 `xkl-gw` 公文排版助手 CLI 脚本（若配置了路径或环境变量）
 2. 内置零依赖纯 Python OpenXML (.docx) 国标公文生成器：
    - 严格遵循 GB/T 9704—2012 页面边距：天头 37mm、地脚 35mm、订口(左) 28mm、切口(右) 26mm
    - 支持【正式红头公文模式 (redhead)】与【综合汇报/方案材料模式 (report)】
+   - 修复 v2.0.2 中因所属事项含来文字号导致 report 汇报模式误触发红头的 Bug
    - 自动识别 Markdown / 纯文本中的公文标题（二号方正小标宋简体）、主送机关、
      一级标题（一、-> 三号黑体）、二级标题（（一）-> 三号楷体_GB2312）、
      三级标题（1. -> 三号仿宋_GB2312加粗）、Markdown 表格（自动转为标准公文内嵌表格 <w:tbl>）
@@ -104,7 +105,7 @@ def parse_draft_structure(
             blocks.append(("h3", ln_clean))
         elif idx >= len(non_empty) - 2 and re.match(r"^\d{4}年\d{1,2}月\d{1,2}日$", ln_clean):
             blocks.append(("sign_date", ln_clean))
-        elif idx >= len(non_empty) - 3 and len(ln_clean) <= 18 and re.search(r"(局|委|办公室|指挥部|中心|政府|部)$", ln_clean):
+        elif idx >= len(non_empty) - 3 and len(ln_clean) <= 22 and re.search(r"(局|委|办公室|指挥部|中心|政府|部|专班|科|处)$", ln_clean):
             blocks.append(("sign_org", ln_clean))
         else:
             blocks.append(("body", ln_clean))
@@ -195,7 +196,7 @@ def _make_w_tbl(rows: List[List[str]]) -> str:
         '<w:bottom w:val="single" w:sz="8" w:space="0" w:color="000000"/>'
         '<w:right w:val="single" w:sz="6" w:space="0" w:color="000000"/>'
         '<w:insideH w:val="single" w:sz="6" w:space="0" w:color="000000"/>'
-        '<w:insideV w:val="single" w:sz="6" w:space="0" w:color="000000"/>'
+        '<w:insideV w:val="single" w:space="0" w:sz="6" w:color="000000"/>'
         "</w:tblBorders>"
         "</w:tblPr>"
     )
@@ -251,11 +252,15 @@ def build_gb9704_docx(
             except Exception:
                 pass
 
-    parsed = parse_draft_structure(raw_text, default_title=title, doc_number=doc_number, issuing_org=issuing_org)
+    # 修复 BUG-02：仅当明确指定 redhead 模式时才生成红头与发文字号，避免汇报模式被上级来文字号污染
+    effective_doc_num = doc_number if mode == "redhead" else ""
+    parsed = parse_draft_structure(raw_text, default_title=title, doc_number=effective_doc_num, issuing_org=issuing_org)
     p_nodes: List[str] = []
 
-    if mode == "redhead" or parsed["doc_number"]:
-        header_org = (parsed["issuing_org"] or "工作专班") + "文件"
+    if mode == "redhead":
+        header_org = (parsed["issuing_org"] or "工作专班")
+        if not header_org.endswith("文件"):
+            header_org += "文件"
         p_nodes.append(
             _make_w_p(
                 header_org,
@@ -323,7 +328,6 @@ def build_gb9704_docx(
         else:
             p_nodes.append(_make_w_p(b_val, font_east_asia="仿宋_GB2312", size_half_pt=32, first_line_indent_twips=640, line_twips=560))
 
-    # 关联国标页码页脚 rId2 (footer1.xml) 与版心网格 (每页22行，每行28字)
     sect_pr = (
         '<w:sectPr>'
         '<w:footerReference w:type="default" r:id="rId2"/>'
@@ -343,7 +347,6 @@ def build_gb9704_docx(
         + "</w:body></w:document>"
     )
 
-    # GB/T 9704—2012 四号宋体 (14pt = 28 half-points) “— 1 —” 页码页脚
     footer1_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'

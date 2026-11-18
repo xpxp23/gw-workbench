@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench v1.2.0) 本地 Agent 专用命令行工具 & 原生 MCP Server
+公文与材料智能工作台 (GW-Workbench v3.0.0) 本地 Agent 专用命令行工具 & 原生 MCP Server
 支持：
-1. 命令行直接操作 (list / add / progress / attach / draft / format-gw / recurring / search / sync)
+1. 命令行直接操作 (list / add / progress / attach / draft / format-gw / archive / record / recurring / search / sync)
 2. 原生 Model Context Protocol (MCP) Server 协议 (`python3 wb.py mcp`)，基于标准 stdio JSON-RPC 2.0，
+   内置 14 个原生政务工具（含【📦 资料存档】与【📌 重要事项记录】全套 Agent 读写接口），
    可直接挂载至 Claude Desktop / Cline / Roo Code / Cursor / OpenCode 等本地 Agent 客户端！
 """
 
@@ -26,8 +27,13 @@ from server import (
     get_db,
     sync_filesystem,
     create_task_record,
+    create_archive_record,
+    append_files_to_archive,
+    upsert_important_record,
     execute_search,
     serialize_task,
+    serialize_archive,
+    serialize_record,
     serialize_doc_light,
     build_highlight_snippet,
     write_task_readme_file,
@@ -37,14 +43,18 @@ from server import (
     _sync_fts_doc,
     spawn_task_from_recurring_rule,
     check_and_spawn_all_recurring,
+    list_physical_categories,
 )
 from ai_engine import extract_search_keywords, synthesize_ai_search_answer
 from gw_formatter import build_gb9704_docx
-from parser import extract_document_text
+from parser import extract_document_text, extract_structured_preview
 
 
 def api_call(method: str, path: str, payload: dict = None) -> Optional[dict]:
-    """优先调用正在运行的本地服务，若服务未启动则自动无缝退回本地直连数据库执行"""
+    """
+    修复 BUG-06：所有 CLI / MCP 命令优先调用正在运行的本地 HTTP 服务，
+    保证进程内锁与文件快照缓存 100% 同步；若服务未启动则无缝退回本地直连数据库执行！
+    """
     cfg = load_config()
     port = cfg.get("port", 8090)
     url = f"http://127.0.0.1:{port}{path}"
@@ -55,7 +65,7 @@ def api_call(method: str, path: str, payload: dict = None) -> Optional[dict]:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=4) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception:
         return None
@@ -63,6 +73,11 @@ def api_call(method: str, path: str, payload: dict = None) -> Optional[dict]:
 
 def _do_list(status: str = "", category: str = "") -> Dict[str, Any]:
     init_db()
+    qs = urllib.parse.urlencode({"status": status, "category": category})
+    res = api_call("GET", f"/api/tasks?{qs}")
+    if res and "tasks" in res:
+        return {"ok": True, "version": VERSION, "count": len(res["tasks"]), "tasks": res["tasks"]}
+
     sync_filesystem(force=False)
     ws_root = get_workspace_root()
     conn = get_db()
@@ -148,7 +163,6 @@ def _do_write_draft(
     export_gb9704_docx: bool = False,
     gw_mode: str = "report",
 ) -> Dict[str, Any]:
-    """在线或由本地 Agent 直接写入材料草稿，并可选一键生成 GB/T 9704—2012 标准 .docx 公文"""
     init_db()
     payload = {
         "task_id": task_id,
@@ -188,10 +202,10 @@ def _do_write_draft(
         cur = conn.execute(
             """
             INSERT INTO documents (
-                task_id, filename, rel_path, category, doc_role,
+                task_id, archive_id, record_id, filename, rel_path, category, doc_role,
                 file_type, file_size, mtime, extracted_text,
                 tags_json, is_starred, is_pinned, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'draft', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?)
+            ) VALUES (?, NULL, NULL, ?, ?, ?, 'draft', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?)
             """,
             (task_id, dest_path.name, rel_file, cat_use, st.st_size, round(st.st_mtime, 2), content, now_str, now_str),
         )
@@ -218,7 +232,7 @@ def _do_format_gw(doc_id: int, mode: str = "report", doc_number: str = "", org: 
     if not res:
         cfg = load_config()
         ws_root = get_workspace_root(cfg)
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        default_org = cfg.get("default_org_name") or "县应急管理局"
         conn = get_db()
         d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
         if not d_row:
@@ -228,12 +242,15 @@ def _do_format_gw(doc_id: int, mode: str = "report", doc_number: str = "", org: 
         src_abs = ws_root / d_row["rel_path"]
         stem = Path(d_row["filename"]).stem.replace("[材料]_", "").replace("[来文]_", "")
         out_abs = src_abs.parent / sanitize_filename(f"[材料]_{stem}_国标排版.docx")
+        effective_doc_num = doc_number if mode == "redhead" else ""
+        if mode == "redhead" and not effective_doc_num and t_row:
+            effective_doc_num = t_row["doc_number"] or ""
         build_gb9704_docx(
             output_path=out_abs,
             raw_text=d_row["extracted_text"] or "",
             title=stem,
-            doc_number=doc_number or (t_row["doc_number"] if t_row else ""),
-            issuing_org=org or (t_row["issuing_org"] if t_row and t_row["issuing_org"] else "县应急管理局"),
+            doc_number=effective_doc_num,
+            issuing_org=org or default_org,
             mode=mode,
             xkl_gw_cli=cfg.get("xkl_gw_cli", ""),
         )
@@ -247,64 +264,211 @@ def _do_format_gw(doc_id: int, mode: str = "report", doc_number: str = "", org: 
     return res
 
 
+# ==================== 新增：📦 资料存档 与 📌 重要事项记录 操控函数 ====================
+def _do_list_archives(category: str = "", query: str = "") -> Dict[str, Any]:
+    init_db()
+    qs = urllib.parse.urlencode({"category": category, "q": query})
+    res = api_call("GET", f"/api/archives?{qs}")
+    if res and "archives" in res:
+        return res
+    sync_filesystem(force=False)
+    ws_root = get_workspace_root()
+    conn = get_db()
+    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE archive_id IS NOT NULL ORDER BY id ASC").fetchall()
+    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+    rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
+    q_low = (query or "").strip().lower()
+    archives = []
+    for r in rows:
+        if category and r["category"] != category:
+            continue
+        a_obj = serialize_archive(conn, r, preloaded_docs=docs, ws_root=ws_root)
+        if q_low:
+            hay = f"{a_obj['title']} {a_obj['archive_date']} {a_obj['category']} {a_obj['notes_md']} {' '.join(f['filename'] for f in a_obj['files'])}".lower()
+            if q_low not in hay:
+                continue
+        archives.append(a_obj)
+    conn.close()
+    return {"ok": True, "count": len(archives), "archives": archives, "categories": list_physical_categories(scope="archive")}
+
+
+def _do_add_archive(
+    title: str,
+    category: str = "",
+    archive_date: str = "",
+    notes_md: str = "",
+    tags: Optional[List[str]] = None,
+    file_paths: Optional[List[str]] = None,
+    is_pinned: bool = False,
+) -> Dict[str, Any]:
+    init_db()
+    files = []
+    for fp in (file_paths or []):
+        p = Path(fp).expanduser().resolve()
+        if p.is_file():
+            files.append({"filename": p.name, "local_source_path": str(p)})
+    payload = {
+        "title": title,
+        "category": category,
+        "archive_date": archive_date,
+        "notes_md": notes_md,
+        "tags": tags or [],
+        "is_pinned": is_pinned,
+        "files": files,
+    }
+    res = api_call("POST", "/api/archives", payload)
+    if not res:
+        arch = create_archive_record(payload)
+        res = {"ok": True, "archive": arch}
+    return res
+
+
+def _do_append_archive(archive_id: int, file_paths: Optional[List[str]] = None, notes_append: str = "") -> Dict[str, Any]:
+    init_db()
+    files = []
+    for fp in (file_paths or []):
+        p = Path(fp).expanduser().resolve()
+        if p.is_file():
+            files.append({"filename": p.name, "local_source_path": str(p)})
+    payload = {"files": files, "notes_append": notes_append}
+    res = api_call("POST", f"/api/archives/{archive_id}/files", payload)
+    if not res:
+        arch = append_files_to_archive(archive_id, files_list=files, notes_append=notes_append)
+        if not arch:
+            return {"ok": False, "error": f"资料存档包 #{archive_id} 不存在"}
+        res = {"ok": True, "archive": arch}
+    return res
+
+
+def _do_list_records(category: str = "", query: str = "") -> Dict[str, Any]:
+    init_db()
+    qs = urllib.parse.urlencode({"category": category, "q": query})
+    res = api_call("GET", f"/api/records?{qs}")
+    if res and "important_records" in res:
+        return res
+    sync_filesystem(force=False)
+    ws_root = get_workspace_root()
+    conn = get_db()
+    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE record_id IS NOT NULL ORDER BY id ASC").fetchall()
+    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+    rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
+    q_low = (query or "").strip().lower()
+    records = []
+    for r in rows:
+        if category and r["category"] != category:
+            continue
+        r_obj = serialize_record(conn, r, preloaded_docs=docs, ws_root=ws_root, include_structured_preview=False)
+        if q_low:
+            hay = f"{r_obj['title']} {r_obj['category']} {r_obj['content_md']} {' '.join(f['filename'] for f in r_obj['files'])}".lower()
+            if q_low not in hay:
+                continue
+        records.append(r_obj)
+    conn.close()
+    return {"ok": True, "count": len(records), "important_records": records, "categories": list_physical_categories(scope="record")}
+
+
+def _do_get_record(id_or_title: str) -> Dict[str, Any]:
+    init_db()
+    val = str(id_or_title or "").strip()
+    if val.isdigit():
+        res = api_call("GET", f"/api/records/{int(val)}")
+        if res and res.get("record"):
+            return res
+    ws_root = get_workspace_root()
+    conn = get_db()
+    row = None
+    if val.isdigit():
+        row = conn.execute("SELECT * FROM important_records WHERE id = ?", (int(val),)).fetchone()
+    if not row:
+        row = conn.execute("SELECT * FROM important_records WHERE title = ? OR title LIKE ?", (val, f"%{val}%")).fetchone()
+    if not row:
+        conn.close()
+        return {"ok": False, "error": f"未找到重要事项记录: {val}"}
+    r_obj = serialize_record(conn, row, ws_root=ws_root, include_structured_preview=True)
+    conn.close()
+    return {"ok": True, "record": r_obj}
+
+
+def _do_upsert_record(
+    title: str,
+    category: str = "",
+    content_md: str = "",
+    tags: Optional[List[str]] = None,
+    file_paths: Optional[List[str]] = None,
+    is_pinned: bool = False,
+    record_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    init_db()
+    files = []
+    for fp in (file_paths or []):
+        p = Path(fp).expanduser().resolve()
+        if p.is_file():
+            files.append({"filename": p.name, "local_source_path": str(p)})
+    payload: Dict[str, Any] = {
+        "title": title,
+        "category": category,
+        "tags": tags or [],
+        "is_pinned": is_pinned,
+        "upsert_by_title": True,
+        "files": files,
+    }
+    if content_md:
+        payload["content_md"] = content_md
+    if record_id:
+        res = api_call("PUT", f"/api/records/{record_id}", payload)
+    else:
+        res = api_call("POST", "/api/records", payload)
+    if not res:
+        rec = upsert_important_record(payload, record_id=record_id)
+        res = {"ok": True, "record": rec}
+    return res
+
+
 def _do_search(query: str, scope: str = "full", ai: bool = False, category: str = "") -> Dict[str, Any]:
     init_db()
-    sync_filesystem(force=False)
     if ai:
         res = api_call("POST", "/api/agent/context-search", {"query": query, "category": category})
         if not res:
+            sync_filesystem(force=False)
             kws = extract_search_keywords(query)
-            ws_root = get_workspace_root()
-            conn = get_db()
-            all_doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-            preloaded_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_doc_rows]
-
-            all_tasks = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
-            scored_tasks = []
-            for r in all_tasks:
-                if category and r["category"] != category:
-                    continue
-                hay = f"{r['title']} {r['doc_number']} {r['issuing_org']} {r['summary']} {r['raw_notice_text']} {r['progress_json']}".lower()
-                hits = sum(2 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
-                if hits > 0:
-                    t_obj = serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
-                    t_obj["match_snippet"] = build_highlight_snippet(hay, kws)
-                    scored_tasks.append((hits, t_obj))
-            scored_tasks.sort(key=lambda x: (-x[0], -x[1]["id"]))
-            top_tasks = [x[1] for x in scored_tasks[:12]]
-
-            all_docs = conn.execute("SELECT * FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-            scored_docs = []
-            for r in all_docs:
-                if category and r["category"] != category:
-                    continue
-                hay_title = (r["filename"] or "").lower()
-                hay_body = (r["extracted_text"] or "").lower()
-                hits = sum(3 if kw.lower() in hay_title else (1 if kw.lower() in hay_body else 0) for kw in kws)
-                if hits > 0:
-                    snip = build_highlight_snippet(r["extracted_text"] or r["filename"], kws)
-                    d_obj = serialize_doc_light(r, snippet=snip, ws_root=ws_root)
-                    d_obj["extracted_text_chunk"] = (r["extracted_text"] or "")[:2000]
-                    scored_docs.append((hits, d_obj))
-            scored_docs.sort(key=lambda x: (-x[0], -x[1]["id"]))
-            top_docs = [x[1] for x in scored_docs[:18]]
-            conn.close()
-
-            ans = synthesize_ai_search_answer(query, kws, top_tasks, top_docs, config=load_config())
-            res = {"query": query, "keywords": kws, "answer": ans["answer"], "tasks": top_tasks, "documents": top_docs}
+            tasks, docs, archives, records = execute_search(query, scope="full", category=category)
+            ans = synthesize_ai_search_answer(
+                query, kws, tasks[:10], docs[:15],
+                matched_archives=archives[:8],
+                matched_records=records[:8],
+                config=load_config(),
+            )
+            res = {
+                "ok": True,
+                "query": query,
+                "keywords": kws,
+                "answer": ans["answer"],
+                "tasks": tasks[:10],
+                "documents": docs[:15],
+                "archives": archives[:8],
+                "important_records": records[:8],
+            }
         return res
     else:
-        tasks, docs = execute_search(query, scope=scope, category=category)
+        qs = urllib.parse.urlencode({"q": query, "scope": scope, "category": category})
+        res = api_call("GET", f"/api/search?{qs}")
+        if res and "tasks" in res:
+            res["ok"] = True
+            return res
+        sync_filesystem(force=False)
+        tasks, docs, archives, records = execute_search(query, scope=scope, category=category)
         return {
             "ok": True,
             "query": query,
             "scope": scope,
             "tasks": tasks,
             "documents": docs,
+            "archives": archives,
+            "important_records": records,
         }
 
 
-# ==================== 原生 MCP Server (stdio JSON-RPC 2.0) ====================
+# ==================== 原生 MCP Server (stdio JSON-RPC 2.0, 14 Tools) ====================
 MCP_TOOLS_SPEC = [
     {
         "name": "wb_list_tasks",
@@ -319,7 +483,7 @@ MCP_TOOLS_SPEC = [
     },
     {
         "name": "wb_add_task",
-        "description": "将上级来文或微信群/电话通知填入公文工作台，自动建立本地事项专属文件夹与 00_事项要求与进展.md。只需填好 summary（核心要求）与 checklist（待办细项）两块内容——不要另建“办理要点/说明书骨架/职责原文摘录/分办清单”之类文件塞进材料栏。",
+        "description": "将上级来文或微信群/电话通知填入公文工作台，自动建立本地事项专属文件夹与 00_事项要求与进展.md。只需填好 summary（核心要求）与 checklist（待办细项）两块内容。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -336,10 +500,10 @@ MCP_TOOLS_SPEC = [
                 "checklist": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "待办要求细项：逐条可勾选的动作，一条一个动作（核对/起草/填报/审签/盖章/报送/电话确认），带时间节点或报送对象；不要写“梳理办理要点”“高度重视”这类空话",
+                    "description": "待办要求细项：逐条可勾选的动作，一条一个动作，带时间节点或报送对象",
                 },
-                "progress": {"type": "string", "description": "初始进展记录（办事过程写这里，不要写成文件）"},
-                "auto_ai": {"type": "boolean", "description": "是否让内置规则引擎补全缺失字段；自己已写好 summary/checklist 时建议传 false"},
+                "progress": {"type": "string", "description": "初始进展记录"},
+                "auto_ai": {"type": "boolean", "description": "是否让内置规则引擎补全缺失字段"},
             },
         },
     },
@@ -375,7 +539,7 @@ MCP_TOOLS_SPEC = [
     },
     {
         "name": "wb_format_gb9704_docx",
-        "description": "将库内已有的任意公文或材料草稿一键排版转换为符合 GB/T 9704—2012 标准的 .docx 公文（支持联动 xkl-gw）",
+        "description": "将库内已有的任意公文或材料草稿一键排版转换为符合 GB/T 9704—2012 标准的 .docx 公文",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -388,8 +552,95 @@ MCP_TOOLS_SPEC = [
         },
     },
     {
+        "name": "wb_list_archives",
+        "description": "列出【📦 资料存档】栏目中的归档包（如 11.17会议记录、培训课件、下沉督导照片等，含每个包内的录音、照片、PPT、文档清单与本地目录路径）",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "可选按存档分类筛选（如 01_会议记录 / 02_培训课件 / 03_下沉督导照片）"},
+                "query": {"type": "string", "description": "可选关键词过滤（如 11.17 或 会议）"},
+            },
+        },
+    },
+    {
+        "name": "wb_add_archive",
+        "description": "在【📦 资料存档】栏目中按标题一次存入一个新的多媒体归档包（如“11.17会议记录”或“11.18xx事项下沉照片”），支持同时写入会议纪要/备注并挂载多份录音、照片、PPT课件、Word/Excel文件",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "存档标题，如 11.17会议记录 或 11.18危化品企业下沉照片"},
+                "category": {"type": "string", "description": "存档分类（可传现有分类或自定义新分类名，如 01_会议记录 / 02_培训课件 / 03_下沉督导照片）"},
+                "archive_date": {"type": "string", "description": "存档日期 YYYY-MM-DD（留空则自动从标题识别或取今日）"},
+                "notes_md": {"type": "string", "description": "会议纪要、培训摘要或现场下沉情况文字说明（支持 Markdown）"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "可选归纳标签数组"},
+                "file_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选：要一并存入该归档包的本机文件绝对路径数组（支持录音.mp3/.m4a、照片.jpg/.png、课件.pptx、文档.docx/.pdf/.xlsx）",
+                },
+                "is_pinned": {"type": "boolean", "description": "是否置顶"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "wb_append_archive",
+        "description": "向【📦 资料存档】中已有的某个归档包追加新文件（如补传现场照片、录音或整理好的会议纪要）或补充文字备注",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "archive_id": {"type": "integer", "description": "资料存档包 ID"},
+                "file_paths": {"type": "array", "items": {"type": "string"}, "description": "要追加的本机文件绝对路径列表"},
+                "notes_append": {"type": "string", "description": "要追加的会议纪要或备注说明"},
+            },
+            "required": ["archive_id"],
+        },
+    },
+    {
+        "name": "wb_list_records",
+        "description": "列出【📌 重要事项记录】栏目中的常备知识条目（如高密汛情基本情况、地震应急预案、重点企业底数等）",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "可选按分类筛选（如 01_汛情与防灾底数 / 02_突发事件应急预案）"},
+                "query": {"type": "string", "description": "可选关键词过滤"},
+            },
+        },
+    },
+    {
+        "name": "wb_get_record",
+        "description": "读取【📌 重要事项记录】中某条记录（支持按 ID 或标题如“高密汛情基本情况”、“地震应急预案”查询）的完整正文与关联 Word/PDF/Excel 提取数据。起草汇报材料时请先调此工具获取准确业务底数！",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id_or_title": {"type": "string", "description": "记录 ID 或标题关键词（如 高密汛情基本情况）"},
+            },
+            "required": ["id_or_title"],
+        },
+    },
+    {
+        "name": "wb_upsert_record",
+        "description": "在【📌 重要事项记录】中新建或更新一条常备知识/预案/底数记录（支持自定义分类、直接写入直读正文，或挂载 Word/PDF/Excel 原件）",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "重要事项标题，如 高密汛情基本情况 或 地震应急预案"},
+                "category": {"type": "string", "description": "所属分类（支持自定义新分类，如 01_汛情与防灾底数 / 02_突发事件应急预案）"},
+                "content_md": {"type": "string", "description": "点开即读的正文内容（支持 Markdown 标题与表格）"},
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "可选标签数组"},
+                "file_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选：关联挂载的本机 Word (.docx) / PDF (.pdf) / Excel (.xlsx) 文件绝对路径列表",
+                },
+                "is_pinned": {"type": "boolean", "description": "是否置顶速查"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
         "name": "wb_search",
-        "description": "搜索工作台中的事项、上级来文、历史公文与以前写过的材料（支持仅标题、全文检索、两段式 AI 上下文检索）",
+        "description": "四维全库搜索：同时检索【工作台待办】、【资料存档】、【重要事项记录】与【公文与材料库】（支持仅标题、FTS5 全文检索、两段式 AI 语义检索）",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -403,7 +654,7 @@ MCP_TOOLS_SPEC = [
     },
     {
         "name": "wb_read_document",
-        "description": "读取指定公文或材料（doc_id）的完整纯文本内容与本机物理路径",
+        "description": "读取指定公文或材料（doc_id）的完整纯文本内容、结构化表格/幻灯片预览数据与本机物理路径",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -414,7 +665,7 @@ MCP_TOOLS_SPEC = [
     },
     {
         "name": "wb_sync_folders",
-        "description": "立即触发本地物理文件夹与工作台 SQLite/FTS5 索引库的双向增量同步，并检查周期性工作派生",
+        "description": "立即触发本地物理文件夹（含待办事项、资料存档、重要事项记录）与工作台 SQLite/FTS5 索引库的双向增量同步，并检查周期性工作派生",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -460,22 +711,47 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if method == "resources/list":
         data = _do_list(status="in_progress")
+        recs = _do_list_records().get("important_records", [])
         resources = [
             {
                 "uri": f"workbench://task/{t['id']}",
-                "name": f"[事项 #{t['id']}] {t['title']}",
+                "name": f"[待办 #{t['id']}] {t['title']}",
                 "description": t.get("summary") or "",
                 "mimeType": "application/json",
             }
             for t in data.get("tasks", [])
+        ] + [
+            {
+                "uri": f"workbench://record/{r['id']}",
+                "name": f"[重要事项 #{r['id']}] {r['title']}",
+                "description": (r.get("content_md") or "")[:100],
+                "mimeType": "application/json",
+            }
+            for r in recs
         ]
         return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": resources}}
 
     if method == "resources/read":
         uri = str(params.get("uri") or "")
         m = urllib.parse.urlparse(uri)
+        kind = m.netloc
         tid_str = m.path.lstrip("/")
-        if tid_str.isdigit():
+        if kind == "record" and tid_str.isdigit():
+            res_obj = _do_get_record(tid_str)
+            return {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "contents": [
+                        {
+                            "uri": uri,
+                            "mimeType": "application/json",
+                            "text": json.dumps(res_obj, ensure_ascii=False, indent=2),
+                        }
+                    ]
+                },
+            }
+        elif tid_str.isdigit():
             init_db()
             conn = get_db()
             row = conn.execute("SELECT * FROM tasks WHERE id = ?", (int(tid_str),)).fetchone()
@@ -507,7 +783,6 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     fp = Path(t_args["file_path"]).expanduser().resolve()
                     if fp.is_file():
                         files.append({"filename": fp.name, "local_source_path": str(fp), "doc_role": "incoming"})
-                # 待办细项：支持数组或分号（中英文）分隔的字符串
                 raw_chk = t_args.get("checklist")
                 if isinstance(raw_chk, str):
                     chk_items = [x.strip() for x in raw_chk.replace("；", ";").split(";") if x.strip()]
@@ -553,6 +828,43 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     doc_number=t_args.get("doc_number") or "",
                     org=t_args.get("issuing_org") or "",
                 )
+            elif t_name == "wb_list_archives":
+                res = _do_list_archives(
+                    category=t_args.get("category") or "",
+                    query=t_args.get("query") or "",
+                )
+            elif t_name == "wb_add_archive":
+                res = _do_add_archive(
+                    title=t_args.get("title") or "",
+                    category=t_args.get("category") or "",
+                    archive_date=t_args.get("archive_date") or "",
+                    notes_md=t_args.get("notes_md") or "",
+                    tags=t_args.get("tags") or [],
+                    file_paths=t_args.get("file_paths") or [],
+                    is_pinned=bool(t_args.get("is_pinned", False)),
+                )
+            elif t_name == "wb_append_archive":
+                res = _do_append_archive(
+                    archive_id=int(t_args["archive_id"]),
+                    file_paths=t_args.get("file_paths") or [],
+                    notes_append=t_args.get("notes_append") or "",
+                )
+            elif t_name == "wb_list_records":
+                res = _do_list_records(
+                    category=t_args.get("category") or "",
+                    query=t_args.get("query") or "",
+                )
+            elif t_name == "wb_get_record":
+                res = _do_get_record(str(t_args.get("id_or_title") or ""))
+            elif t_name == "wb_upsert_record":
+                res = _do_upsert_record(
+                    title=t_args.get("title") or "",
+                    category=t_args.get("category") or "",
+                    content_md=t_args.get("content_md") or "",
+                    tags=t_args.get("tags") or [],
+                    file_paths=t_args.get("file_paths") or [],
+                    is_pinned=bool(t_args.get("is_pinned", False)),
+                )
             elif t_name == "wb_search":
                 res = _do_search(
                     query=t_args.get("query") or "",
@@ -561,21 +873,30 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     category=t_args.get("category") or "",
                 )
             elif t_name == "wb_read_document":
-                init_db()
-                conn = get_db()
-                row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(t_args["doc_id"]),)).fetchone()
-                conn.close()
-                if not row:
-                    res = {"ok": False, "error": "文件不存在"}
+                doc_id = int(t_args["doc_id"])
+                res = api_call("GET", f"/api/docs/{doc_id}/preview")
+                if not res:
+                    init_db()
+                    ws_root = get_workspace_root()
+                    conn = get_db()
+                    row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    conn.close()
+                    if not row:
+                        res = {"ok": False, "error": "文件不存在"}
+                    else:
+                        d = serialize_doc_light(row, ws_root=ws_root)
+                        d["extracted_text"] = row["extracted_text"] or ""
+                        d["structured_preview"] = extract_structured_preview(ws_root / row["rel_path"], doc_id=doc_id)
+                        res = {"ok": True, "document": d}
                 else:
-                    d = serialize_doc_light(row)
-                    d["extracted_text"] = row["extracted_text"] or ""
-                    res = {"ok": True, "document": d}
+                    res["ok"] = True
             elif t_name == "wb_sync_folders":
-                init_db()
-                st = sync_filesystem(force=True)
-                st["spawned_recurring"] = check_and_spawn_all_recurring()
-                res = {"ok": True, "sync_stats": st}
+                res = api_call("POST", "/api/sync", {})
+                if not res:
+                    init_db()
+                    st = sync_filesystem(force=True)
+                    st["spawned_recurring"] = check_and_spawn_all_recurring()
+                    res = {"ok": True, "sync_stats": st}
             else:
                 res = {"ok": False, "error": f"未知的 MCP 工具: {t_name}"}
 
@@ -607,7 +928,7 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def run_mcp_stdio_server() -> None:
-    """运行标准 MCP stdio 协议循环（自适应换行分隔 JSON-RPC 与 Content-Length 头部模式）"""
+    """运行标准 MCP stdio 协议循环"""
     init_db()
     while True:
         line = sys.stdin.buffer.readline()
@@ -665,7 +986,7 @@ def cmd_add(args) -> None:
     if args.checklist:
         checklist = [
             {"id": f"chk_{i+1}", "text": x.strip(), "done": False}
-            for i, x in enumerate(args.checklist.split(";"))
+            for i, x in enumerate(args.checklist.replace("；", ";").split(";"))
             if x.strip()
         ]
     payload = {
@@ -742,6 +1063,50 @@ def cmd_format_gw(args) -> None:
     print(json.dumps(res, ensure_ascii=False, indent=2))
 
 
+def cmd_archive(args) -> None:
+    action = args.archive_action
+    if action == "list":
+        print(json.dumps(_do_list_archives(category=args.category or "", query=args.query or ""), ensure_ascii=False, indent=2))
+    elif action == "add":
+        tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()]
+        res = _do_add_archive(
+            title=args.title,
+            category=args.category or "",
+            archive_date=args.date or "",
+            notes_md=args.notes or "",
+            tags=tags,
+            file_paths=args.files or [],
+            is_pinned=bool(args.pin),
+        )
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+    elif action == "append":
+        res = _do_append_archive(
+            archive_id=args.archive_id,
+            file_paths=args.files or [],
+            notes_append=args.notes or "",
+        )
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+
+
+def cmd_record(args) -> None:
+    action = args.record_action
+    if action == "list":
+        print(json.dumps(_do_list_records(category=args.category or "", query=args.query or ""), ensure_ascii=False, indent=2))
+    elif action == "get":
+        print(json.dumps(_do_get_record(args.target), ensure_ascii=False, indent=2))
+    elif action == "set":
+        tags = [t.strip() for t in (args.tags or "").split(",") if t.strip()]
+        res = _do_upsert_record(
+            title=args.title,
+            category=args.category or "",
+            content_md=args.content or "",
+            tags=tags,
+            file_paths=args.files or [],
+            is_pinned=bool(args.pin),
+        )
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+
+
 def cmd_recurring(args) -> None:
     init_db()
     if args.spawn:
@@ -760,17 +1125,20 @@ def cmd_search(args) -> None:
 
 
 def cmd_sync(args) -> None:
-    init_db()
-    stats = sync_filesystem(force=True)
-    stats["spawned_recurring"] = check_and_spawn_all_recurring()
-    print(json.dumps({"ok": True, "sync_stats": stats}, ensure_ascii=False, indent=2))
+    res = api_call("POST", "/api/sync", {})
+    if not res:
+        init_db()
+        stats = sync_filesystem(force=True)
+        stats["spawned_recurring"] = check_and_spawn_all_recurring()
+        res = {"ok": True, "sync_stats": stats}
+    print(json.dumps(res, ensure_ascii=False, indent=2))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=f"GW-Workbench v{VERSION} 本地 Agent CLI 与 MCP Server")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_list = sub.add_parser("list", help="列出工作台事项")
+    p_list = sub.add_parser("list", help="列出工作台待办事项")
     p_list.add_argument("--status", choices=["pending", "in_progress", "archived"], help="按状态筛选")
     p_list.add_argument("--category", help="按分类目录筛选")
     p_list.set_defaults(func=cmd_list)
@@ -820,11 +1188,48 @@ def main() -> None:
     p_fmt.add_argument("--org", help="自定义发文机关署名")
     p_fmt.set_defaults(func=cmd_format_gw)
 
+    # 新增：资料存档 (archive) CLI 子命令
+    p_arch = sub.add_parser("archive", help="管理【📦 资料存档】栏目（会议记录/培训课件/下沉照片等按次归档包）")
+    arch_sub = p_arch.add_subparsers(dest="archive_action", required=True)
+    p_arch_list = arch_sub.add_parser("list", help="列出资料存档包")
+    p_arch_list.add_argument("--category", help="按分类筛选")
+    p_arch_list.add_argument("--query", help="按关键词筛选")
+    p_arch_add = arch_sub.add_parser("add", help="按标题一次存入资料存档包（支持多份录音/照片/PPT/文档）")
+    p_arch_add.add_argument("--title", required=True, help="归档标题，如 11.17会议记录")
+    p_arch_add.add_argument("--category", help="分类名称（如 01_会议记录 / 02_培训课件 / 03_下沉督导照片 或自定义）")
+    p_arch_add.add_argument("--date", help="日期 YYYY-MM-DD")
+    p_arch_add.add_argument("--notes", help="会议纪要或现场说明文本")
+    p_arch_add.add_argument("--tags", help="标签，多个用逗号分隔")
+    p_arch_add.add_argument("--files", nargs="*", help="本机文件绝对路径列表")
+    p_arch_add.add_argument("--pin", action="store_true", help="置顶该存档包")
+    p_arch_app = arch_sub.add_parser("append", help="向已有存档包追加文件或纪要")
+    p_arch_app.add_argument("archive_id", type=int, help="存档包 ID")
+    p_arch_app.add_argument("--files", nargs="*", help="要追加的文件路径列表")
+    p_arch_app.add_argument("--notes", help="要追加的备注说明")
+    p_arch.set_defaults(func=cmd_archive)
+
+    # 新增：重要事项记录 (record) CLI 子命令
+    p_rec_kb = sub.add_parser("record", help="管理【📌 重要事项记录】栏目（如高密汛情基本情况、地震应急预案等常备直读库）")
+    rec_sub = p_rec_kb.add_subparsers(dest="record_action", required=True)
+    p_rec_list = rec_sub.add_parser("list", help="列出重要事项记录")
+    p_rec_list.add_argument("--category", help="按分类筛选")
+    p_rec_list.add_argument("--query", help="按关键词筛选")
+    p_rec_get = rec_sub.add_parser("get", help="读取指定重要事项记录的正文与结构化附件内容")
+    p_rec_get.add_argument("target", help="记录 ID 或标题关键词（如 高密汛情基本情况）")
+    p_rec_set = rec_sub.add_parser("set", help="新建或更新重要事项记录")
+    p_rec_set.add_argument("--title", required=True, help="事项标题，如 高密汛情基本情况")
+    p_rec_set.add_argument("--category", help="分类名称（支持自定义）")
+    p_rec_set.add_argument("--content", help="直读正文内容（Markdown）")
+    p_rec_set.add_argument("--tags", help="标签，逗号分隔")
+    p_rec_set.add_argument("--files", nargs="*", help="挂载的 Word/PDF/Excel 本机文件路径")
+    p_rec_set.add_argument("--pin", action="store_true", help="设为置顶速查")
+    p_rec_kb.set_defaults(func=cmd_record)
+
     p_rec = sub.add_parser("recurring", help="查看或手动触发周期性/常态化工作规则")
     p_rec.add_argument("--spawn", type=int, help="立即派生指定规则 ID 的本期工作事项")
     p_rec.set_defaults(func=cmd_recurring)
 
-    p_search = sub.add_parser("search", help="搜索工作台事项与公文材料库")
+    p_search = sub.add_parser("search", help="四维全库搜索（待办+公文+资料存档+重要事项记录）")
     p_search.add_argument("query", help="搜索关键词或自然语言问题")
     p_search.add_argument("--scope", choices=["title", "full"], default="full", help="title=仅标题/文号, full=标题+全文内容")
     p_search.add_argument("--ai", action="store_true", help="启用两段式 AI 语义检索与上下文提取")

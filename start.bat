@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul
-title 公文与材料智能工作台 (GW-Workbench v2.0.0)
+title 公文与材料智能工作台 (GW-Workbench v3.0.0)
 
 echo =======================================================
-echo   公文与材料智能工作台 (GW-Workbench v2.0.0)
+echo   公文与材料智能工作台 (GW-Workbench v3.0.0)
 echo =======================================================
 echo.
 

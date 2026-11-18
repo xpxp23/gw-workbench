@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>公文与材料智能工作台 (GW-Workbench v2.0.0)</title>
+  <title>公文与材料智能工作台 (GW-Workbench v3.0.0)</title>
   <style>
     :root {
       --bg: #f1f5f9;
       --surface: #ffffff;
       --surface-alt: #f8fafc;
-      --surface-hover: #f1f5f9;
+      --surface-hover: #eff6ff;
       --border: #e2e8f0;
       --border-strong: #cbd5e1;
       --text: #0f172a;
@@ -26,10 +26,12 @@
       --success-soft: #ecfdf5;
       --purple: #6d28d9;
       --purple-soft: #f5f3ff;
+      --teal: #0d9488;
+      --teal-soft: #f0fdfa;
       --topbar-bg: linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%);
       --radius: 10px;
       --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-      --shadow-hover: 0 6px 16px rgba(15, 23, 42, 0.09);
+      --shadow-hover: 0 6px 18px rgba(15, 23, 42, 0.1);
     }
 
     body.dark-mode {
@@ -49,6 +51,7 @@
       --warning-soft: rgba(217, 119, 6, 0.18);
       --success-soft: rgba(5, 150, 105, 0.18);
       --purple-soft: rgba(109, 40, 217, 0.22);
+      --teal-soft: rgba(13, 148, 136, 0.2);
       --topbar-bg: linear-gradient(135deg, #030712 0%, #0f172a 100%);
       --shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
       --shadow-hover: 0 8px 20px rgba(0, 0, 0, 0.5);
@@ -86,16 +89,16 @@
       animation: pulseLocate 1.8s ease-out 2;
     }
 
-    /* 顶部导航栏 */
+    /* 顶部紧凑一体化导航栏（适配 6 大栏目） */
     .topbar {
       background: var(--topbar-bg);
       color: #f8fafc;
-      padding: 10px 22px;
+      padding: 8px 18px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
-      gap: 12px;
+      gap: 10px;
       position: sticky;
       top: 0;
       z-index: 100;
@@ -104,17 +107,18 @@
     .brand {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       flex-wrap: wrap;
     }
     .brand-title {
-      font-size: 16.5px;
+      font-size: 15.5px;
       font-weight: 700;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.2px;
       color: #fff;
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 6px;
+      white-space: nowrap;
     }
     .ver-tag {
       font-size: 11px;
@@ -127,31 +131,34 @@
       background: rgba(255,255,255,0.12);
       border: 1px solid rgba(255,255,255,0.22);
       color: #e2e8f0;
-      font-size: 12px;
-      padding: 3px 10px;
+      font-size: 11.5px;
+      padding: 2px 9px;
       border-radius: 99px;
       cursor: pointer;
       transition: all 0.15s;
+      white-space: nowrap;
     }
     .lan-badge:hover { background: rgba(255,255,255,0.24); }
 
     .nav-tabs {
       display: flex;
-      gap: 4px;
+      gap: 3px;
       background: rgba(255,255,255,0.1);
-      padding: 4px;
+      padding: 3px;
       border-radius: 9px;
+      flex-wrap: wrap;
     }
     .nav-tab {
       border: none;
       background: transparent;
       color: #cbd5e1;
-      padding: 6px 13px;
+      padding: 5px 11px;
       border-radius: 6px;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.15s;
+      white-space: nowrap;
     }
     .nav-tab.active {
       background: #2563eb;
@@ -166,15 +173,15 @@
     .top-actions {
       display: flex;
       align-items: center;
-      gap: 7px;
+      gap: 6px;
     }
     .btn {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      padding: 6px 12px;
+      padding: 5px 11px;
       border-radius: 7px;
-      font-size: 13px;
+      font-size: 12.5px;
       font-weight: 600;
       border: 1px solid var(--border);
       background: var(--surface);
@@ -193,151 +200,83 @@
     .btn-success:hover { background: #047857; color: #fff; }
     .btn-purple { background: var(--purple); color: #fff; border-color: var(--purple); }
     .btn-purple:hover { background: #5b21b6; color: #fff; }
+    .btn-teal { background: var(--teal); color: #fff; border-color: var(--teal); }
+    .btn-teal:hover { background: #0f766e; color: #fff; }
     .btn-danger-ghost { color: var(--danger); border-color: #fecaca; background: var(--surface); }
     .btn-danger-ghost:hover { background: var(--danger-soft); }
 
     .mode-pill {
-      padding: 5px 12px;
+      padding: 4px 10px;
       border-radius: 99px;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 600;
       cursor: pointer;
       border: 1px solid transparent;
+      white-space: nowrap;
     }
     .mode-edit { background: #059669; color: #fff; }
     .mode-view { background: rgba(255,255,255,0.14); color: #f1f5f9; border-color: rgba(255,255,255,0.28); }
 
     /* 主容器 */
     .container {
-      max-width: 1480px;
+      max-width: 1520px;
       margin: 0 auto;
-      padding: 14px 20px 44px;
+      padding: 10px 18px 44px;
     }
 
-    /* 政务驾驶舱 KPI 统计磁贴条 */
-    .kpi-strip {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-    @media (max-width: 980px) {
-      .kpi-strip { grid-template-columns: repeat(2, 1fr); }
-    }
-    .kpi-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 10px 14px;
+    /* 紧凑融合式顶部状态条（局域网公告 + 置顶共享 + 全局搜索二合一） */
+    .top-utility-strip {
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      cursor: pointer;
-      box-shadow: var(--shadow);
-      transition: all 0.15s;
-    }
-    .kpi-card:hover {
-      transform: translateY(-1px);
-      box-shadow: var(--shadow-hover);
-      border-color: var(--primary);
-    }
-    .kpi-label {
-      font-size: 12.5px;
-      color: var(--text-muted);
-      font-weight: 600;
-    }
-    .kpi-val {
-      font-size: 22px;
-      font-weight: 800;
-      line-height: 1.15;
-      margin-top: 2px;
-    }
-    .kpi-icon {
-      font-size: 22px;
-      opacity: 0.85;
-    }
-
-    /* 局域网公告与置顶共享栏 */
-    .lan-banner {
-      background: var(--primary-soft);
-      border: 1px solid var(--border-strong);
-      border-radius: var(--radius);
-      padding: 9px 15px;
-      margin-bottom: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
       gap: 10px;
-    }
-    .lan-pinned-list {
-      display: flex;
       align-items: center;
+      justify-content: space-between;
       flex-wrap: wrap;
-      gap: 8px;
-    }
-    .pinned-chip {
-      background: var(--surface);
-      border: 1px solid #93c5fd;
-      color: var(--primary);
-      padding: 3px 10px;
-      border-radius: 6px;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      text-decoration: none;
-    }
-    .pinned-chip:hover { background: var(--surface-hover); }
-
-    /* 全局强搜索栏 */
-    .search-panel {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius);
-      padding: 11px 15px;
-      margin-bottom: 14px;
+      padding: 8px 12px;
+      margin-bottom: 10px;
       box-shadow: var(--shadow);
     }
     .search-row {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       align-items: center;
+      flex: 1.2;
+      min-width: 320px;
       flex-wrap: wrap;
     }
     .search-input-wrap {
       flex: 1;
-      min-width: 260px;
+      min-width: 220px;
       position: relative;
       display: flex;
       align-items: center;
     }
     .search-input {
       width: 100%;
-      padding: 8px 14px;
+      padding: 6px 12px;
       border: 1.5px solid var(--border-strong);
-      border-radius: 8px;
-      font-size: 13.5px;
-      background: var(--surface);
+      border-radius: 7px;
+      font-size: 13px;
+      background: var(--surface-alt);
       color: var(--text);
       outline: none;
-      transition: border-color 0.15s;
+      transition: border-color 0.15s, background 0.15s;
     }
-    .search-input:focus { border-color: var(--primary); }
+    .search-input:focus { border-color: var(--primary); background: var(--surface); }
     .scope-group {
       display: inline-flex;
       border: 1px solid var(--border-strong);
-      border-radius: 8px;
+      border-radius: 7px;
       overflow: hidden;
       background: var(--surface-alt);
     }
     .scope-btn {
       border: none;
       background: transparent;
-      padding: 7px 12px;
-      font-size: 12.5px;
+      padding: 5px 10px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--text-secondary);
       cursor: pointer;
@@ -347,10 +286,35 @@
       color: #fff;
     }
 
+    .lan-pinned-list {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .pinned-chip {
+      background: var(--primary-soft);
+      border: 1px solid #93c5fd;
+      color: var(--primary);
+      padding: 2px 9px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      text-decoration: none;
+    }
+    .pinned-chip:hover { background: var(--surface-hover); }
+
     .search-results-box {
-      margin-top: 12px;
-      border-top: 1px solid var(--border);
-      padding-top: 12px;
+      background: var(--surface);
+      border: 1px solid var(--primary);
+      border-radius: var(--radius);
+      padding: 12px 15px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow-hover);
       display: none;
     }
     .ai-answer-card {
@@ -364,15 +328,15 @@
       line-height: 1.65;
     }
 
-    /* 全能极速投喂框 (Omnibox) */
+    /* 聚焦自动展开式全能投喂框 (Compact Omnibox) */
     .omnibox {
       background: var(--surface);
       border: 1.5px dashed #60a5fa;
       border-radius: var(--radius);
-      padding: 12px 15px;
-      margin-bottom: 14px;
+      padding: 9px 13px;
+      margin-bottom: 10px;
       box-shadow: var(--shadow);
-      transition: all 0.15s;
+      transition: all 0.18s;
     }
     .omnibox.dragover {
       border-color: var(--primary);
@@ -380,37 +344,36 @@
     }
     .omnibox-top {
       display: flex;
-      gap: 10px;
-      align-items: flex-start;
+      gap: 8px;
+      align-items: center;
     }
     .omnibox-textarea {
       flex: 1;
-      min-height: 54px;
-      max-height: 180px;
+      height: 36px;
+      min-height: 36px;
+      max-height: 160px;
       resize: vertical;
-      padding: 8px 12px;
+      padding: 6px 11px;
       border: 1px solid var(--border-strong);
-      border-radius: 8px;
-      font-size: 13.5px;
+      border-radius: 7px;
+      font-size: 13px;
       background: var(--surface-alt);
       color: var(--text);
       font-family: inherit;
+      transition: height 0.18s ease;
     }
-    .omnibox-textarea:focus { outline: none; border-color: var(--primary); background: var(--surface); }
+    .omnibox-textarea:focus,
+    .omnibox.expanded .omnibox-textarea {
+      height: 68px;
+      outline: none;
+      border-color: var(--primary);
+      background: var(--surface);
+    }
     .omnibox-controls {
       display: flex;
-      flex-direction: column;
       gap: 6px;
-    }
-    .omnibox-meta {
-      margin-top: 8px;
-      display: flex;
       align-items: center;
-      justify-content: space-between;
       flex-wrap: wrap;
-      gap: 8px;
-      font-size: 12px;
-      color: var(--text-muted);
     }
     .pending-files-bar {
       display: flex;
@@ -430,23 +393,23 @@
       gap: 6px;
     }
 
-    /* 过滤工具栏 */
+    /* 过滤工具栏（融合 KPI 计数） */
     .filter-bar {
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 12px;
+      gap: 8px;
+      margin-bottom: 10px;
     }
     .pill-group {
       display: flex;
-      gap: 6px;
+      gap: 5px;
       flex-wrap: wrap;
       align-items: center;
     }
     .filter-pill {
-      padding: 5px 12px;
+      padding: 4px 11px;
       border-radius: 99px;
       border: 1px solid var(--border);
       background: var(--surface);
@@ -466,14 +429,14 @@
     .tasks-grid {
       display: flex;
       flex-direction: column;
-      gap: 11px;
+      gap: 10px;
     }
     .task-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-left: 5px solid var(--primary);
       border-radius: var(--radius);
-      padding: 13px 16px;
+      padding: 12px 15px;
       box-shadow: var(--shadow);
       transition: box-shadow 0.15s, border-color 0.15s;
     }
@@ -482,13 +445,13 @@
     .task-card.level-warning { border-left-color: var(--warning); }
     .task-card.level-normal { border-left-color: var(--primary); }
     .task-card.level-routine { border-left-color: #64748b; }
-    .task-card.level-archived { border-left-color: var(--success); opacity: 0.92; }
+    .task-card.level-archived { border-left-color: var(--success); opacity: 0.93; }
 
     .task-header {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
-      gap: 12px;
+      gap: 10px;
       flex-wrap: wrap;
     }
     .task-title-wrap {
@@ -502,7 +465,7 @@
       gap: 7px;
     }
     .task-title {
-      font-size: 15.5px;
+      font-size: 15px;
       font-weight: 700;
       color: var(--text);
       cursor: pointer;
@@ -511,29 +474,26 @@
     .task-submeta {
       font-size: 12px;
       color: var(--text-muted);
-      margin-top: 3px;
+      margin-top: 2px;
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 7px;
     }
 
-    /* 视觉完成度进度条 */
     .chk-progress-track {
       height: 4px;
       background: var(--border);
       border-radius: 99px;
       overflow: hidden;
-      margin: 7px 0 4px;
+      margin: 6px 0 4px;
     }
     .chk-progress-fill {
       height: 100%;
       background: var(--primary);
       transition: width 0.25s ease, background 0.25s ease;
     }
-    .chk-progress-fill.complete {
-      background: var(--success);
-    }
+    .chk-progress-fill.complete { background: var(--success); }
 
     .badge {
       padding: 2px 8px;
@@ -549,23 +509,22 @@
     .badge-normal { background: var(--primary-soft); color: var(--primary); border: 1px solid #bfdbfe; }
     .badge-routine { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border-strong); }
     .badge-archived { background: var(--success-soft); color: var(--success); border: 1px solid #a7f3d0; }
+    .badge-teal { background: var(--teal-soft); color: var(--teal); border: 1px solid #99f6e4; }
 
     .task-summary {
       font-size: 13px;
       color: var(--text-secondary);
       background: var(--surface-alt);
-      padding: 7px 11px;
+      padding: 6px 10px;
       border-radius: 7px;
-      margin: 6px 0 9px;
+      margin: 5px 0 8px;
       border: 1px solid var(--border);
     }
 
     .task-body-grid {
       display: grid;
       grid-template-columns: 1.06fr 1fr 1.4fr;
-      gap: 11px;
-      /* 各栏按自身内容高度收缩：矮的那栏不再被拉到跟文件柜一样高，
-         从而消除【内容已结束、底部却空出一大块】的观感 */
+      gap: 10px;
       align-items: start;
     }
     @media (max-width: 1100px) {
@@ -575,7 +534,7 @@
       background: var(--surface-alt);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 9px 11px;
+      padding: 8px 10px;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
@@ -584,7 +543,7 @@
       font-size: 12px;
       font-weight: 700;
       color: var(--text-secondary);
-      margin-bottom: 6px;
+      margin-bottom: 5px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -594,10 +553,9 @@
       list-style: none;
       display: flex;
       flex-direction: column;
-      gap: 5px;
-      margin-bottom: 6px;
-      /* 只在细项确实很多时才出现滚动条，短清单自然展开 */
-      max-height: 340px;
+      gap: 4px;
+      margin-bottom: 5px;
+      max-height: 300px;
       overflow-y: auto;
       padding-right: 2px;
     }
@@ -657,11 +615,9 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
-      /* 原来卡死在 115px，明明还有地方却先出了拖动条；改为按内容展开，
-         仅当流水超过 300px 时才滚动 */
-      max-height: 300px;
+      max-height: 280px;
       overflow-y: auto;
-      margin-bottom: 6px;
+      margin-bottom: 5px;
       padding-right: 2px;
     }
     .prog-item {
@@ -677,7 +633,6 @@
       margin-right: 4px;
     }
 
-    /* 双栏文件柜：窗口窄的时候自动收成一栏，让长文件名有更大的换行宽度 */
     .dual-files {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
@@ -688,8 +643,7 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 0 9px 7px;
-      /* 文件很多时在本栏内滚动，不把整张卡片撑得过高 */
-      max-height: 340px;
+      max-height: 320px;
       overflow-y: auto;
     }
     .file-col .sub-box-title {
@@ -697,17 +651,15 @@
       top: 0;
       z-index: 1;
       background: var(--surface);
-      padding: 7px 0 5px;
+      padding: 6px 0 4px;
       margin-bottom: 0;
     }
     .file-item {
-      /* 文件名占满整行、自动换行；操作按钮排到文件名下面，
-         这样长文件名（来文标题常常很长）能完整显示，不再被截成半截 */
       display: flex;
       flex-direction: column;
       align-items: stretch;
       gap: 3px;
-      padding: 5px 0;
+      padding: 4px 0;
       border-bottom: 1px dashed var(--border);
       font-size: 12px;
     }
@@ -730,8 +682,8 @@
     .file-name-link:hover { text-decoration: underline; }
 
     .ref-bar {
-      margin-top: 8px;
-      padding-top: 7px;
+      margin-top: 7px;
+      padding-top: 6px;
       border-top: 1px dashed var(--border);
       display: flex;
       align-items: center;
@@ -774,22 +726,22 @@
       background: var(--surface-alt);
       color: var(--text-secondary);
       text-align: left;
-      padding: 10px 12px;
+      padding: 9px 12px;
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
     table.ledger-table td {
-      padding: 9px 12px;
+      padding: 8px 12px;
       border-bottom: 1px solid var(--border);
       vertical-align: middle;
     }
     table.ledger-table tr:hover td { background: var(--surface-hover); }
 
-    /* 独立【公文与材料库】布局 */
+    /* 左分类栏 + 右内容区通用双栏布局（用于公文库、资料存档、重要事项记录） */
     .library-layout {
       display: grid;
-      grid-template-columns: 270px 1fr;
-      gap: 16px;
+      grid-template-columns: 265px 1fr;
+      gap: 15px;
       align-items: start;
     }
     @media (max-width: 920px) {
@@ -801,6 +753,8 @@
       border-radius: var(--radius);
       padding: 12px;
       box-shadow: var(--shadow);
+      position: sticky;
+      top: 62px;
     }
     .cat-list {
       list-style: none;
@@ -810,7 +764,7 @@
       margin-top: 8px;
     }
     .cat-item {
-      padding: 7px 10px;
+      padding: 6px 10px;
       border-radius: 7px;
       cursor: pointer;
       display: flex;
@@ -834,9 +788,237 @@
     }
     .cat-ops {
       display: none;
-      gap: 4px;
+      gap: 3px;
     }
     .cat-item:hover .cat-ops { display: inline-flex; }
+
+    /* ==================== 新增栏目 5：📦 资料存档 (Archive Bundles) 样式 ==================== */
+    .archive-intake-box {
+      background: var(--surface);
+      border: 1.5px dashed var(--teal);
+      border-radius: var(--radius);
+      padding: 12px 15px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow);
+    }
+    .archive-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 5px solid var(--teal);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 11px;
+      box-shadow: var(--shadow);
+      transition: box-shadow 0.15s;
+    }
+    .archive-card:hover { box-shadow: var(--shadow-hover); }
+    .archive-card.pinned { border-left-color: var(--warning); }
+    .archive-photo-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(135px, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .archive-photo-thumb {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      overflow: hidden;
+      background: var(--surface-alt);
+      cursor: pointer;
+      transition: transform 0.15s, border-color 0.15s;
+      display: flex;
+      flex-direction: column;
+    }
+    .archive-photo-thumb:hover {
+      transform: translateY(-2px);
+      border-color: var(--primary);
+    }
+    .archive-photo-thumb img {
+      width: 100%;
+      height: 96px;
+      object-fit: cover;
+      display: block;
+      background: #0f172a;
+    }
+    .archive-photo-caption {
+      font-size: 11px;
+      padding: 4px 6px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .archive-audio-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 10px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+    .archive-audio-row audio {
+      height: 32px;
+      flex: 1;
+      min-width: 220px;
+    }
+
+    /* ==================== 新增栏目 6：📌 重要事项记录 (左树 + 右直读画布) 样式 ==================== */
+    .records-split-layout {
+      display: grid;
+      grid-template-columns: 310px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 960px) {
+      .records-split-layout { grid-template-columns: 1fr; }
+    }
+    .records-nav-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      box-shadow: var(--shadow);
+      max-height: calc(100vh - 135px);
+      overflow-y: auto;
+      position: sticky;
+      top: 62px;
+    }
+    .record-tree-item {
+      padding: 8px 10px;
+      border-radius: 7px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      margin-bottom: 4px;
+      transition: all 0.15s;
+    }
+    .record-tree-item:hover {
+      background: var(--surface-hover);
+    }
+    .record-tree-item.active {
+      background: var(--primary-soft);
+      border-color: #93c5fd;
+    }
+    .record-reader-canvas {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-height: calc(100vh - 135px);
+      display: flex;
+      flex-direction: column;
+    }
+    .record-reader-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-alt);
+      border-radius: var(--radius) var(--radius) 0 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .record-reader-body {
+      padding: 20px 26px;
+      flex: 1;
+    }
+    .record-att-tabs {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 14px;
+      align-items: center;
+    }
+    .record-att-tab {
+      padding: 5px 12px;
+      border-radius: 7px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface-alt);
+      color: var(--text-secondary);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .record-att-tab.active {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+
+    /* Markdown 与多格式直读通用排版样式（修复表格碎裂与段落盲目缩进 Bug） */
+    .preview-rendered-box {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-size: 15px;
+      line-height: 1.78;
+      color: var(--text);
+      flex: 1;
+      overflow-y: auto;
+    }
+    .preview-rendered-box h1 { font-size: 20px; text-align: center; margin-bottom: 14px; color: var(--text); }
+    .preview-rendered-box h2 { font-size: 16.5px; margin: 14px 0 8px; color: var(--primary); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+    .preview-rendered-box h3 { font-size: 15px; margin: 10px 0 5px; color: var(--text); }
+    .preview-rendered-box p { margin-bottom: 8px; }
+    .preview-rendered-box p.indent-p { text-indent: 2em; }
+    .preview-rendered-box ul, .preview-rendered-box ol { padding-left: 22px; margin-bottom: 10px; }
+    .preview-rendered-box li { margin-bottom: 4px; }
+    .preview-rendered-box blockquote {
+      border-left: 3px solid var(--primary);
+      background: var(--primary-soft);
+      padding: 8px 12px;
+      margin: 8px 0;
+      border-radius: 0 6px 6px 0;
+      font-size: 14px;
+    }
+    .preview-rendered-box pre {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 10px 14px;
+      border-radius: 7px;
+      overflow-x: auto;
+      font-family: monospace;
+      font-size: 13px;
+      margin: 8px 0;
+    }
+    table.md-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0 14px;
+      font-size: 13.5px;
+      background: var(--surface);
+    }
+    table.md-table th, table.md-table td {
+      border: 1px solid var(--border-strong);
+      padding: 7px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    table.md-table th {
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    table.md-table tr:hover td { background: var(--surface-hover); }
+
+    .slide-card-preview {
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-left: 4px solid var(--purple);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 10px;
+    }
 
     .batch-bar {
       background: #1e293b;
@@ -877,7 +1059,7 @@
       top: 0;
       right: 0;
       bottom: 0;
-      width: min(760px, 95vw);
+      width: min(820px, 95vw);
       background: var(--surface);
       z-index: 201;
       box-shadow: -4px 0 24px rgba(0,0,0,0.22);
@@ -886,7 +1068,7 @@
       transition: width 0.22s ease;
     }
     .drawer.split-mode {
-      width: min(1260px, 97vw);
+      width: min(1320px, 97vw);
     }
     .drawer-header {
       padding: 12px 18px;
@@ -938,22 +1120,6 @@
       flex-direction: column;
       min-width: 0;
     }
-    .preview-rendered-box {
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 16px 20px;
-      font-size: 15px;
-      line-height: 1.8;
-      color: var(--text);
-      flex: 1;
-      overflow-y: auto;
-    }
-    .preview-rendered-box h1 { font-size: 19px; text-align: center; margin-bottom: 12px; }
-    .preview-rendered-box h2 { font-size: 16px; margin: 12px 0 6px; color: var(--primary); }
-    .preview-rendered-box h3 { font-size: 14.5px; margin: 9px 0 4px; }
-    .preview-rendered-box p { margin-bottom: 8px; text-indent: 2em; }
-    .preview-rendered-box ul { padding-left: 22px; margin-bottom: 8px; }
     .editor-textarea {
       width: 100%;
       flex: 1;
@@ -979,11 +1145,11 @@
       border-radius: 6px;
     }
 
-    /* 弹窗 Modal */
+    /* 弹窗 Modal 与全屏照片灯箱 */
     .modal-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.48);
+      background: rgba(15, 23, 42, 0.52);
       z-index: 300;
       display: none;
       align-items: center;
@@ -994,7 +1160,7 @@
       background: var(--surface);
       color: var(--text);
       border-radius: 12px;
-      width: min(650px, 96vw);
+      width: min(680px, 96vw);
       max-height: 90vh;
       overflow-y: auto;
       box-shadow: 0 10px 30px rgba(0,0,0,0.25);
@@ -1056,31 +1222,33 @@
 </head>
 <body>
 
-  <!-- 顶部导航栏 -->
+  <!-- 顶部六栏目一体化导航栏 -->
   <header class="topbar">
     <div class="brand">
       <div class="brand-title">
         🏛️ 公文与材料智能工作台
-        <span class="ver-tag" id="verBadge">v2.0.0</span>
+        <span class="ver-tag" id="verBadge">v3.0.0</span>
       </div>
       <span class="lan-badge" id="lanUrlBadge" onclick="copyLanUrl()" title="点击复制局域网访问链接发给同事">
         🌐 局域网共享加载中...
       </span>
       <span class="lan-badge" id="localDirBadge" onclick="openOrCopyWorkspaceRoot()" title="本机点击直接打开物理文件夹，局域网点击复制路径">
-        📂 本地资料库目录
+        📂 本地资料库
       </span>
     </div>
 
-    <div class="nav-tabs">
+    <div class="nav-tabs" title="支持快捷键 Alt+1 ~ Alt+6 极速切换栏目">
       <button class="nav-tab active" id="tabBtnWorkbench" onclick="switchMainTab('workbench')">📋 工作台待办 (<span id="navCntActive">0</span>)</button>
+      <button class="nav-tab" id="tabBtnArchives" onclick="switchMainTab('archives')">📦 资料存档 (<span id="archCountBadge">0</span>)</button>
+      <button class="nav-tab" id="tabBtnRecords" onclick="switchMainTab('records')">📌 重要事项记录 (<span id="recKbCountBadge">0</span>)</button>
       <button class="nav-tab" id="tabBtnLibrary" onclick="switchMainTab('library')">🗂️ 公文与材料库 (<span id="libCountBadge">0</span>)</button>
-      <button class="nav-tab" id="tabBtnRecurring" onclick="switchMainTab('recurring')">🔁 周期性工作派生 (<span id="recCountBadge">0</span>)</button>
+      <button class="nav-tab" id="tabBtnRecurring" onclick="switchMainTab('recurring')">🔁 周期性派生 (<span id="recCountBadge">0</span>)</button>
       <button class="nav-tab" id="tabBtnSummary" onclick="switchMainTab('summary')">📊 台账导出与总结</button>
     </div>
 
     <div class="top-actions">
-      <button class="btn btn-sm" onclick="triggerDiskSync()" title="双向同步本地文件夹（含本地对 00_事项要求与进展.md 的修改与新增 WPS 材料）">
-        🔄 双向同步目录
+      <button class="btn btn-sm" onclick="triggerDiskSync()" title="双向同步本地文件夹（含待办、资料存档、重要事项记录与 WPS 修改）">
+        🔄 双向同步
       </button>
       <button class="btn btn-sm" onclick="toggleTheme()" id="themeBtn" title="切换政务蓝白 / 护眼深色模式">🌙</button>
       <span class="mode-pill mode-view" id="modeBadge" onclick="toggleEditMode()">
@@ -1091,121 +1259,72 @@
   </header>
 
   <main class="container">
-    <!-- 政务驾驶舱 KPI 统计磁贴条 -->
-    <section class="kpi-strip">
-      <div class="kpi-card" onclick="quickFilterByKpi('urgent')">
-        <div>
-          <div class="kpi-label">🔴 临期 / 超期急件</div>
-          <div class="kpi-val" style="color:var(--danger);" id="kpiUrgent">0</div>
-        </div>
-        <span class="kpi-icon">⏰</span>
-      </div>
-      <div class="kpi-card" onclick="quickFilterByKpi('in_progress')">
-        <div>
-          <div class="kpi-label">🔄 正在推进事项</div>
-          <div class="kpi-val" style="color:var(--primary);" id="kpiInProgress">0</div>
-        </div>
-        <span class="kpi-icon">⚡</span>
-      </div>
-      <div class="kpi-card" onclick="quickFilterByKpi('pending')">
-        <div>
-          <div class="kpi-label">⏳ 待办事项</div>
-          <div class="kpi-val" style="color:var(--warning);" id="kpiPending">0</div>
-        </div>
-        <span class="kpi-icon">📥</span>
-      </div>
-      <div class="kpi-card" onclick="quickFilterByKpi('archived')">
-        <div>
-          <div class="kpi-label">✅ 已办结归档</div>
-          <div class="kpi-val" style="color:var(--success);" id="kpiArchived">0</div>
-        </div>
-        <span class="kpi-icon">🗂️</span>
-      </div>
-      <div class="kpi-card" onclick="switchMainTab('library')">
-        <div>
-          <div class="kpi-label">📚 库内公文与材料</div>
-          <div class="kpi-val" style="color:var(--purple);" id="kpiDocs">0</div>
-        </div>
-        <span class="kpi-icon">📄</span>
-      </div>
-    </section>
-
-    <!-- 局域网公告与置顶共享栏 -->
-    <div class="lan-banner" id="lanBanner">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <span id="lanNoticeText" style="font-weight:600;color:var(--primary);"></span>
-      </div>
-      <div class="lan-pinned-list" id="lanPinnedList"></div>
-    </div>
-
-    <!-- 全局搜索与 AI 搜索框 -->
-    <section class="search-panel">
+    <!-- 紧凑二合一顶栏：全局四维强检索 + 置顶速查芯片 -->
+    <section class="top-utility-strip">
       <div class="search-row">
         <div class="search-input-wrap">
           <input type="text" id="globalSearchInput" class="search-input"
-            placeholder="输入关键词实时秒搜 (Ctrl+K)，或输入自然语言问题点【AI 智能搜索】..."
+            placeholder="🔍 四维全库秒搜 (Ctrl+K)：搜待办、11.17会议记录、高密汛情、公文正文..."
             oninput="handleSearchDebounce()"
             onkeydown="if(event.key==='Enter') runUserSearch()" />
         </div>
         <div class="scope-group">
-          <button class="scope-btn" id="scopeTitleBtn" onclick="setSearchScope('title')">仅搜标题/文号</button>
-          <button class="scope-btn active" id="scopeFullBtn" onclick="setSearchScope('full')">标题 + 正文内容(FTS5)</button>
+          <button class="scope-btn" id="scopeTitleBtn" onclick="setSearchScope('title')">仅标题</button>
+          <button class="scope-btn active" id="scopeFullBtn" onclick="setSearchScope('full')">标题+全文(FTS5)</button>
         </div>
-        <button class="btn btn-primary" onclick="runUserSearch()">🔍 检索</button>
-        <button class="btn btn-purple" onclick="runAiSemanticSearch()">🤖 AI 智能搜索与问答</button>
-        <button class="btn btn-sm" id="clearSearchBtn" style="display:none;" onclick="clearSearch()">✖ 关闭搜索</button>
+        <button class="btn btn-primary btn-sm" onclick="runUserSearch()">检索</button>
+        <button class="btn btn-purple btn-sm" onclick="runAiSemanticSearch()">🤖 AI 问答检索</button>
+        <button class="btn btn-xs" id="clearSearchBtn" style="display:none;" onclick="clearSearch()">✖ 关闭</button>
       </div>
 
-      <div class="search-results-box" id="searchResultsBox">
-        <div id="aiSearchAnswerWrap"></div>
-        <div id="searchMatchedContent"></div>
-      </div>
+      <div class="lan-pinned-list" id="lanPinnedList"></div>
     </section>
 
-    <!-- ==================== TAB 1: 工作台待办与台账 ==================== -->
+    <!-- 搜索结果浮层面板 -->
+    <section class="search-results-box" id="searchResultsBox">
+      <div id="aiSearchAnswerWrap"></div>
+      <div id="searchMatchedContent"></div>
+    </section>
+
+    <!-- ==================== TAB 1: 📋 工作台待办 ==================== -->
     <section id="tabWorkbench">
-      <!-- 全能极速投喂框（支持粘贴文字、Ctrl+V 直接粘贴微信截图或拖拽文件） -->
+      <!-- 紧凑智能投喂台（聚焦或拖入文件自动展开，释放首屏高度） -->
       <div class="omnibox" id="omniboxPanel"
-           ondragover="event.preventDefault(); this.classList.add('dragover');"
+           ondragover="event.preventDefault(); this.classList.add('dragover', 'expanded');"
            ondragleave="this.classList.remove('dragover');"
            ondrop="handleOmniboxDrop(event)">
         <div class="omnibox-top">
           <textarea id="omniText" class="omnibox-textarea"
+            onfocus="document.getElementById('omniboxPanel').classList.add('expanded')"
             onpaste="handleOmniboxPaste(event)"
-            placeholder="⚡ 全能投喂台：直接在此粘贴【微信群通知文字 / 电话记录 / Ctrl+V 粘贴微信通知截图】，或把上级来文 (.ofd / .docx / .pdf / .wps / .txt) 拖入此区域，AI 一键拆解文号、截止期与待办清单并自动创建本地专属文件夹！"></textarea>
+            placeholder="⚡ 极速投喂待办：粘贴【微信群通知文字 / 电话记录 / Ctrl+V 粘贴截图】，或将上级来文 (.ofd/.docx/.pdf/.wps) 拖入此处，AI 一键拆解文号、截止期与待办清单！"></textarea>
           <div class="omnibox-controls">
-            <button class="btn btn-primary" onclick="quickCreateFromOmnibox(false)">🤖 AI 一键解析入库</button>
-            <button class="btn btn-sm" onclick="quickCreateFromOmnibox(true)">📝 预览/微调后入库</button>
-          </div>
-        </div>
-        <div class="pending-files-bar" id="omniPendingFiles"></div>
-        <div class="omnibox-meta">
-          <div>
-            <label class="btn btn-sm" style="cursor:pointer;">
-              📎 挂载来文或附件 (.ofd/.docx/.pdf/.wps/截图)
+            <label class="btn btn-sm" style="cursor:pointer;" title="挂载来文原件或截图">
+              📎 传文件
               <input type="file" id="omniFileInput" multiple style="display:none;" onchange="handleOmniFileSelect(this.files)" />
             </label>
-            <span style="margin-left:8px;">来源预设：</span>
-            <select id="omniSourceSelect" class="form-control" style="display:inline-block;width:auto;padding:3px 8px;font-size:12px;">
-              <option value="">自动识别</option>
+            <select id="omniSourceSelect" class="form-control" style="width:auto;padding:4px 7px;font-size:12px;">
+              <option value="">自动识别渠道</option>
               <option value="上级来文">上级来文</option>
               <option value="微信群">微信群</option>
               <option value="电话通知">电话通知</option>
               <option value="自建">日常自建</option>
             </select>
+            <button class="btn btn-primary btn-sm" onclick="quickCreateFromOmnibox(false)">🤖 一键入库</button>
+            <button class="btn btn-sm" onclick="quickCreateFromOmnibox(true)">📝 微调入库</button>
           </div>
-          <span>💡 支持【✍️ 双栏对照在线写材料】+ 一键排版为带 `— 1 —` 页码的 GB/T 9704 国标 .docx 公文！</span>
         </div>
+        <div class="pending-files-bar" id="omniPendingFiles"></div>
       </div>
 
-      <!-- 过滤与视图切换栏 -->
+      <!-- 融合 KPI 统计的状态过滤与视图切换栏 -->
       <div class="filter-bar">
         <div class="pill-group" id="wbStatusPills">
           <button class="filter-pill active" data-status="active" onclick="setTaskStatusFilter('active', this)">🔥 待办与进行中 (<span id="cntActive">0</span>)</button>
           <button class="filter-pill" data-status="urgent" onclick="setTaskStatusFilter('urgent', this)">🔴 临期/超期 (<span id="cntUrgent">0</span>)</button>
           <button class="filter-pill" data-status="in_progress" onclick="setTaskStatusFilter('in_progress', this)">🔄 进行中 (<span id="cntInProgress">0</span>)</button>
           <button class="filter-pill" data-status="pending" onclick="setTaskStatusFilter('pending', this)">⏳ 待办 (<span id="cntPending">0</span>)</button>
-          <button class="filter-pill" data-status="archived" onclick="setTaskStatusFilter('archived', this)">✅ 已完成归档 (<span id="cntArchived">0</span>)</button>
+          <button class="filter-pill" data-status="archived" onclick="setTaskStatusFilter('archived', this)">✅ 已办结归档 (<span id="cntArchived">0</span>)</button>
           <button class="filter-pill" data-status="all" onclick="setTaskStatusFilter('all', this)">全部 (<span id="cntAll">0</span>)</button>
         </div>
 
@@ -1213,7 +1332,7 @@
           <select id="wbCatFilter" class="form-control" style="padding:4px 10px;font-size:12.5px;" onchange="renderTasks()">
             <option value="">📂 所有业务分类</option>
           </select>
-          <button class="btn btn-sm" onclick="toggleCollapseAllTasks()" title="一键折叠或展开全部事项卡片">↕️ 折叠/展开全部</button>
+          <button class="btn btn-sm" onclick="toggleCollapseAllTasks()" title="一键折叠或展开全部事项卡片（状态自动记忆）">↕️ 折叠/展开全部</button>
           <button class="btn btn-sm" id="viewModeCardBtn" onclick="setTaskViewMode('card')">🗂️ 卡片视图</button>
           <button class="btn btn-sm" id="viewModeTableBtn" onclick="setTaskViewMode('table')">📑 紧凑台账表</button>
         </div>
@@ -1222,13 +1341,106 @@
       <div id="tasksContainer"></div>
     </section>
 
-    <!-- ==================== TAB 2: 独立【公文与材料库（分类归纳中心）】 ==================== -->
+    <!-- ==================== TAB 2 (新增): 📦 资料存档 (按标题/次存入会议记录、培训课件、下沉照片等) ==================== -->
+    <section id="tabArchives" style="display:none;">
+      <div class="library-layout">
+        <aside class="cat-sidebar">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <strong style="font-size:13.5px;">📦 资料存档分类</strong>
+            <button class="btn btn-xs btn-teal" onclick="createScopeCategoryPrompt('archive')" id="btnNewArchCat">+ 新建分类</button>
+          </div>
+          <p style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
+            💡 支持自定义分类（会议记录 / 培训课件 / 下沉照片等），每次按标题打包存入录音、图片、PPT与文档。
+          </p>
+          <ul class="cat-list" id="archiveCategoryList"></ul>
+        </aside>
+
+        <div>
+          <!-- 按次极速存入归档包面板 -->
+          <div class="archive-intake-box" id="archiveIntakeBox"
+               ondragover="event.preventDefault(); this.style.background='var(--teal-soft)';"
+               ondragleave="this.style.background='var(--surface)';"
+               ondrop="handleArchiveIntakeDrop(event)"
+               onpaste="handleArchiveIntakePaste(event)">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+              <div style="font-weight:700;color:var(--teal);font-size:14px;">
+                ⚡ 按标题一次存入资料存档包（支持混装：录音 .mp3/.m4a + 现场照片 .jpg/.png + 课件 .pptx + 纪要 .docx/.md）
+              </div>
+              <button class="btn btn-xs" onclick="fillArchiveTodayPrefix()">📅 填入今日日期前缀</button>
+            </div>
+            <div style="display:grid;grid-template-columns: 1.5fr 1fr 145px auto;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input type="text" id="archTitleInput" class="form-control" placeholder="输入存档标题，如：11.17会议记录 / 11.18xx事项下沉照片..." />
+              <select id="archCatSelect" class="form-control"></select>
+              <input type="date" id="archDateInput" class="form-control" />
+              <button class="btn btn-teal" onclick="submitNewArchiveBundle()">📦 立即存入本包</button>
+            </div>
+            <div style="display:grid;grid-template-columns: 1fr auto;gap:8px;margin-top:8px;align-items:start;">
+              <textarea id="archNotesInput" class="form-control" rows="2" placeholder="可选：随手写几句会议核心纪要、培训要点或现场下沉情况说明（支持直接粘贴文字或 Ctrl+V 粘贴照片）..."></textarea>
+              <div style="display:flex;flex-direction:column;gap:5px;">
+                <label class="btn btn-sm" style="cursor:pointer;justify-content:center;">
+                  📎 选择多份文件 (录音/照片/PPT/文档)
+                  <input type="file" id="archFilesInput" multiple style="display:none;" onchange="handleArchiveFilesSelect(this.files)" />
+                </label>
+                <input type="text" id="archTagsInput" class="form-control" style="font-size:12px;padding:4px 8px;" placeholder="可选标签（空格分隔）" />
+              </div>
+            </div>
+            <div class="pending-files-bar" id="archPendingFilesBar"></div>
+          </div>
+
+          <!-- 资料存档过滤与检索工具条 -->
+          <div class="filter-bar" style="background:var(--surface);padding:9px 14px;border-radius:var(--radius);border:1px solid var(--border);">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <strong id="archCurrentCatTitle" style="font-size:14px;">📚 全部资料存档包</strong>
+              <span class="badge badge-teal" id="archFilteredCountBadge">0 包</span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input type="text" id="archSearchInput" class="form-control" style="width:240px;padding:4px 10px;font-size:12.5px;"
+                     placeholder="🔍 过滤存档标题、纪要、课件或照片名..." oninput="renderArchives()" />
+            </div>
+          </div>
+
+          <div id="archivesTimelineContainer"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 3 (新增): 📌 重要事项记录 (左树 + 右侧零跳转直读画布) ==================== -->
+    <section id="tabRecords" style="display:none;">
+      <div class="records-split-layout">
+        <!-- 左侧：分类管理 + 重要事项快速切换树 -->
+        <aside class="records-nav-panel">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <strong style="font-size:14px;">📌 重要事项与底数预案库</strong>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-xs" onclick="createScopeCategoryPrompt('record')" id="btnNewRecCat" title="新建自定义分类">+分类</button>
+              <button class="btn btn-xs btn-primary" onclick="openRecordModal(null)" id="btnNewRecord">+ 新建事项</button>
+            </div>
+          </div>
+
+          <input type="text" id="recTreeFilterInput" class="form-control" style="width:100%;padding:5px 9px;font-size:12.5px;margin-bottom:8px;"
+                 placeholder="🔍 速查事项名称或底数关键词..." oninput="renderRecordsModule()" />
+
+          <div class="pill-group" id="recCatPillsBar" style="margin-bottom:10px;"></div>
+
+          <div id="recordsTreeList"></div>
+        </aside>
+
+        <!-- 右侧：全宽零跳转直读画布 (Instant Reader Canvas) -->
+        <div class="record-reader-canvas" id="recordReaderCanvas">
+          <div style="padding:48px;text-align:center;color:var(--text-muted);">
+            请在左侧点击任意重要事项记录（如《高密汛情基本情况》、《地震应急预案》）直接阅读内容。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 4: 🗂️ 公文与材料库（分类归纳中心） ==================== -->
     <section id="tabLibrary" style="display:none;">
       <div class="library-layout">
         <aside class="cat-sidebar">
           <div style="display:flex;align-items:center;justify-content:space-between;">
             <strong style="font-size:13.5px;">📁 本地物理分类目录</strong>
-            <button class="btn btn-xs btn-primary" onclick="createNewCategoryPrompt()" id="btnNewCat">+ 新建</button>
+            <button class="btn btn-xs btn-primary" onclick="createScopeCategoryPrompt('task')" id="btnNewCat">+ 新建</button>
           </div>
           <p style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">
             💡 可直接将右侧文件行拖拽到下方目录完成本地物理移动；点击目录右侧 ✏️ 可重命名或合并分类。
@@ -1243,6 +1455,8 @@
               <button class="filter-pill" onclick="setLibRoleFilter('starred', this)">⭐ 常用范文/模板</button>
               <button class="filter-pill" onclick="setLibRoleFilter('draft', this)">✍️ 我写的材料</button>
               <button class="filter-pill" onclick="setLibRoleFilter('incoming', this)">📄 上级来文原件</button>
+              <button class="filter-pill" onclick="setLibRoleFilter('archive', this)">📦 资料存档文件</button>
+              <button class="filter-pill" onclick="setLibRoleFilter('record', this)">📌 重要事项原件</button>
               <button class="filter-pill" onclick="setLibRoleFilter('historical', this)">🏛️ 历史公文归档</button>
             </div>
             <div class="pill-group">
@@ -1309,7 +1523,7 @@
       </div>
     </section>
 
-    <!-- ==================== TAB 3: 周期性/常态化工作自动派生 ==================== -->
+    <!-- ==================== TAB 5: 🔁 周期性/常态化工作自动派生 ==================== -->
     <section id="tabRecurring" style="display:none;">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
@@ -1340,12 +1554,12 @@
       </div>
     </section>
 
-    <!-- ==================== TAB 4: 台账导出与阶段总结 ==================== -->
+    <!-- ==================== TAB 6: 📊 台账导出与阶段总结 ==================== -->
     <section id="tabSummary" style="display:none;">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);">
-        <h3 style="margin-bottom:8px;">📊 办文与工作台账一键导出 & 阶段工作总结生成</h3>
+        <h3 style="margin-bottom:8px;">📊 办文与工作台账一键导出 & 阶段工作总结生成（自动融合待办台账与资料存档实绩）</h3>
         <p style="color:var(--text-secondary);font-size:13px;margin-bottom:14px;">
-          支持导出带 UTF-8 BOM 的标准 CSV 表格（银河麒麟 WPS 表格与 Windows Excel 直接双击打开不乱码）及 Markdown 台账；或一键汇总阶段办文与材料清单生成工作总结汇报初稿。
+          支持导出带 UTF-8 BOM 的标准 CSV 表格（银河麒麟 WPS 表格与 Windows Excel 直接双击打开不乱码）及 Markdown 台账；或一键汇总阶段办文、会议培训及下沉存档生成阶段工作总结汇报初稿。
         </p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;">
           <a class="btn btn-success" href="/api/export/ledger?format=csv" target="_blank">📥 导出 Excel/WPS 兼容台账 (.csv)</a>
@@ -1355,15 +1569,15 @@
           <button class="btn btn-purple" onclick="generatePeriodicSummary()">🤖 一键生成阶段工作总结初稿</button>
           <button class="btn btn-sm" onclick="copySummaryText()">📋 复制总结全文</button>
         </div>
-        <div id="summaryResultArea" class="preview-rendered-box" style="min-height:260px;white-space:pre-wrap;">
-          点击上方“🤖 一键生成阶段工作总结初稿”，系统将自动汇总工作台中的已办结事项、推进中事项以及您撰写的全部材料，生成规范的总结汇报初稿。
+        <div id="summaryResultArea" class="preview-rendered-box" style="min-height:260px;">
+          点击上方“🤖 一键生成阶段工作总结初稿”，系统将自动汇总工作台中的已办结事项、推进中事项、会议培训与下沉资料存档以及您撰写的全部材料，生成规范的总结汇报初稿。
         </div>
       </div>
     </section>
   </main>
 
-  <!-- 右侧滑出：双栏对照撰稿工作台 / 正文预览 / 一键国标公文排版抽屉 -->
-  <div class="drawer-backdrop" id="drawerBackdrop" onclick="closePreviewDrawer()"></div>
+  <!-- 右侧滑出：双栏对照撰稿工作台 / 多格式结构化预览 / 一键国标公文排版抽屉 -->
+  <div class="drawer-backdrop" id="drawerBackdrop" onclick="attemptClosePreviewDrawer()"></div>
   <aside class="drawer" id="previewDrawer">
     <div class="drawer-header">
       <div style="overflow:hidden;">
@@ -1371,21 +1585,21 @@
         <div id="drawerSubMeta" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
-        <button class="btn btn-xs" id="btnToggleSplit" onclick="toggleSplitDraftingStudio()" title="开启左看参考旧稿/来文、右写新材料的双栏对照撰稿模式">
+        <button class="btn btn-xs" id="btnToggleSplit" onclick="toggleSplitDraftingStudio()" title="开启左看参考旧稿/重要事项底数/会议纪要、右写新材料的双栏对照撰稿模式">
           📖 开启双栏对照
         </button>
         <button class="btn btn-xs" onclick="adjustDrawerFont(-1)">A-</button>
         <button class="btn btn-xs" onclick="adjustDrawerFont(1)">A+</button>
         <button class="btn btn-primary btn-sm" onclick="copyDrawerText()">📋 复制全文</button>
         <a class="btn btn-sm" id="drawerDownloadLink" href="#" target="_blank">⬇️ 下载</a>
-        <button class="btn btn-sm" id="btnDrawerDelete" style="display:none;color:var(--danger);border-color:#fecaca;" onclick="deleteCurrentDrawerDoc()" title="从工作台删除这份文件（可选择是否同时删掉硬盘上的副本）">🗑 删除</button>
-        <button class="btn btn-sm" onclick="closePreviewDrawer()">✖</button>
+        <button class="btn btn-sm" id="btnDrawerDelete" style="display:none;color:var(--danger);border-color:#fecaca;" onclick="deleteCurrentDrawerDoc()" title="从工作台删除这份文件">🗑 删除</button>
+        <button class="btn btn-sm" onclick="attemptClosePreviewDrawer()">✖</button>
       </div>
     </div>
 
     <div class="drawer-toolbar">
       <div class="scope-group">
-        <button class="scope-btn active" id="drawerTabReadBtn" onclick="switchDrawerMode('read')">📖 排版阅读</button>
+        <button class="scope-btn active" id="drawerTabReadBtn" onclick="switchDrawerMode('read')">📖 智能直读/表格预览</button>
         <button class="scope-btn" id="drawerTabRawBtn" onclick="switchDrawerMode('raw')">📝 纯文本</button>
         <button class="scope-btn" id="drawerTabEditBtn" onclick="switchDrawerMode('edit')">✍️ 在线写稿/改稿</button>
       </div>
@@ -1397,7 +1611,7 @@
           📕 导出红头文件(.docx)
         </button>
         <button class="btn btn-xs" id="btnDrawerOpenWps" style="display:none;" onclick="openCurrentDrawerDocInWps()">
-          🖥️ 本机 WPS 打开
+          🖥️ 本机打开
         </button>
       </div>
     </div>
@@ -1412,7 +1626,7 @@
       </div>
 
       <div class="drawer-split-container">
-        <!-- 左栏：对照参考区（来文要求 / 库内参考旧稿 / 常用范文） -->
+        <!-- 左栏：对照参考区（支持来文要求 / 📌重要事项底数 / 📦资料存档纪要 / ⭐常用范文） -->
         <div class="split-left-pane" id="drawerSplitLeftPane">
           <div style="padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;gap:6px;align-items:center;justify-content:space-between;">
             <select id="splitRefSelect" class="form-control" style="flex:1;padding:4px 8px;font-size:12px;" onchange="loadSplitReferenceContent(this.value)"></select>
@@ -1431,9 +1645,9 @@
             <div style="display:flex;gap:8px;align-items:center;">
               <label style="font-size:12px;font-weight:600;white-space:nowrap;">文件名：</label>
               <input type="text" id="drawerEditorFilename" class="form-control" style="flex:1;" placeholder="如：我县冬春防灾减灾总结汇报_初稿.md" />
+              <span id="editorDirtyBadge" class="badge badge-warning" style="display:none;">● 未保存修改</span>
             </div>
 
-            <!-- 公文结构快捷插入工具条 -->
             <div class="snippet-toolbar">
               <span style="font-size:11.5px;color:var(--text-muted);font-weight:600;">快捷插入：</span>
               <button class="btn btn-xs" onclick="insertEditorSnippet('\n一、工作开展总体情况\n')">+ 一级标题(黑体)</button>
@@ -1444,7 +1658,7 @@
             </div>
 
             <textarea id="drawerEditorTextarea" class="editor-textarea"
-                      oninput="updateEditorWordCount()"
+                      oninput="markEditorDirty(); updateEditorWordCount();"
                       onkeydown="if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveDrawerOnlineDraft(false);}"
                       placeholder="在此直接撰写材料正文（支持 Ctrl+S 极速保存，支持一、/（一）/1. 自动匹配国标公文字号与缩进）..."></textarea>
 
@@ -1462,6 +1676,104 @@
       </div>
     </div>
   </aside>
+
+  <!-- 全屏高清图片灯箱 (Lightbox，用于资料存档下沉照片浏览) -->
+  <div class="modal-backdrop" id="imageLightboxBackdrop" style="z-index:450;background:rgba(3,7,18,0.88);" onclick="closeImageLightbox()">
+    <div style="max-width:92vw;max-height:90vh;display:flex;flex-direction:column;align-items:center;gap:10px;" onclick="event.stopPropagation()">
+      <img id="lightboxImgEl" src="" alt="预览大图" style="max-width:90vw;max-height:78vh;object-fit:contain;border-radius:6px;background:#fff;" />
+      <div style="display:flex;align-items:center;gap:12px;color:#fff;">
+        <button class="btn btn-sm" onclick="stepLightbox(-1)">◀ 上一张</button>
+        <span id="lightboxCaption" style="font-size:13.5px;font-weight:600;"></span>
+        <button class="btn btn-sm" onclick="stepLightbox(1)">下一张 ▶</button>
+        <a id="lightboxDownloadBtn" class="btn btn-sm btn-primary" href="#" target="_blank">⬇️ 下载原图</a>
+        <button class="btn btn-sm" onclick="closeImageLightbox()">✖ 关闭 (Esc)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：编辑资料存档包 (Archive Bundle Modal) -->
+  <div class="modal-backdrop" id="archiveModalBackdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <span id="archiveModalTitle">📦 编辑资料存档包</span>
+        <button class="btn btn-sm" onclick="document.getElementById('archiveModalBackdrop').style.display='none'">✖</button>
+      </div>
+      <input type="hidden" id="editArchiveId" />
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>存档标题 *（如：11.17会议记录 / 11.18危化品企业下沉照片）</label>
+          <input type="text" id="editArchiveTitle" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label>所属存档分类</label>
+          <select id="editArchiveCat" class="form-control"></select>
+        </div>
+        <div class="form-group">
+          <label>存档日期</label>
+          <input type="date" id="editArchiveDate" class="form-control" />
+        </div>
+        <div class="form-group full">
+          <label>归纳标签（多个用空格或逗号分隔）</label>
+          <input type="text" id="editArchiveTags" class="form-control" placeholder="如：防汛会商 培训课件 下沉照片" />
+        </div>
+        <div class="form-group full">
+          <label>会议纪要 / 培训摘要 / 现场下沉备注（支持 Markdown）</label>
+          <textarea id="editArchiveNotes" class="form-control" rows="6"></textarea>
+        </div>
+        <div class="form-group full">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="editArchivePinned" /> 📌 置顶该资料存档包
+          </label>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button class="btn" onclick="document.getElementById('archiveModalBackdrop').style.display='none'">取消</button>
+        <button class="btn btn-primary" onclick="saveArchiveModal()">💾 保存修改</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：新建/编辑重要事项记录 (Important Record Modal) -->
+  <div class="modal-backdrop" id="recordModalBackdrop">
+    <div class="modal" style="width:min(780px, 96vw);">
+      <div class="modal-header">
+        <span id="recordModalTitle">📌 新建 / 编辑重要事项记录</span>
+        <button class="btn btn-sm" onclick="document.getElementById('recordModalBackdrop').style.display='none'">✖</button>
+      </div>
+      <input type="hidden" id="editRecordId" />
+      <div class="form-grid">
+        <div class="form-group">
+          <label>重要事项标题 *（如：高密汛情基本情况 / 地震应急预案）</label>
+          <input type="text" id="editRecordTitle" class="form-control" placeholder="输入标题..." />
+        </div>
+        <div class="form-group">
+          <label>所属自定义分类</label>
+          <select id="editRecordCat" class="form-control"></select>
+        </div>
+        <div class="form-group">
+          <label>检索标签（空格分隔）</label>
+          <input type="text" id="editRecordTags" class="form-control" placeholder="如：汛情底数 水库 应急预案" />
+        </div>
+        <div class="form-group" style="justify-content:flex-end;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:8px;">
+            <input type="checkbox" id="editRecordPinned" /> 📌 设为置顶常备速查
+          </label>
+        </div>
+        <div class="form-group full">
+          <label>直观展示的正文内容（支持 Markdown 标题、要点与表格；点开条目即刻呈现）</label>
+          <textarea id="editRecordContent" class="form-control" rows="10" placeholder="在此输入核心情况底数、应急处置流程或直接粘贴表格..."></textarea>
+        </div>
+        <div class="form-group full">
+          <label>挂载关联文档原件（可选：支持 Word .docx / PDF .pdf / Excel .xlsx，挂载后在直读画布内直接渲染表格与文档！）</label>
+          <input type="file" id="editRecordFilesInput" multiple class="form-control" />
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button class="btn" onclick="document.getElementById('recordModalBackdrop').style.display='none'">取消</button>
+        <button class="btn btn-primary" onclick="saveRecordModal()">💾 保存重要事项记录</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 弹窗：新建/编辑工作事项 -->
   <div class="modal-backdrop" id="taskModalBackdrop">
@@ -1559,7 +1871,7 @@
           <input type="text" id="libUploadTags" class="form-control" placeholder="例如：防灾减灾 冬春救助 汇报材料" />
         </div>
         <div class="form-group full">
-          <label>选择文件（支持一次框选多份 .docx / .ofd / .pdf / .wps / .txt / .md）</label>
+          <label>选择文件（支持一次框选多份 .docx / .ofd / .pdf / .wps / .pptx / .xlsx / .txt / .md）</label>
           <input type="file" id="libUploadFilesInput" multiple class="form-control" />
         </div>
       </div>
@@ -1615,7 +1927,7 @@
           <input type="text" id="editDocFilename" class="form-control" />
         </div>
         <div class="form-group">
-          <label>所属物理分类目录（修改后同步移动本地物理文件或所属事项文件夹）</label>
+          <label>所属物理分类目录</label>
           <select id="editDocCategory" class="form-control"></select>
         </div>
         <div class="form-group">
@@ -1624,6 +1936,8 @@
             <option value="draft">✍️ 我写的材料</option>
             <option value="template">⭐ 常用范文/模板</option>
             <option value="incoming">📄 上级来文原件</option>
+            <option value="archive">📦 资料存档文件</option>
+            <option value="record">📌 重要事项文件</option>
             <option value="historical">🏛️ 历史公文归档</option>
           </select>
         </div>
@@ -1706,36 +2020,40 @@
   <div class="modal-backdrop" id="settingsModalBackdrop">
     <div class="modal">
       <div class="modal-header">
-        <span>⚙️ 工作台、AI 接口与 xkl-gw 联动设置</span>
+        <span>⚙️ 工作台、单位署名、AI 接口与 xkl-gw 联动设置</span>
         <button class="btn btn-sm" onclick="document.getElementById('settingsModalBackdrop').style.display='none'">✖</button>
       </div>
       <div class="form-grid">
-        <div class="form-group full">
-          <label>本地物理资料库根目录路径（所有分类文件夹与公文材料直接明文存放在此目录下）</label>
+        <div class="form-group">
+          <label>本地物理资料库根目录路径</label>
           <input type="text" id="cfgWorkspaceRoot" class="form-control" />
         </div>
         <div class="form-group">
-          <label>修改局域网访问密码（留空则保持原密码不变）</label>
+          <label>默认本单位落款署名（用于国标排版与写稿落款）</label>
+          <input type="text" id="cfgDefaultOrg" class="form-control" placeholder="如：县应急管理局" />
+        </div>
+        <div class="form-group">
+          <label>修改局域网访问密码（留空保持不变）</label>
           <input type="password" id="cfgViewPwd" class="form-control" placeholder="留空不修改（默认 123456）" />
         </div>
         <div class="form-group">
-          <label>修改主理人编辑口令（留空则保持原口令不变）</label>
+          <label>修改主理人编辑口令（留空保持不变）</label>
           <input type="password" id="cfgEditPwd" class="form-control" placeholder="留空不修改（默认 8888）" />
         </div>
         <div class="form-group full">
-          <label>局域网顶部共享公告栏文字</label>
+          <label>局域网共享公告文字</label>
           <input type="text" id="cfgLanNotice" class="form-control" />
         </div>
         <div class="form-group full">
-          <label>外部 xkl-gw 公文排版助手 CLI 脚本路径（可选，留空则使用工作台内置 GB/T 9704 国标排版引擎）</label>
+          <label>外部 xkl-gw 公文排版助手 CLI 脚本路径（可选，留空则使用内置 GB/T 9704 国标引擎）</label>
           <input type="text" id="cfgXklGwCli" class="form-control" placeholder="如：/opt/xkl-gw/bin/xkl-gw-cli" />
         </div>
         <div class="form-group full">
-          <label>AI 接口地址 (兼容 OpenAI 格式，如 https://api.deepseek.com/v1 或 http://127.0.0.1:11434/v1；留空则使用内置政务规则引擎)</label>
+          <label>AI 接口地址 (兼容 OpenAI 格式；留空则使用内置政务规则引擎)</label>
           <input type="text" id="cfgAiBase" class="form-control" placeholder="https://api.deepseek.com/v1" />
         </div>
         <div class="form-group">
-          <label>AI API Key (留空则保持已存 Key 不变)</label>
+          <label>AI API Key (留空保持不变)</label>
           <input type="password" id="cfgAiKey" class="form-control" placeholder="留空不修改" />
         </div>
         <div class="form-group">
@@ -1744,7 +2062,7 @@
         </div>
         <div class="form-group full">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-            <input type="checkbox" id="cfgPrefixArchived" /> 归档事项时在本地文件夹名前自动加 <code>[已办]_</code> 前缀（默认关闭以保持 WPS 最近打开路径不变）
+            <input type="checkbox" id="cfgPrefixArchived" /> 归档事项时在本地文件夹名前自动加 <code>[已办]_</code> 前缀
           </label>
         </div>
       </div>
@@ -1755,7 +2073,7 @@
     </div>
   </div>
 
-  <!-- 弹窗：统一优雅非阻塞自定义对话框（彻底替换简陋的原生 prompt/confirm） -->
+  <!-- 弹窗：统一非阻塞自定义对话框 -->
   <div class="modal-backdrop" id="customDialogBackdrop" style="z-index:400;">
     <div class="modal" style="max-width:440px;">
       <div class="modal-header">
@@ -1801,18 +2119,24 @@
 
   <script>
     let STATE = {
-      version: '2.0.0',
+      version: '3.0.0',
       can_view: true,
       can_edit: false,
       is_localhost: false,
       lan_url: '',
       workspace_root: '',
+      default_org_name: '县应急管理局',
       lan_notice: '',
       xkl_gw_cli: '',
       categories: [],
+      archive_categories: [],
+      record_categories: [],
       tasks: [],
       documents: [],
+      archives: [],
+      important_records: [],
       recurring_rules: [],
+      activeMainTab: 'workbench',
       taskStatusFilter: 'active',
       taskViewMode: 'card',
       searchScope: 'full',
@@ -1823,14 +2147,23 @@
       libPage: 1,
       libPageSize: 30,
       omniFiles: [],
+      archCategoryFilter: '',
+      archPendingFiles: [],
+      recCategoryFilter: '',
+      activeRecordId: null,
+      activeRecordDetail: null,
+      activeRecordAttIndex: -1,
       drawerDoc: null,
       drawerTaskId: null,
       drawerMode: 'read',
       drawerSplit: false,
-      drawerFontSize: 15
+      drawerFontSize: 15,
+      editorDirty: false,
+      lightboxList: [],
+      lightboxIndex: 0
     };
 
-    // ==================== 统一优雅非阻塞自定义对话框 ====================
+    // ==================== 统一非阻塞自定义对话框 ====================
     let _dialogResolver = null;
     function showCustomDialog({ title = '提示', message = '', inputDefault = null, inputType = 'text', inputPlaceholder = '', checkLabel = null, checkDefault = false, danger = false }) {
       return new Promise(resolve => {
@@ -1915,40 +2248,292 @@
       return safe;
     }
 
+    function formatInlineMd(escapedText) {
+      return escapedText
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
+    }
+
+    /**
+     * 增强版 Markdown 渲染器 (v3.0.0)：
+     * 修复 BUG-07：完整支持 Markdown 管道表格 (| col |)、代码块 (```)、引用块 (>)、多级列表，
+     * 并智能判断仅对普通叙述长段落应用 2em 首行缩进，主送机关/落款/短句不盲目缩进！
+     */
     function renderSimpleMarkdown(mdText, keywords = []) {
       const lines = String(mdText || '').split('\n');
       let html = [];
-      let inList = false;
-      for (let rawLine of lines) {
-        let ln = rawLine.trim();
-        if (!ln) {
-          if (inList) { html.push('</ul>'); inList = false; }
+      let inUl = false;
+      let inOl = false;
+      let inCode = false;
+      let codeLines = [];
+      let idx = 0;
+
+      const closeLists = () => {
+        if (inUl) { html.push('</ul>'); inUl = false; }
+        if (inOl) { html.push('</ol>'); inOl = false; }
+      };
+
+      while (idx < lines.length) {
+        const rawLine = lines[idx];
+        const ln = rawLine.trim();
+
+        if (ln.startsWith('```')) {
+          closeLists();
+          if (!inCode) {
+            inCode = true;
+            codeLines = [];
+          } else {
+            html.push(`<pre>${escapeHtml(codeLines.join('\n'))}</pre>`);
+            inCode = false;
+          }
+          idx++;
           continue;
         }
-        if (ln.startsWith('<!--') && ln.endsWith('-->')) continue;
+        if (inCode) {
+          codeLines.push(rawLine);
+          idx++;
+          continue;
+        }
+
+        if (!ln) {
+          closeLists();
+          idx++;
+          continue;
+        }
+        if (ln.startsWith('<!--') && ln.endsWith('-->')) {
+          idx++;
+          continue;
+        }
+
+        // 解析 Markdown 表格块
+        if (ln.startsWith('|') && ln.endsWith('|') && ln.split('|').length >= 3) {
+          closeLists();
+          let tblRows = [];
+          while (idx < lines.length) {
+            const tln = lines[idx].trim();
+            if (!(tln.startsWith('|') && tln.endsWith('|'))) break;
+            const cells = tln.slice(1, -1).split('|').map(c => c.trim());
+            const isSeparator = cells.every(c => /^[:\-\s]*$/.test(c));
+            if (!isSeparator) {
+              tblRows.push(cells);
+            }
+            idx++;
+          }
+          if (tblRows.length > 0) {
+            let tHtml = '<div style="overflow-x:auto;"><table class="md-table"><thead><tr>';
+            tblRows[0].forEach(h => {
+              tHtml += `<th>${formatInlineMd(highlightKeywordsHtml(h, keywords))}</th>`;
+            });
+            tHtml += '</tr></thead><tbody>';
+            for (let r = 1; r < tblRows.length; r++) {
+              tHtml += '<tr>';
+              tblRows[0].forEach((_, cIdx) => {
+                const cellVal = tblRows[r][cIdx] !== undefined ? tblRows[r][cIdx] : '';
+                tHtml += `<td>${formatInlineMd(highlightKeywordsHtml(cellVal, keywords))}</td>`;
+              });
+              tHtml += '</tr>';
+            }
+            tHtml += '</tbody></table></div>';
+            html.push(tHtml);
+          }
+          continue;
+        }
+
         if (ln.startsWith('# ')) {
-          if (inList) { html.push('</ul>'); inList = false; }
-          html.push(`<h1>${highlightKeywordsHtml(ln.slice(2), keywords)}</h1>`);
+          closeLists();
+          html.push(`<h1>${formatInlineMd(highlightKeywordsHtml(ln.slice(2), keywords))}</h1>`);
         } else if (ln.startsWith('## ')) {
-          if (inList) { html.push('</ul>'); inList = false; }
-          html.push(`<h2>${highlightKeywordsHtml(ln.slice(3), keywords)}</h2>`);
+          closeLists();
+          html.push(`<h2>${formatInlineMd(highlightKeywordsHtml(ln.slice(3), keywords))}</h2>`);
         } else if (ln.startsWith('### ')) {
-          if (inList) { html.push('</ul>'); inList = false; }
-          html.push(`<h3>${highlightKeywordsHtml(ln.slice(4), keywords)}</h3>`);
-        } else if (ln.startsWith('- ') || ln.startsWith('* ')) {
-          if (!inList) { html.push('<ul>'); inList = true; }
-          let itemTxt = highlightKeywordsHtml(ln.slice(2), keywords);
-          itemTxt = itemTxt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+          closeLists();
+          html.push(`<h3>${formatInlineMd(highlightKeywordsHtml(ln.slice(4), keywords))}</h3>`);
+        } else if (ln.startsWith('#### ')) {
+          closeLists();
+          html.push(`<h4>${formatInlineMd(highlightKeywordsHtml(ln.slice(5), keywords))}</h4>`);
+        } else if (ln.startsWith('> ')) {
+          closeLists();
+          html.push(`<blockquote>${formatInlineMd(highlightKeywordsHtml(ln.slice(2), keywords))}</blockquote>`);
+        } else if (ln.startsWith('- ') || ln.startsWith('* ') || ln.startsWith('• ')) {
+          if (inOl) { html.push('</ol>'); inOl = false; }
+          if (!inUl) { html.push('<ul>'); inUl = true; }
+          let itemTxt = formatInlineMd(highlightKeywordsHtml(ln.slice(2), keywords));
+          html.push(`<li>${itemTxt}</li>`);
+        } else if (/^\d+\.\s+/.test(ln)) {
+          if (inUl) { html.push('</ul>'); inUl = false; }
+          if (!inOl) { html.push('<ol>'); inOl = true; }
+          let itemTxt = formatInlineMd(highlightKeywordsHtml(ln.replace(/^\d+\.\s+/, ''), keywords));
           html.push(`<li>${itemTxt}</li>`);
         } else {
-          if (inList) { html.push('</ul>'); inList = false; }
-          let pTxt = highlightKeywordsHtml(ln, keywords);
-          pTxt = pTxt.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-          html.push(`<p>${pTxt}</p>`);
+          closeLists();
+          let pTxt = formatInlineMd(highlightKeywordsHtml(ln, keywords));
+          const isShortOrHeader = ln.length < 24 || /^[一二三四五六七八九十]+、/.test(ln) || /^[（\(][一二三四五六七八九十]+[）\)]/.test(ln) || /[：:]$/.test(ln);
+          html.push(`<p class="${isShortOrHeader ? '' : 'indent-p'}">${pTxt}</p>`);
         }
+        idx++;
       }
-      if (inList) html.push('</ul>');
+      if (inCode) html.push(`<pre>${escapeHtml(codeLines.join('\n'))}</pre>`);
+      closeLists();
       return html.join('\n');
+    }
+
+    /**
+     * 多格式原件结构化直读渲染器（支持 Excel 可搜索数据网格、Word 仿真公文+表格、PPT 幻灯片卡片、PDF 内嵌阅读、音视频直播）
+     */
+    function renderStructuredPreviewHtml(docObj, keywords = [], containerPrefix = 'sp') {
+      const sp = docObj.structured_preview || {};
+      const mode = sp.render_mode || 'text';
+
+      if (mode === 'spreadsheet' && sp.sheets && sp.sheets.length > 0) {
+        window._spSheetsMap = window._spSheetsMap || {};
+        window._spSheetsMap[containerPrefix] = sp.sheets;
+        const sheetTabs = sp.sheets.map((s, sIdx) => `
+          <button class="btn btn-xs ${sIdx === 0 ? 'btn-primary' : ''}" id="${containerPrefix}_tab_${sIdx}"
+                  onclick="switchSpreadsheetSheet('${containerPrefix}', ${sIdx})">
+            📊 ${escapeHtml(s.name)} (${(s.rows || []).length}行)
+          </button>
+        `).join('');
+        return `
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+              <div style="display:flex;gap:5px;flex-wrap:wrap;">${sheetTabs}</div>
+              <input type="text" class="form-control" style="width:260px;padding:4px 10px;font-size:12.5px;"
+                     placeholder="🔍 在此表格内实时过滤行（如输入镇街/水库/责任人）..."
+                     oninput="filterSpreadsheetGrid('${containerPrefix}', this.value)" />
+            </div>
+            <div id="${containerPrefix}_grid_wrap">${buildSpreadsheetSheetTableHtml(sp.sheets[0], '')}</div>
+          </div>
+        `;
+      }
+
+      if (mode === 'docx' && sp.blocks && sp.blocks.length > 0) {
+        let html = `<div style="max-width:860px;margin:0 auto;background:var(--surface);padding:24px 32px;border:1px solid var(--border);border-radius:8px;">`;
+        sp.blocks.forEach((b, bIdx) => {
+          if (b.type === 'table' && b.rows && b.rows.length > 0) {
+            html += `<div style="overflow-x:auto;"><table class="md-table"><thead><tr>`;
+            b.rows[0].forEach(c => { html += `<th>${highlightKeywordsHtml(c, keywords)}</th>`; });
+            html += `</tr></thead><tbody>`;
+            for (let r = 1; r < b.rows.length; r++) {
+              html += `<tr>`;
+              b.rows[0].forEach((_, ci) => {
+                html += `<td>${highlightKeywordsHtml(b.rows[r][ci] || '', keywords)}</td>`;
+              });
+              html += `</tr>`;
+            }
+            html += `</tbody></table></div>`;
+          } else if (b.type === 'h1') {
+            html += `<h2 style="color:var(--text);border:none;margin:14px 0 6px;">${highlightKeywordsHtml(b.text, keywords)}</h2>`;
+          } else if (b.type === 'h2' || b.type === 'h3') {
+            html += `<h3 style="margin:10px 0 4px;">${highlightKeywordsHtml(b.text, keywords)}</h3>`;
+          } else {
+            const isTitle = bIdx === 0 && b.text.length < 48;
+            if (isTitle) {
+              html += `<h1 style="font-size:21px;text-align:center;margin-bottom:16px;">${highlightKeywordsHtml(b.text, keywords)}</h1>`;
+            } else {
+              html += `<p class="${b.text.length > 22 ? 'indent-p' : ''}">${highlightKeywordsHtml(b.text, keywords)}</p>`;
+            }
+          }
+        });
+        html += `</div>`;
+        return html;
+      }
+
+      if (mode === 'pptx' && sp.slides && sp.slides.length > 0) {
+        return sp.slides.map(sl => `
+          <div class="slide-card-preview">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <strong style="font-size:15px;color:var(--purple);">🎞️ 第 ${sl.slide_no} 页：${highlightKeywordsHtml(sl.title || '', keywords)}</strong>
+            </div>
+            <ul style="padding-left:20px;margin:0;">
+              ${(sl.lines || []).slice(1).map(ln => `<li>${highlightKeywordsHtml(ln, keywords)}</li>`).join('') || `<li style="color:var(--text-muted);">（本页仅标题）</li>`}
+            </ul>
+          </div>
+        `).join('');
+      }
+
+      if (mode === 'pdf' && sp.media_url) {
+        return `
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <embed src="${escapeHtml(sp.media_url)}#toolbar=1" type="application/pdf" width="100%" height="580px" style="border:1px solid var(--border);border-radius:8px;" />
+            <details>
+              <summary style="cursor:pointer;font-weight:700;color:var(--primary);font-size:13px;">📝 展开查看 PDF 提取纯文本（方便选中复制）</summary>
+              <div style="margin-top:8px;">${renderSimpleMarkdown(docObj.extracted_text || '', keywords)}</div>
+            </details>
+          </div>
+        `;
+      }
+
+      if (mode === 'image' && sp.media_url) {
+        return `
+          <div style="text-align:center;padding:12px;">
+            <img src="${escapeHtml(sp.media_url)}" alt="${escapeHtml(docObj.filename)}"
+                 style="max-width:100%;max-height:560px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;"
+                 onclick="openSingleImageLightbox('${escapeHtml(sp.media_url)}', '${escapeHtml(docObj.filename)}', '/api/docs/${docObj.id}/download')" />
+            ${docObj.extracted_text ? `<div style="margin-top:12px;text-align:left;">${renderSimpleMarkdown(docObj.extracted_text, keywords)}</div>` : ''}
+          </div>
+        `;
+      }
+
+      if (mode === 'audio' && sp.media_url) {
+        return `
+          <div style="padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">
+            <div style="font-weight:700;margin-bottom:10px;">🎙️ 录音在线播放：${escapeHtml(docObj.filename)}</div>
+            <audio controls preload="metadata" src="${escapeHtml(sp.media_url)}" style="width:100%;"></audio>
+          </div>
+        `;
+      }
+
+      return renderSimpleMarkdown(docObj.extracted_text || '', keywords);
+    }
+
+    function buildSpreadsheetSheetTableHtml(sheetObj, filterKw = '') {
+      if (!sheetObj || !sheetObj.rows || sheetObj.rows.length === 0) {
+        return `<div style="padding:20px;color:var(--text-muted);">该工作表暂无数据。</div>`;
+      }
+      const rows = sheetObj.rows;
+      const headers = rows[0];
+      const kw = (filterKw || '').trim().toLowerCase();
+      const bodyRows = rows.slice(1).filter(r => {
+        if (!kw) return true;
+        return r.some(c => String(c || '').toLowerCase().includes(kw));
+      });
+      let html = `<div style="overflow-x:auto;"><table class="md-table"><thead><tr>`;
+      headers.forEach(h => { html += `<th>${escapeHtml(h)}</th>`; });
+      html += `</tr></thead><tbody>`;
+      if (bodyRows.length === 0) {
+        html += `<tr><td colspan="${headers.length}" style="text-align:center;color:var(--text-muted);padding:16px;">未匹配到包含“${escapeHtml(filterKw)}”的数据行</td></tr>`;
+      } else {
+        bodyRows.forEach(r => {
+          html += `<tr>`;
+          headers.forEach((_, ci) => {
+            html += `<td>${highlightKeywordsHtml(r[ci] || '', kw ? [kw] : [])}</td>`;
+          });
+          html += `</tr>`;
+        });
+      }
+      html += `</tbody></table></div>`;
+      return html;
+    }
+
+    function switchSpreadsheetSheet(prefix, sheetIdx) {
+      const sheets = (window._spSheetsMap || {})[prefix] || [];
+      if (!sheets[sheetIdx]) return;
+      window._spActiveSheetIdx = window._spActiveSheetIdx || {};
+      window._spActiveSheetIdx[prefix] = sheetIdx;
+      sheets.forEach((_, idx) => {
+        const btn = document.getElementById(`${prefix}_tab_${idx}`);
+        if (btn) btn.className = `btn btn-xs ${idx === sheetIdx ? 'btn-primary' : ''}`;
+      });
+      const wrap = document.getElementById(`${prefix}_grid_wrap`);
+      if (wrap) wrap.innerHTML = buildSpreadsheetSheetTableHtml(sheets[sheetIdx], '');
+    }
+
+    function filterSpreadsheetGrid(prefix, kw) {
+      const sheets = (window._spSheetsMap || {})[prefix] || [];
+      const idx = (window._spActiveSheetIdx || {})[prefix] || 0;
+      if (!sheets[idx]) return;
+      const wrap = document.getElementById(`${prefix}_grid_wrap`);
+      if (wrap) wrap.innerHTML = buildSpreadsheetSheetTableHtml(sheets[idx], kw);
     }
 
     async function apiFetch(url, options = {}) {
@@ -1977,6 +2562,8 @@
         renderKpiStrip();
         renderLanBanner();
         renderTasks();
+        renderArchives();
+        renderRecordsModule();
         renderLibrary();
         renderRecurring();
       } catch (err) {
@@ -1984,10 +2571,6 @@
       }
     }
 
-    /**
-     * 乐观局部更新（修复 Bug 5）：不仅就地更新 STATE.tasks 与单张卡片 DOM，
-     * 同时将该事项下的 incoming_files 与 drafted_files 同步合并进 STATE.documents！
-     */
     function updateSingleTaskInStateAndDOM(updatedTask) {
       if (!updatedTask || !updatedTask.id) return;
       const idx = STATE.tasks.findIndex(x => x.id === updatedTask.id);
@@ -1997,7 +2580,6 @@
         STATE.tasks.unshift(updatedTask);
       }
 
-      // 同步合并该事项下的所有文件至 STATE.documents
       const taskFiles = [...(updatedTask.incoming_files || []), ...(updatedTask.drafted_files || [])];
       const taskFileIds = new Set(taskFiles.map(f => f.id));
       STATE.documents = (STATE.documents || []).filter(d => d.task_id !== updatedTask.id || taskFileIds.has(d.id));
@@ -2040,12 +2622,6 @@
       const cntPending = tasks.filter(t => t.status === 'pending').length;
       const cntArchived = tasks.filter(t => t.status === 'archived').length;
 
-      document.getElementById('kpiUrgent').textContent = cntUrgent;
-      document.getElementById('kpiInProgress').textContent = cntInProgress;
-      document.getElementById('kpiPending').textContent = cntPending;
-      document.getElementById('kpiArchived').textContent = cntArchived;
-      document.getElementById('kpiDocs').textContent = (STATE.documents || []).length;
-
       document.getElementById('navCntActive').textContent = cntInProgress + cntPending;
       document.getElementById('cntActive').textContent = cntInProgress + cntPending;
       document.getElementById('cntUrgent').textContent = cntUrgent;
@@ -2055,45 +2631,47 @@
       document.getElementById('cntAll').textContent = tasks.length;
     }
 
-    function quickFilterByKpi(filterKey) {
-      switchMainTab('workbench');
-      const btn = document.querySelector(`#wbStatusPills .filter-pill[data-status="${filterKey}"]`);
-      setTaskStatusFilter(filterKey, btn);
-    }
-
     function renderHeaderAndAuth() {
-      document.getElementById('verBadge').textContent = `v${STATE.version || '2.0.0'}`;
-      document.getElementById('lanUrlBadge').textContent = `🌐 局域网共享: ${STATE.lan_url}`;
+      document.getElementById('verBadge').textContent = `v${STATE.version || '3.0.0'}`;
+      document.getElementById('lanUrlBadge').textContent = `🌐 ${STATE.lan_url}`;
       document.getElementById('localDirBadge').textContent = STATE.is_localhost
-        ? `📂 打开本地资料库 (${STATE.workspace_root})`
-        : `📂 本地库: ${STATE.workspace_root}`;
+        ? `📂 打开本地资料库`
+        : `📂 复制资料库路径`;
+      document.getElementById('archCountBadge').textContent = (STATE.archives || []).length;
+      document.getElementById('recKbCountBadge').textContent = (STATE.important_records || []).length;
       document.getElementById('libCountBadge').textContent = (STATE.documents || []).length;
       document.getElementById('recCountBadge').textContent = (STATE.recurring_rules || []).length;
 
       const modeBadge = document.getElementById('modeBadge');
       const omnibox = document.getElementById('omniboxPanel');
+      const archIntake = document.getElementById('archiveIntakeBox');
       if (STATE.can_edit) {
         modeBadge.className = 'mode-pill mode-edit';
         modeBadge.textContent = '✍️ 主理人编辑模式';
-        omnibox.style.display = 'block';
+        if (omnibox) omnibox.style.display = 'block';
+        if (archIntake) archIntake.style.display = 'block';
       } else {
         modeBadge.className = 'mode-pill mode-view';
         modeBadge.textContent = '🔒 浏览下载模式 (点此切换)';
-        omnibox.style.display = 'none';
+        if (omnibox) omnibox.style.display = 'none';
+        if (archIntake) archIntake.style.display = 'none';
       }
     }
 
     function renderLanBanner() {
-      document.getElementById('lanNoticeText').textContent = STATE.lan_notice || '';
       const pinnedTasks = (STATE.tasks || []).filter(t => t.is_pinned);
+      const pinnedRecords = (STATE.important_records || []).filter(r => r.is_pinned);
       const pinnedDocs = (STATE.documents || []).filter(d => d.is_pinned);
       const container = document.getElementById('lanPinnedList');
       let html = '';
+      pinnedRecords.forEach(r => {
+        html += `<span class="pinned-chip" onclick="openRecordInTab(${r.id})" title="点击直读置顶重要事项">📌 [底数/预案] ${escapeHtml(r.title)}</span>`;
+      });
       pinnedTasks.forEach(t => {
-        html += `<a class="pinned-chip" href="/api/tasks/${t.id}/zip" title="点击一键打包下载该事项全部公文与材料">📌 [事项包] ${escapeHtml(t.title)} ⬇️</a>`;
+        html += `<a class="pinned-chip" href="/api/tasks/${t.id}/zip" title="点击打包下载该置顶事项">📌 [事项包] ${escapeHtml(t.title)} ⬇️</a>`;
       });
       pinnedDocs.forEach(d => {
-        html += `<span class="pinned-chip" onclick="openDocPreview(${d.id})" title="点击预览或下载置顶文件">📌 [共享文件] ${escapeHtml(d.filename)}</span>`;
+        html += `<span class="pinned-chip" onclick="openDocPreview(${d.id})" title="点击预览置顶共享文件">📌 ${escapeHtml(d.filename)}</span>`;
       });
       container.innerHTML = html;
     }
@@ -2102,21 +2680,44 @@
       const wbSel = document.getElementById('wbCatFilter');
       const currentVal = wbSel.value;
       wbSel.innerHTML = `<option value="">📂 所有业务分类</option>` +
-        STATE.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        (STATE.categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       wbSel.value = currentVal;
 
-      const catOptions = STATE.categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      const catOptions = (STATE.categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       ['editTaskCat', 'libUploadCat', 'scanTargetCatSelect', 'editDocCategory', 'batchMoveCatSelect', 'recCategory'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.innerHTML = catOptions;
       });
+
+      const archCatOptions = (STATE.archive_categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      ['archCatSelect', 'editArchiveCat'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = archCatOptions;
+      });
+
+      const recCatOptions = (STATE.record_categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+      const recSel = document.getElementById('editRecordCat');
+      if (recSel) recSel.innerHTML = recCatOptions;
     }
 
     function switchMainTab(tab) {
-      ['workbench', 'library', 'recurring', 'summary'].forEach(t => {
-        document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).style.display = (t === tab) ? 'block' : 'none';
-        document.getElementById('tabBtn' + t.charAt(0).toUpperCase() + t.slice(1)).classList.toggle('active', t === tab);
+      STATE.activeMainTab = tab;
+      const tabMap = {
+        workbench: 'Workbench',
+        archives: 'Archives',
+        records: 'Records',
+        library: 'Library',
+        recurring: 'Recurring',
+        summary: 'Summary'
+      };
+      Object.entries(tabMap).forEach(([k, suffix]) => {
+        const sec = document.getElementById('tab' + suffix);
+        const btn = document.getElementById('tabBtn' + suffix);
+        if (sec) sec.style.display = (k === tab) ? 'block' : 'none';
+        if (btn) btn.classList.toggle('active', k === tab);
       });
+      if (tab === 'archives') renderArchives();
+      if (tab === 'records') renderRecordsModule();
       if (tab === 'library') renderLibrary();
       if (tab === 'recurring') renderRecurring();
     }
@@ -2127,6 +2728,8 @@
         STATE.can_edit = false;
         renderHeaderAndAuth();
         renderTasks();
+        renderArchives();
+        renderRecordsModule();
         renderLibrary();
         renderRecurring();
         showToast('🔒 已切回防误触【浏览下载模式】');
@@ -2152,6 +2755,8 @@
         STATE.can_edit = true;
         renderHeaderAndAuth();
         renderTasks();
+        renderArchives();
+        renderRecordsModule();
         renderLibrary();
         renderRecurring();
         showToast('✍️ 已开启主理人编辑模式');
@@ -2174,7 +2779,7 @@
       }
     }
 
-    // ==================== 全能极速投喂台 (含 Ctrl+V 微信截图粘贴) ====================
+    // ==================== 全能极速投喂台 (Omnibox) ====================
     function fileToBase64(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -2261,7 +2866,7 @@
       }
 
       showToast('🤖 正在自动解析并创建本地专属事项文件夹...');
-      await apiFetch('/api/tasks', {
+      const res = await apiFetch('/api/tasks', {
         method: 'POST',
         body: JSON.stringify({
           raw_notice_text: text,
@@ -2271,13 +2876,18 @@
         })
       });
       document.getElementById('omniText').value = '';
+      document.getElementById('omniboxPanel').classList.remove('expanded');
       STATE.omniFiles = [];
       renderOmniPendingFiles();
-      await loadBootstrap();
+      if (res.task) {
+        updateSingleTaskInStateAndDOM(res.task);
+      } else {
+        await loadBootstrap();
+      }
       showToast('✅ 已自动提取填入工作台，并在本地生成专属文件夹！');
     }
 
-    // ==================== 工作台渲染与乐观局部更新 ====================
+    // ==================== TAB 1: 工作台待办渲染与局部更新 ====================
     function setTaskStatusFilter(status, btnEl) {
       STATE.taskStatusFilter = status;
       document.querySelectorAll('#wbStatusPills .filter-pill').forEach(b => b.classList.remove('active'));
@@ -2372,7 +2982,7 @@
 
       const incFilesHtml = (t.incoming_files || []).map(f => `
         <div class="file-item">
-          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击免WPS直接预览全文（删除也在预览页里）">📄 ${escapeHtml(f.filename)}</span>
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击直接预览全文">📄 ${escapeHtml(f.filename)}</span>
           <div class="file-acts">
             ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开">WPS</button>` : ''}
             ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, 'draft')" title="切换为【我写的材料】">⇄</button>` : ''}
@@ -2383,7 +2993,7 @@
 
       const draftFilesHtml = (t.drafted_files || []).map(f => `
         <div class="file-item">
-          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、双栏在线改稿或导出国标公文（删除也在预览页里）">✍️ ${escapeHtml(f.filename)}</span>
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、双栏在线改稿或导出国标公文">✍️ ${escapeHtml(f.filename)}</span>
           <div class="file-acts">
             ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${f.id})" title="按 GB/T 9704 国标公文排版导出 .docx">国标</button>` : ''}
             ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开编辑">WPS</button>` : ''}
@@ -2418,7 +3028,7 @@
 
             <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
               ${STATE.can_edit ? `
-                <button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id}, true)" title="开启左看要求/参考旧稿、右写新材料的双栏对照撰稿工作台">✍️ 双栏对照写材料</button>
+                <button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id}, true)" title="开启左看要求/重要事项底数/会议纪要、右写新材料的双栏对照撰稿工作台">✍️ 双栏对照写材料</button>
               ` : ''}
               ${STATE.is_localhost ? `
                 <button class="btn btn-xs" onclick="openTaskLocalFolder(${t.id})" title="在麒麟文件管理器中直接打开本事项物理文件夹">📂 打开目录</button>
@@ -2431,7 +3041,7 @@
                   <option value="in_progress" ${t.status === 'in_progress' ? 'selected' : ''}>🔄 进行中</option>
                   <option value="archived" ${t.status === 'archived' ? 'selected' : ''}>✅ 办结归档</option>
                 </select>
-                <button class="btn btn-xs" onclick="toggleTaskPin(${t.id}, ${!t.is_pinned})" title="置顶到局域网共享栏">${t.is_pinned ? '📌已置顶' : '📌置顶'}</button>
+                <button class="btn btn-xs" onclick="toggleTaskPin(${t.id}, ${!t.is_pinned})" title="置顶到顶部速查栏">${t.is_pinned ? '📌已置顶' : '📌置顶'}</button>
                 <button class="btn btn-xs" onclick="openEditTaskModal(${t.id})">✏️ 编辑</button>
               ` : ''}
               <button class="btn btn-xs" onclick="toggleTaskCollapse(${t.id}, true)" title="收起卡片详情">▲ 收起</button>
@@ -2448,7 +3058,6 @@
           </div>
 
           <div class="task-body-grid">
-            <!-- 1. 待办细项清单 -->
             <div class="sub-box">
               <div>
                 <div class="sub-box-title">
@@ -2464,7 +3073,6 @@
               ` : ''}
             </div>
 
-            <!-- 2. 实时进展流水 -->
             <div class="sub-box">
               <div>
                 <div class="sub-box-title">
@@ -2481,7 +3089,6 @@
               ` : ''}
             </div>
 
-            <!-- 3. 双栏文件柜 -->
             <div class="sub-box">
               <div class="dual-files">
                 <div class="file-col">
@@ -2677,7 +3284,7 @@
         body: JSON.stringify({ is_pinned: isPinned })
       });
       updateSingleTaskInStateAndDOM(res.task);
-      showToast(isPinned ? '📌 已置顶到局域网共享栏' : '已取消置顶');
+      showToast(isPinned ? '📌 已置顶到速查栏' : '已取消置顶');
     }
 
     async function toggleTaskCollapse(taskId, isCollapsed) {
@@ -2694,10 +3301,18 @@
       }
     }
 
-    function toggleCollapseAllTasks() {
+    async function toggleCollapseAllTasks() {
       const anyExpanded = (STATE.tasks || []).some(t => !t.is_collapsed);
       (STATE.tasks || []).forEach(t => { t.is_collapsed = anyExpanded; });
       renderTasks();
+      if (STATE.can_edit) {
+        for (const t of (STATE.tasks || []).slice(0, 15)) {
+          apiFetch(`/api/tasks/${t.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ is_collapsed: anyExpanded })
+          }).catch(() => {});
+        }
+      }
     }
 
     async function swapFileRole(docId, targetRole) {
@@ -2713,34 +3328,31 @@
       showToast(`⇄ 已切换文件角色为【${targetRole === 'incoming' ? '来文原件' : '我写的材料'}】`);
     }
 
-    // 事项卡片里直接删除某份来文/材料，不必再跑去本机文件夹里找
     async function deleteDocQuick(docId) {
       const d = (STATE.documents || []).find(x => x.id === docId);
       const name = d ? d.filename : `文件 #${docId}`;
       const dlg = await showCustomDialog({
         title: '🗑️ 删除这份文件',
-        message: `确定删除《${name}》吗？删掉后它不再出现在本事项的“来文原件 / 我写的材料”里。`,
-        checkLabel: '同时删掉本机硬盘上这份副本（推荐；不勾选则文件仍留在原处，下次同步会重新出现在列表里）',
+        message: `确定删除《${name}》吗？`,
+        checkLabel: '同时删掉本机硬盘上这份副本（推荐；不勾选则文件仍留在原处）',
         checkDefault: true,
         danger: true
       });
       if (!dlg || !dlg.confirmed) return;
       await apiFetch(`/api/docs/${docId}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
-      if (STATE.drawerDoc && STATE.drawerDoc.id === docId) closePreviewDrawer();
+      if (STATE.drawerDoc && STATE.drawerDoc.id === docId) closePreviewDrawerForce();
       await loadBootstrap();
-      showToast(dlg.checked ? '🗑️ 已删除，硬盘副本一并清掉' : '🗑️ 已从工作台移除（文件仍在硬盘上）');
+      showToast(dlg.checked ? '🗑️ 已删除，硬盘副本一并清理' : '🗑️ 已从工作台移除');
     }
 
-    // 预览页里的删除入口：删的就是当前正在看的这份文件
     function deleteCurrentDrawerDoc() {
-      if (!STATE.drawerDoc) {
+      if (!STATE.drawerDoc || !STATE.drawerDoc.id) {
         showToast('当前预览的不是单独文件，无法删除');
         return;
       }
       deleteDocQuick(STATE.drawerDoc.id);
     }
 
-    // 预览页里的“打开目录”：在本机文件管理器里定位到该文件所在文件夹
     async function openDrawerFolder() {
       if (STATE.drawerDoc && STATE.drawerDoc.id) {
         await openLocalPath('folder', STATE.drawerDoc.id, STATE.drawerDoc.rel_path || '');
@@ -2751,8 +3363,6 @@
         await openLocalPath('folder', null, t.folder_rel_path);
       } else if (STATE.workspace_root) {
         await openLocalPath('folder', null, '');
-      } else {
-        showToast('当前没有可打开的目录');
       }
     }
 
@@ -2773,6 +3383,732 @@
       });
       updateSingleTaskInStateAndDOM(res.task);
       showToast('✅ 文件已存入事项本地文件夹并建立全文索引！');
+    }
+
+    // ==================== TAB 2 (新增): 📦 资料存档 (Archives) 交互实现 ====================
+    function fillArchiveTodayPrefix() {
+      const now = new Date();
+      const prefix = `${now.getMonth() + 1}.${String(now.getDate()).padStart(2, '0')}`;
+      const inp = document.getElementById('archTitleInput');
+      if (!inp.value.startsWith(prefix)) {
+        inp.value = `${prefix}${inp.value}`;
+      }
+      inp.focus();
+    }
+
+    async function handleArchiveFilesSelect(fileList) {
+      for (const f of fileList) {
+        STATE.archPendingFiles.push({
+          filename: f.name,
+          content_base64: await fileToBase64(f)
+        });
+      }
+      renderArchivePendingFiles();
+    }
+
+    async function handleArchiveIntakeDrop(ev) {
+      ev.preventDefault();
+      document.getElementById('archiveIntakeBox').style.background = 'var(--surface)';
+      if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length > 0) {
+        await handleArchiveFilesSelect(ev.dataTransfer.files);
+      }
+    }
+
+    async function handleArchiveIntakePaste(ev) {
+      if (!ev.clipboardData || !ev.clipboardData.files || ev.clipboardData.files.length === 0) return;
+      const ts = new Date().toISOString().replace(/[:T\-]/g, '').slice(0, 14);
+      for (const f of ev.clipboardData.files) {
+        let name = f.name;
+        if (!name || name === 'image.png') {
+          const ext = (f.type && f.type.split('/')[1]) || 'png';
+          name = `现场照片_${ts}.${ext}`;
+        }
+        STATE.archPendingFiles.push({
+          filename: name,
+          content_base64: await fileToBase64(f)
+        });
+      }
+      renderArchivePendingFiles();
+      showToast('📸 已粘贴图片至待存档列表');
+    }
+
+    function renderArchivePendingFiles() {
+      const bar = document.getElementById('archPendingFilesBar');
+      bar.innerHTML = STATE.archPendingFiles.map((f, idx) => `
+        <span class="file-pill">
+          📎 ${escapeHtml(f.filename)}
+          <span style="cursor:pointer;font-weight:700;" onclick="STATE.archPendingFiles.splice(${idx},1);renderArchivePendingFiles();">✖</span>
+        </span>
+      `).join('');
+    }
+
+    async function submitNewArchiveBundle() {
+      let title = document.getElementById('archTitleInput').value.trim();
+      const cat = document.getElementById('archCatSelect').value;
+      const archDate = document.getElementById('archDateInput').value || new Date().toISOString().slice(0, 10);
+      const notes = document.getElementById('archNotesInput').value.trim();
+      const rawTags = document.getElementById('archTagsInput').value.trim();
+      const tags = rawTags ? rawTags.split(/[\s,，、]+/).filter(Boolean) : [];
+
+      if (!title && STATE.archPendingFiles.length === 0 && !notes) {
+        showToast('请输入存档标题（如 11.17会议记录）或拖入要存档的文件');
+        return;
+      }
+      if (!title) {
+        const now = new Date();
+        title = `${now.getMonth()+1}.${now.getDate()}_${STATE.archPendingFiles[0]?.filename || '资料存档'}`;
+      }
+
+      showToast('📦 正在按次打包存入本地【资料存档】目录并建立索引...');
+      await apiFetch('/api/archives', {
+        method: 'POST',
+        body: JSON.stringify({
+          title,
+          category: cat,
+          archive_date: archDate,
+          notes_md: notes,
+          tags,
+          files: STATE.archPendingFiles
+        })
+      });
+
+      document.getElementById('archTitleInput').value = '';
+      document.getElementById('archNotesInput').value = '';
+      document.getElementById('archTagsInput').value = '';
+      STATE.archPendingFiles = [];
+      renderArchivePendingFiles();
+      await loadBootstrap();
+      showToast(`✅ 已成功存入资料存档包《${title}》！`);
+    }
+
+    function selectArchiveCategory(cat) {
+      STATE.archCategoryFilter = cat;
+      const sel = document.getElementById('archCatSelect');
+      if (cat && sel) sel.value = cat;
+      renderArchives();
+    }
+
+    function renderArchives() {
+      const catListEl = document.getElementById('archiveCategoryList');
+      const allArchives = STATE.archives || [];
+      const archCats = STATE.archive_categories || [];
+
+      let catHtml = `
+        <li class="cat-item ${STATE.archCategoryFilter === '' ? 'active' : ''}" onclick="selectArchiveCategory('')">
+          <span>📚 全部资料存档</span>
+          <span class="badge badge-routine">${allArchives.length}</span>
+        </li>
+      `;
+      archCats.forEach(cat => {
+        const count = allArchives.filter(a => a.category === cat).length;
+        catHtml += `
+          <li class="cat-item ${STATE.archCategoryFilter === cat ? 'active' : ''}"
+              onclick="selectArchiveCategory('${escapeHtml(cat)}')"
+              ondragover="event.preventDefault(); this.classList.add('drag-target');"
+              ondragleave="this.classList.remove('drag-target');"
+              ondrop="handleDropArchiveToCategory(event, '${escapeHtml(cat)}')">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📁 ${escapeHtml(cat)}</span>
+            <div style="display:flex;align-items:center;gap:4px;">
+              ${STATE.can_edit ? `
+                <span class="cat-ops" onclick="event.stopPropagation();">
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameScopeCategoryPrompt('archive', '${escapeHtml(cat)}')" title="重命名分类">✏️</button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteScopeCategoryPrompt('archive', '${escapeHtml(cat)}')" title="删除空分类">🗑️</button>
+                </span>
+              ` : ''}
+              <span class="badge badge-routine">${count}</span>
+            </div>
+          </li>
+        `;
+      });
+      if (catListEl) catListEl.innerHTML = catHtml;
+
+      const dateInp = document.getElementById('archDateInput');
+      if (dateInp && !dateInp.value) dateInp.value = new Date().toISOString().slice(0, 10);
+
+      const kw = (document.getElementById('archSearchInput')?.value || '').trim().toLowerCase();
+      const filtered = allArchives.filter(a => {
+        if (STATE.archCategoryFilter && a.category !== STATE.archCategoryFilter) return false;
+        if (kw) {
+          const hay = `${a.title} ${a.archive_date} ${a.category} ${a.notes_md} ${(a.tags || []).join(' ')} ${(a.files || []).map(f => f.filename).join(' ')}`.toLowerCase();
+          if (!hay.includes(kw)) return false;
+        }
+        return true;
+      });
+
+      document.getElementById('archCurrentCatTitle').textContent = STATE.archCategoryFilter ? `📁 ${STATE.archCategoryFilter}` : '📚 全部资料存档包（按时间轴倒序）';
+      document.getElementById('archFilteredCountBadge').textContent = `${filtered.length} 包`;
+
+      const container = document.getElementById('archivesTimelineContainer');
+      if (filtered.length === 0) {
+        container.innerHTML = `<div style="background:var(--surface);padding:34px;text-align:center;border-radius:10px;border:1px solid var(--border);color:var(--text-muted);">当前分类或搜索条件下暂无资料存档包。可在上方输入如“11.17会议记录”一键创建。</div>`;
+        return;
+      }
+
+      container.innerHTML = filtered.map(a => {
+        const images = a.images || [];
+        const audios = a.audios || [];
+        const others = [...(a.videos || []), ...(a.other_docs || [])];
+
+        const audioHtml = audios.map(aud => `
+          <div class="archive-audio-row">
+            <span style="font-size:12.5px;font-weight:600;color:var(--text-secondary);">🎙️ ${escapeHtml(aud.filename)}</span>
+            <audio controls preload="metadata" src="${escapeHtml(aud.media_url)}"></audio>
+            <a class="btn btn-xs" href="/api/docs/${aud.id}/download">⬇️ 下载</a>
+            ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteDocQuick(${aud.id})">×</button>` : ''}
+          </div>
+        `).join('');
+
+        const photoGridHtml = images.length > 0 ? `
+          <div style="margin-top:10px;">
+            <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:4px;">📸 现场照片与截图 (${images.length} 张，点击放大浏览)</div>
+            <div class="archive-photo-grid">
+              ${images.map((img, iIdx) => `
+                <div class="archive-photo-thumb" onclick="openArchiveGalleryLightbox(${a.id}, ${iIdx})">
+                  <img src="${escapeHtml(img.media_url)}" alt="${escapeHtml(img.filename)}" loading="lazy" />
+                  <div class="archive-photo-caption" title="${escapeHtml(img.filename)}">${escapeHtml(img.filename)}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : '';
+
+        const docsHtml = others.length > 0 ? `
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:5px;">
+            <div style="font-size:12px;font-weight:700;color:var(--text-secondary);">📄 课件、纪要与文档附件 (${others.length} 份)</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;">
+              ${others.map(d => `
+                <div style="background:var(--surface-alt);border:1px solid var(--border);border-radius:7px;padding:6px 10px;display:flex;align-items:center;gap:8px;font-size:12.5px;">
+                  <span class="file-name-link" style="font-weight:600;" onclick="openDocPreview(${d.id})">📎 ${escapeHtml(d.filename)}</span>
+                  <span style="font-size:11px;color:var(--text-muted);">(${escapeHtml(d.file_type || '')})</span>
+                  <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览</button>
+                  ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${d.id})">WPS</button>` : ''}
+                  <a class="btn btn-xs" href="/api/docs/${d.id}/download">下</a>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : '';
+
+        return `
+          <article class="archive-card ${a.is_pinned ? 'pinned' : ''}" id="archive_card_${a.id}"
+            draggable="${STATE.can_edit ? 'true' : 'false'}"
+            ondragstart="event.dataTransfer.setData('text/archive-id', '${a.id}')"
+            ondragover="if(STATE.can_edit){event.preventDefault();this.style.outline='2px dashed var(--teal)';}"
+            ondragleave="this.style.outline='none';"
+            ondrop="this.style.outline='none';if(STATE.can_edit && event.dataTransfer.files && event.dataTransfer.files.length>0){event.preventDefault();uploadAppendArchiveFiles(${a.id}, event.dataTransfer.files);}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
+              <div>
+                <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+                  <span class="badge badge-teal">📅 ${escapeHtml(a.archive_date)}</span>
+                  <span class="badge badge-routine">📁 ${escapeHtml(a.category)}</span>
+                  ${a.is_pinned ? '<span class="badge badge-warning">📌 置顶</span>' : ''}
+                  <strong style="font-size:16px;color:var(--text);cursor:pointer;" onclick="openEditArchiveModal(${a.id})">${escapeHtml(a.title)}</strong>
+                  ${(a.tags || []).map(tg => `<span class="badge badge-routine">#${escapeHtml(tg)}</span>`).join('')}
+                </div>
+                <div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">
+                  本地目录：<code>${escapeHtml(a.folder_rel_path)}</code> · 共 ${(a.files || []).length} 份文件
+                </div>
+              </div>
+
+              <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+                ${STATE.can_edit ? `
+                  <label class="btn btn-xs btn-teal" style="cursor:pointer;" title="向本归档包继续追加录音、照片、PPT或文档">
+                    + 追加文件
+                    <input type="file" multiple style="display:none;" onchange="uploadAppendArchiveFiles(${a.id}, this.files)" />
+                  </label>
+                  <button class="btn btn-xs" onclick="openEditArchiveModal(${a.id})">✏️ 编辑纪要/标题</button>
+                  <button class="btn btn-xs" onclick="toggleArchivePin(${a.id}, ${!a.is_pinned})">${a.is_pinned ? '取消置顶' : '📌置顶'}</button>
+                ` : ''}
+                ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('folder', null, '${escapeHtml(a.folder_rel_path)}')">📂 打开目录</button>` : ''}
+                <a class="btn btn-xs" href="/api/archives/${a.id}/zip">📦 打包下载(.zip)</a>
+                ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteArchiveBundle(${a.id})">🗑️</button>` : ''}
+              </div>
+            </div>
+
+            ${a.notes_md ? `
+              <div class="preview-rendered-box" style="margin-top:10px;padding:10px 14px;font-size:13.5px;">
+                ${renderSimpleMarkdown(a.notes_md, kw ? [kw] : [])}
+              </div>
+            ` : ''}
+
+            ${audioHtml}
+            ${photoGridHtml}
+            ${docsHtml}
+          </article>
+        `;
+      }).join('');
+    }
+
+    async function uploadAppendArchiveFiles(archiveId, fileList) {
+      if (!fileList || fileList.length === 0) return;
+      showToast('正在向该归档包追加文件...');
+      const files = [];
+      for (const f of fileList) {
+        files.push({
+          filename: f.name,
+          content_base64: await fileToBase64(f)
+        });
+      }
+      await apiFetch(`/api/archives/${archiveId}/files`, {
+        method: 'POST',
+        body: JSON.stringify({ files })
+      });
+      await loadBootstrap();
+      showToast('✅ 文件已追加进该资料存档包！');
+    }
+
+    async function handleDropArchiveToCategory(ev, targetCat) {
+      ev.preventDefault();
+      ev.currentTarget.classList.remove('drag-target');
+      const aid = parseInt(ev.dataTransfer.getData('text/archive-id'));
+      if (!aid || !targetCat) return;
+      await apiFetch(`/api/archives/${aid}`, {
+        method: 'PUT',
+        body: JSON.stringify({ category: targetCat })
+      });
+      await loadBootstrap();
+      showToast(`📁 已将资料存档包移入【${targetCat}】！`);
+    }
+
+    function openEditArchiveModal(archiveId) {
+      const a = (STATE.archives || []).find(x => x.id === archiveId);
+      if (!a) return;
+      document.getElementById('editArchiveId').value = a.id;
+      document.getElementById('editArchiveTitle').value = a.title || '';
+      document.getElementById('editArchiveCat').value = a.category || '';
+      document.getElementById('editArchiveDate').value = a.archive_date || '';
+      document.getElementById('editArchiveTags').value = (a.tags || []).join(' ');
+      document.getElementById('editArchiveNotes').value = a.notes_md || '';
+      document.getElementById('editArchivePinned').checked = !!a.is_pinned;
+      document.getElementById('archiveModalBackdrop').style.display = 'flex';
+    }
+
+    async function saveArchiveModal() {
+      const aid = document.getElementById('editArchiveId').value;
+      const rawTags = document.getElementById('editArchiveTags').value.trim();
+      const tags = rawTags ? rawTags.split(/[\s,，、]+/).filter(Boolean) : [];
+      await apiFetch(`/api/archives/${aid}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: document.getElementById('editArchiveTitle').value.trim(),
+          category: document.getElementById('editArchiveCat').value,
+          archive_date: document.getElementById('editArchiveDate').value,
+          tags,
+          notes_md: document.getElementById('editArchiveNotes').value,
+          is_pinned: document.getElementById('editArchivePinned').checked
+        })
+      });
+      document.getElementById('archiveModalBackdrop').style.display = 'none';
+      await loadBootstrap();
+      showToast('✅ 资料存档包已更新并同步至本地文件夹！');
+    }
+
+    async function toggleArchivePin(archiveId, isPinned) {
+      await apiFetch(`/api/archives/${archiveId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_pinned: isPinned })
+      });
+      await loadBootstrap();
+    }
+
+    async function deleteArchiveBundle(archiveId) {
+      const a = (STATE.archives || []).find(x => x.id === archiveId);
+      const dlg = await showCustomDialog({
+        title: '🗑️ 删除资料存档包',
+        message: `确定要删除资料存档包《${a ? a.title : archiveId}》吗？`,
+        checkLabel: '同时从本机硬盘删除该归档文件夹及其内部所有文件',
+        checkDefault: false,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      await apiFetch(`/api/archives/${archiveId}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
+      await loadBootstrap();
+      showToast('已删除该资料存档包');
+    }
+
+    // ==================== 全屏照片灯箱 (Lightbox) ====================
+    function openArchiveGalleryLightbox(archiveId, startIndex = 0) {
+      const a = (STATE.archives || []).find(x => x.id === archiveId);
+      if (!a || !a.images || a.images.length === 0) return;
+      STATE.lightboxList = a.images.map(img => ({
+        url: img.media_url,
+        title: `${a.title} — ${img.filename}`,
+        dl: `/api/docs/${img.id}/download`
+      }));
+      STATE.lightboxIndex = startIndex;
+      renderLightboxSlide();
+      document.getElementById('imageLightboxBackdrop').style.display = 'flex';
+    }
+
+    function openSingleImageLightbox(url, title, dlUrl) {
+      STATE.lightboxList = [{ url, title, dl: dlUrl || url }];
+      STATE.lightboxIndex = 0;
+      renderLightboxSlide();
+      document.getElementById('imageLightboxBackdrop').style.display = 'flex';
+    }
+
+    function renderLightboxSlide() {
+      const item = STATE.lightboxList[STATE.lightboxIndex];
+      if (!item) return;
+      document.getElementById('lightboxImgEl').src = item.url;
+      document.getElementById('lightboxCaption').textContent = `${item.title} (${STATE.lightboxIndex + 1} / ${STATE.lightboxList.length})`;
+      document.getElementById('lightboxDownloadBtn').href = item.dl;
+    }
+
+    function stepLightbox(delta) {
+      if (!STATE.lightboxList.length) return;
+      STATE.lightboxIndex = (STATE.lightboxIndex + delta + STATE.lightboxList.length) % STATE.lightboxList.length;
+      renderLightboxSlide();
+    }
+
+    function closeImageLightbox() {
+      document.getElementById('imageLightboxBackdrop').style.display = 'none';
+    }
+
+    // ==================== TAB 3 (新增): 📌 重要事项记录 (左树 + 右直读画布) 交互实现 ====================
+    function openRecordInTab(recordId) {
+      switchMainTab('records');
+      selectImportantRecord(recordId);
+    }
+
+    function renderRecordsModule() {
+      const allRecs = STATE.important_records || [];
+      const recCats = STATE.record_categories || [];
+      const kw = (document.getElementById('recTreeFilterInput')?.value || '').trim().toLowerCase();
+
+      // 渲染分类筛选胶囊
+      const pillsBar = document.getElementById('recCatPillsBar');
+      let pillsHtml = `<button class="filter-pill ${STATE.recCategoryFilter === '' ? 'active' : ''}" style="padding:2px 9px;font-size:11.5px;" onclick="STATE.recCategoryFilter='';renderRecordsModule();">全部 (${allRecs.length})</button>`;
+      recCats.forEach(c => {
+        const cnt = allRecs.filter(r => r.category === c).length;
+        pillsHtml += `<button class="filter-pill ${STATE.recCategoryFilter === c ? 'active' : ''}" style="padding:2px 9px;font-size:11.5px;" onclick="STATE.recCategoryFilter='${escapeHtml(c)}';renderRecordsModule();">${escapeHtml(c)} (${cnt})</button>`;
+      });
+      if (pillsBar) pillsBar.innerHTML = pillsHtml;
+
+      const filtered = allRecs.filter(r => {
+        if (STATE.recCategoryFilter && r.category !== STATE.recCategoryFilter) return false;
+        if (kw) {
+          const hay = `${r.title} ${r.category} ${r.content_md} ${(r.tags || []).join(' ')} ${(r.files || []).map(f => f.filename).join(' ')}`.toLowerCase();
+          if (!hay.includes(kw)) return false;
+        }
+        return true;
+      });
+
+      const treeEl = document.getElementById('recordsTreeList');
+      if (filtered.length === 0) {
+        treeEl.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12.5px;">暂无匹配的重要事项记录。可点右上【+ 新建事项】添加如“高密汛情基本情况”、“地震应急预案”。</div>`;
+        return;
+      }
+
+      if (!STATE.activeRecordId || !filtered.some(r => r.id === STATE.activeRecordId)) {
+        selectImportantRecord(filtered[0].id, false);
+      }
+
+      treeEl.innerHTML = filtered.map(r => `
+        <div class="record-tree-item ${STATE.activeRecordId === r.id ? 'active' : ''}" onclick="selectImportantRecord(${r.id}, true)">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+            <strong style="font-size:13.5px;color:var(--text);line-height:1.35;">
+              ${r.is_pinned ? '📌 ' : '📘 '}${escapeHtml(r.title)}
+            </strong>
+            <span class="badge badge-routine" style="font-size:10.5px;flex-shrink:0;">${(r.files || []).length}附件</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;display:flex;justify-content:space-between;">
+            <span>📂 ${escapeHtml(r.category)}</span>
+            <span>${escapeHtml((r.updated_at || '').slice(0, 10))}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function selectImportantRecord(recordId, updateTreeHighlight = true) {
+      STATE.activeRecordId = recordId;
+      STATE.activeRecordAttIndex = -1;
+      if (updateTreeHighlight) {
+        document.querySelectorAll('#recordsTreeList .record-tree-item').forEach(el => el.classList.remove('active'));
+        renderRecordsModule();
+      }
+      const canvas = document.getElementById('recordReaderCanvas');
+      canvas.innerHTML = `<div style="padding:36px;color:var(--text-muted);">正在加载直读内容...</div>`;
+      try {
+        const res = await apiFetch(`/api/records/${recordId}`);
+        STATE.activeRecordDetail = res.record;
+        renderActiveRecordCanvas();
+      } catch (err) {
+        canvas.innerHTML = `<div style="padding:36px;color:var(--danger);">加载失败: ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    function renderActiveRecordCanvas() {
+      const r = STATE.activeRecordDetail;
+      const canvas = document.getElementById('recordReaderCanvas');
+      if (!r) return;
+      const files = r.files || [];
+      const kw = (document.getElementById('recTreeFilterInput')?.value || '').trim();
+      const kws = kw ? [kw] : [];
+
+      // 构建正文与关联附件直读切换标签栏
+      let tabsHtml = `
+        <button class="record-att-tab ${STATE.activeRecordAttIndex === -1 ? 'active' : ''}"
+                onclick="STATE.activeRecordAttIndex=-1; renderActiveRecordCanvas();">
+          📖 核心正文与摘要直读
+        </button>
+      `;
+      files.forEach((f, idx) => {
+        tabsHtml += `
+          <button class="record-att-tab ${STATE.activeRecordAttIndex === idx ? 'active' : ''}"
+                  onclick="STATE.activeRecordAttIndex=${idx}; renderActiveRecordCanvas();">
+            📎 ${escapeHtml(f.filename)} (${escapeHtml(f.file_type || '')})
+          </button>
+        `;
+      });
+
+      let bodyContentHtml = '';
+      if (STATE.activeRecordAttIndex === -1) {
+        // 默认直读模式：先展示 Markdown 正文，若下方挂载了 Excel/Word/PDF 原件，直接平铺展示第一个主附件的直读表格/内容！
+        bodyContentHtml = `
+          <div class="preview-rendered-box" style="background:var(--surface);border:none;padding:4px 0;">
+            ${r.content_md ? renderSimpleMarkdown(r.content_md, kws) : '<p style="color:var(--text-muted);">（暂无手写正文，请直接查看下方挂载的文档/表格原件）</p>'}
+          </div>
+        `;
+        if (files.length > 0) {
+          bodyContentHtml += files.map((f, fIdx) => `
+            <div style="margin-top:22px;padding-top:16px;border-top:2px solid var(--border);">
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+                <strong style="font-size:15px;color:var(--primary);">📊 关联原件直读：${escapeHtml(f.filename)}</strong>
+                <div style="display:flex;gap:6px;">
+                  ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})">🖥️ 用本机 WPS 打开编辑</button>` : ''}
+                  <a class="btn btn-xs btn-primary" href="/api/docs/${f.id}/download">⬇️ 下载原件</a>
+                  ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteDocQuick(${f.id})">🗑 移除此附件</button>` : ''}
+                </div>
+              </div>
+              ${renderStructuredPreviewHtml(f, kws, `rec_inline_${r.id}_${fIdx}`)}
+            </div>
+          `).join('');
+        }
+      } else {
+        const activeFile = files[STATE.activeRecordAttIndex];
+        if (activeFile) {
+          bodyContentHtml = `
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding:8px 12px;background:var(--primary-soft);border-radius:7px;">
+                <span style="font-size:12.5px;color:var(--primary);font-weight:600;">📂 本地物理路径：${escapeHtml(activeFile.abs_path)}</span>
+                <div style="display:flex;gap:6px;">
+                  ${STATE.is_localhost ? `<button class="btn btn-xs btn-primary" onclick="openLocalPath('file', ${activeFile.id})">🖥️ 本机 WPS 打开编辑</button>` : ''}
+                  <a class="btn btn-xs" href="/api/docs/${activeFile.id}/download">⬇️ 下载此文件</a>
+                  ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteDocQuick(${activeFile.id})">🗑 删除</button>` : ''}
+                </div>
+              </div>
+              ${renderStructuredPreviewHtml(activeFile, kws, `rec_tab_${r.id}_${STATE.activeRecordAttIndex}`)}
+            </div>
+          `;
+        }
+      }
+
+      canvas.innerHTML = `
+        <div class="record-reader-header">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span class="badge badge-normal">📂 ${escapeHtml(r.category)}</span>
+              ${r.is_pinned ? '<span class="badge badge-warning">📌 常备置顶</span>' : ''}
+              <h2 style="font-size:20px;margin:0;color:var(--text);">${escapeHtml(r.title)}</h2>
+              ${(r.tags || []).map(t => `<span class="badge badge-routine">#${escapeHtml(t)}</span>`).join('')}
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
+              本地物理目录：<code>${escapeHtml(r.folder_rel_path)}</code> · 数据基准更新于：${escapeHtml(r.updated_at)}
+            </div>
+          </div>
+
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            ${STATE.can_edit ? `
+              <button class="btn btn-xs btn-primary" onclick="openRecordModal(${r.id})">✍️ 编辑正文/属性</button>
+              <label class="btn btn-xs btn-success" style="cursor:pointer;" title="直接挂载 Word / PDF / Excel 底数文件">
+                📎 +挂载 Word/PDF/Excel
+                <input type="file" multiple style="display:none;" onchange="uploadAppendRecordFiles(${r.id}, this.files)" />
+              </label>
+              <button class="btn btn-xs" onclick="toggleRecordPin(${r.id}, ${!r.is_pinned})">${r.is_pinned ? '取消置顶' : '📌置顶'}</button>
+            ` : ''}
+            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('folder', null, '${escapeHtml(r.folder_rel_path)}')">📂 打开目录</button>` : ''}
+            <button class="btn btn-xs" onclick="copyText(STATE.activeRecordDetail?.content_md || '', '📋 已复制重要事项正文！')">📋 复制正文</button>
+            ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteImportantRecord(${r.id})">🗑️</button>` : ''}
+          </div>
+        </div>
+
+        <div class="record-reader-body">
+          ${files.length > 0 ? `<div class="record-att-tabs">${tabsHtml}</div>` : ''}
+          ${bodyContentHtml}
+        </div>
+      `;
+    }
+
+    function openRecordModal(recordId = null) {
+      if (recordId) {
+        const r = STATE.activeRecordDetail && STATE.activeRecordDetail.id === recordId
+          ? STATE.activeRecordDetail
+          : (STATE.important_records || []).find(x => x.id === recordId);
+        if (!r) return;
+        document.getElementById('recordModalTitle').textContent = `📌 编辑重要事项记录 #${r.id}`;
+        document.getElementById('editRecordId').value = r.id;
+        document.getElementById('editRecordTitle').value = r.title || '';
+        document.getElementById('editRecordCat').value = r.category || '';
+        document.getElementById('editRecordTags').value = (r.tags || []).join(' ');
+        document.getElementById('editRecordPinned').checked = !!r.is_pinned;
+        document.getElementById('editRecordContent').value = r.content_md || '';
+      } else {
+        document.getElementById('recordModalTitle').textContent = '📌 新建重要事项记录（底数 / 预案 / 常备知识）';
+        document.getElementById('editRecordId').value = '';
+        document.getElementById('editRecordTitle').value = '';
+        document.getElementById('editRecordCat').value = STATE.recCategoryFilter || (STATE.record_categories || [])[0] || '01_汛情与防灾底数';
+        document.getElementById('editRecordTags').value = '';
+        document.getElementById('editRecordPinned').checked = true;
+        document.getElementById('editRecordContent').value = '';
+      }
+      document.getElementById('editRecordFilesInput').value = '';
+      document.getElementById('recordModalBackdrop').style.display = 'flex';
+    }
+
+    async function saveRecordModal() {
+      const rid = document.getElementById('editRecordId').value;
+      const title = document.getElementById('editRecordTitle').value.trim();
+      const cat = document.getElementById('editRecordCat').value;
+      const rawTags = document.getElementById('editRecordTags').value.trim();
+      const tags = rawTags ? rawTags.split(/[\s,，、]+/).filter(Boolean) : [];
+      const content = document.getElementById('editRecordContent').value;
+      const isPinned = document.getElementById('editRecordPinned').checked;
+      const fileInp = document.getElementById('editRecordFilesInput');
+
+      if (!title && (!fileInp.files || fileInp.files.length === 0)) {
+        showToast('请填写重要事项标题或选择一份文件');
+        return;
+      }
+
+      const files = [];
+      if (fileInp.files && fileInp.files.length > 0) {
+        for (const f of fileInp.files) {
+          files.push({
+            filename: f.name,
+            content_base64: await fileToBase64(f)
+          });
+        }
+      }
+
+      const payload = { title, category: cat, tags, content_md: content, is_pinned: isPinned, files };
+      let res;
+      if (rid) {
+        res = await apiFetch(`/api/records/${rid}`, { method: 'PUT', body: JSON.stringify(payload) });
+      } else {
+        res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      document.getElementById('recordModalBackdrop').style.display = 'none';
+      if (res.record && res.record.id) {
+        STATE.activeRecordId = res.record.id;
+        STATE.activeRecordDetail = res.record;
+      }
+      await loadBootstrap();
+      showToast('✅ 重要事项记录已保存并生成直读视图！');
+    }
+
+    async function uploadAppendRecordFiles(recordId, fileList) {
+      if (!fileList || fileList.length === 0) return;
+      showToast('正在上传并解析原件结构...');
+      const files = [];
+      for (const f of fileList) {
+        files.push({
+          filename: f.name,
+          content_base64: await fileToBase64(f)
+        });
+      }
+      const res = await apiFetch(`/api/records/${recordId}/files`, {
+        method: 'POST',
+        body: JSON.stringify({ files })
+      });
+      if (res.record) {
+        STATE.activeRecordDetail = res.record;
+        renderActiveRecordCanvas();
+      }
+      await loadBootstrap();
+      showToast('✅ 原件已挂载并生成直读视图！');
+    }
+
+    async function toggleRecordPin(recordId, isPinned) {
+      const res = await apiFetch(`/api/records/${recordId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_pinned: isPinned })
+      });
+      if (res.record) STATE.activeRecordDetail = res.record;
+      await loadBootstrap();
+    }
+
+    async function deleteImportantRecord(recordId) {
+      const r = (STATE.important_records || []).find(x => x.id === recordId);
+      const dlg = await showCustomDialog({
+        title: '🗑️ 删除重要事项记录',
+        message: `确定要删除重要事项记录《${r ? r.title : recordId}》吗？`,
+        checkLabel: '同时从本机硬盘删除该重要事项文件夹及内部附件',
+        checkDefault: false,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      await apiFetch(`/api/records/${recordId}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
+      STATE.activeRecordId = null;
+      STATE.activeRecordDetail = null;
+      await loadBootstrap();
+      showToast('已删除该条重要事项记录');
+    }
+
+    // ==================== 通用分类新建/重命名/删除（支持 task / archive / record 三域） ====================
+    async function createScopeCategoryPrompt(scope = 'task') {
+      const scopeLabel = { task: '业务待办与公文库', archive: '资料存档', record: '重要事项记录' }[scope] || '分类';
+      const placeholderMap = { task: '例如：06_森林防灭火专项', archive: '例如：06_领导调研影像', record: '例如：06_危险源与避难场所底数' };
+      const dlg = await showCustomDialog({
+        title: `📁 新建【${scopeLabel}】分类目录`,
+        message: `请输入新分类名称（将在本地硬盘对应分区下真实创建物理文件夹）：`,
+        inputDefault: '',
+        inputPlaceholder: placeholderMap[scope] || '输入分类名...'
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
+      await apiFetch('/api/categories', {
+        method: 'POST',
+        body: JSON.stringify({ scope, name: dlg.value.trim() })
+      });
+      await loadBootstrap();
+      showToast(`📁 已新建【${dlg.value.trim()}】分类目录！`);
+    }
+
+    async function renameScopeCategoryPrompt(scope, oldName) {
+      const dlg = await showCustomDialog({
+        title: '✏️ 重命名或合并分类目录',
+        message: `将分类【${oldName}】重命名为（若输入已存在的分类名则自动合并）：`,
+        inputDefault: oldName
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim() || dlg.value.trim() === oldName) return;
+      await apiFetch('/api/categories', {
+        method: 'PUT',
+        body: JSON.stringify({ scope, old_name: oldName, new_name: dlg.value.trim() })
+      });
+      if (scope === 'task' && STATE.libCategoryFilter === oldName) STATE.libCategoryFilter = dlg.value.trim();
+      if (scope === 'archive' && STATE.archCategoryFilter === oldName) STATE.archCategoryFilter = dlg.value.trim();
+      if (scope === 'record' && STATE.recCategoryFilter === oldName) STATE.recCategoryFilter = dlg.value.trim();
+      await loadBootstrap();
+      showToast(`✅ 已将分类【${oldName}】更新为【${dlg.value.trim()}】！`);
+    }
+
+    async function deleteScopeCategoryPrompt(scope, catName) {
+      const dlg = await showCustomDialog({
+        title: '🗑️ 删除空分类目录',
+        message: `确定要删除空分类目录【${catName}】吗？`,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      try {
+        await apiFetch(`/api/categories?scope=${encodeURIComponent(scope)}&name=${encodeURIComponent(catName)}`, { method: 'DELETE' });
+        if (scope === 'task' && STATE.libCategoryFilter === catName) STATE.libCategoryFilter = '';
+        if (scope === 'archive' && STATE.archCategoryFilter === catName) STATE.archCategoryFilter = '';
+        if (scope === 'record' && STATE.recCategoryFilter === catName) STATE.recCategoryFilter = '';
+        await loadBootstrap();
+        showToast(`🗑️ 已删除空分类目录【${catName}】`);
+      } catch (err) {
+        showToast('❌ ' + err.message);
+      }
     }
 
     // ==================== 本机 WPS 直开与国标 GB/T 9704 公文排版联动 ====================
@@ -2823,7 +4159,11 @@
           method: 'POST',
           body: JSON.stringify({ mode })
         });
-        await loadBootstrap();
+        if (res.task) {
+          updateSingleTaskInStateAndDOM(res.task);
+        } else {
+          await loadBootstrap();
+        }
         showToast(`✅ 已生成国标公文《${res.document.filename}》并存入本地文件夹！`);
         window.open(`/api/docs/${res.document.id}/download`, '_blank');
       } catch (err) {
@@ -2831,7 +4171,7 @@
       }
     }
 
-    // ==================== 独立【公文与材料库】渲染、拖拽归类、批量操作与分页 ====================
+    // ==================== TAB 4: 独立【公文与材料库】渲染、拖拽归类、批量操作与分页 ====================
     function getFilteredLibraryDocs() {
       const kw = (document.getElementById('libQuickFilterInput')?.value || '').trim().toLowerCase();
       return (STATE.documents || []).filter(d => {
@@ -2856,7 +4196,7 @@
           <span class="badge badge-routine">${docs.length}</span>
         </li>
       `;
-      STATE.categories.forEach(cat => {
+      (STATE.categories || []).forEach(cat => {
         const count = docs.filter(d => d.category === cat).length;
         catHtml += `
           <li class="cat-item ${STATE.libCategoryFilter === cat ? 'active' : ''}"
@@ -2868,8 +4208,8 @@
             <div style="display:flex;align-items:center;gap:4px;">
               ${STATE.can_edit ? `
                 <span class="cat-ops" onclick="event.stopPropagation();">
-                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameCategoryPrompt('${escapeHtml(cat)}')" title="重命名或合并此物理分类文件夹">✏️</button>
-                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteCategoryPrompt('${escapeHtml(cat)}')" title="删除空目录">🗑️</button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameScopeCategoryPrompt('task', '${escapeHtml(cat)}')" title="重命名或合并此物理分类文件夹">✏️</button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteScopeCategoryPrompt('task', '${escapeHtml(cat)}')" title="删除空目录">🗑️</button>
                 </span>
               ` : ''}
               <span class="badge badge-routine">${count}</span>
@@ -2899,6 +4239,8 @@
         draft: '<span class="badge badge-archived">✍️ 我写的材料</span>',
         template: '<span class="badge badge-warning">⭐ 常用范文/模板</span>',
         incoming: '<span class="badge badge-normal">📄 上级来文原件</span>',
+        archive: '<span class="badge badge-teal">📦 资料存档文件</span>',
+        record: '<span class="badge badge-normal">📌 重要事项文件</span>',
         historical: '<span class="badge badge-routine">🏛️ 历史公文归档</span>'
       };
 
@@ -2924,7 +4266,7 @@
               </span>
             </div>
             <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">
-              ${escapeHtml((d.content_preview || '').slice(0, 72))}...
+              ${escapeHtml((d.content_preview || '').slice(0, 72))}
             </div>
           </td>
           <td>${roleLabelMap[d.doc_role] || escapeHtml(d.doc_role)}</td>
@@ -2935,7 +4277,7 @@
           <td style="font-size:12px;color:var(--text-muted);white-space:nowrap;">${escapeHtml(d.updated_at)}</td>
           <td>
             <div style="display:flex;gap:4px;flex-wrap:wrap;">
-              <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览/改稿</button>
+              <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览/直读</button>
               ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${d.id})" title="一键排版导出为 GB/T 9704 国标公文 .docx">📄 国标.docx</button>` : ''}
               ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${d.id})">🖥️ WPS</button>` : ''}
               <a class="btn btn-xs" href="/api/docs/${d.id}/download">⬇️ 下载</a>
@@ -3079,55 +4421,6 @@
       showToast('已批量移除选中文件');
     }
 
-    async function createNewCategoryPrompt() {
-      const dlg = await showCustomDialog({
-        title: '📁 新建本地物理分类目录',
-        message: '请输入新分类文件夹名称（将在 workspace_files 下真实创建物理目录）：',
-        inputDefault: '',
-        inputPlaceholder: '例如：06_森林防灭火专项'
-      });
-      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
-      await apiFetch('/api/categories', {
-        method: 'POST',
-        body: JSON.stringify({ name: dlg.value.trim() })
-      });
-      await loadBootstrap();
-      showToast('📁 已在本地硬盘创建分类目录并同步！');
-    }
-
-    async function renameCategoryPrompt(oldName) {
-      const dlg = await showCustomDialog({
-        title: '✏️ 重命名或合并物理分类目录',
-        message: `将分类【${oldName}】重命名为（若输入已存在的分类名，则自动将该目录下的事项与文件合并过去）：`,
-        inputDefault: oldName
-      });
-      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim() || dlg.value.trim() === oldName) return;
-      await apiFetch('/api/categories', {
-        method: 'PUT',
-        body: JSON.stringify({ old_name: oldName, new_name: dlg.value.trim() })
-      });
-      if (STATE.libCategoryFilter === oldName) STATE.libCategoryFilter = dlg.value.trim();
-      await loadBootstrap();
-      showToast(`✅ 已将分类【${oldName}】重命名/合并为【${dlg.value.trim()}】并同步更新本地物理路径！`);
-    }
-
-    async function deleteCategoryPrompt(catName) {
-      const dlg = await showCustomDialog({
-        title: '🗑️ 删除空分类目录',
-        message: `确定要删除空分类目录【${catName}】吗？`,
-        danger: true
-      });
-      if (!dlg || !dlg.confirmed) return;
-      try {
-        await apiFetch(`/api/categories?name=${encodeURIComponent(catName)}`, { method: 'DELETE' });
-        if (STATE.libCategoryFilter === catName) STATE.libCategoryFilter = '';
-        await loadBootstrap();
-        showToast(`🗑️ 已删除空分类目录【${catName}】`);
-      } catch (err) {
-        showToast('❌ ' + err.message);
-      }
-    }
-
     function openUploadLibraryModal() {
       document.getElementById('libUploadCat').value = STATE.libCategoryFilter || STATE.categories[0] || '01_防灾减灾';
       document.getElementById('libUploadModalBackdrop').style.display = 'flex';
@@ -3248,10 +4541,10 @@
       await apiFetch(`/api/docs/${docId}/to-task`, { method: 'POST', body: '{}' });
       await loadBootstrap();
       switchMainTab('workbench');
-      showToast('✅ 已转为工作台待办事项！');
+      showToast('✅ 已转为工作台待办事项（原文件已自动移入事项专属目录）！');
     }
 
-    // ==================== 周期性/常态化工作派生管理（含全字段编辑弹窗回填） ====================
+    // ==================== TAB 5: 周期性/常态化工作派生管理 ====================
     function renderRecurring() {
       document.getElementById('btnAddRecurring').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       const tbody = document.getElementById('recurringTableBody');
@@ -3374,7 +4667,7 @@
       await loadBootstrap();
     }
 
-    // ==================== 搜索（含定位事项脉冲跳转） ====================
+    // ==================== 四维全库搜索（待办+公文+资料存档+重要事项记录） ====================
     function handleSearchDebounce() {
       clearTimeout(window._searchTimer);
       const q = document.getElementById('globalSearchInput').value.trim();
@@ -3382,7 +4675,7 @@
         clearSearch();
         return;
       }
-      window._searchTimer = setTimeout(() => { runUserSearch(); }, 260);
+      window._searchTimer = setTimeout(() => { runUserSearch(); }, 250);
     }
 
     function setSearchScope(scope) {
@@ -3405,7 +4698,14 @@
       document.getElementById('searchResultsBox').style.display = 'block';
       document.getElementById('clearSearchBtn').style.display = 'inline-flex';
       document.getElementById('aiSearchAnswerWrap').innerHTML = '';
-      renderSearchResultsList(res.tasks || [], res.documents || [], `常规检索（${STATE.searchScope === 'title' ? '仅标题/文号' : '标题 + 全文内容 FTS5'}）`, STATE.searchKeywords);
+      renderSearchResultsList(
+        res.tasks || [],
+        res.documents || [],
+        res.archives || [],
+        res.important_records || [],
+        `四维检索（${STATE.searchScope === 'title' ? '仅标题/文号' : '标题 + 全文内容 FTS5'}）`,
+        STATE.searchKeywords
+      );
     }
 
     async function runAiSemanticSearch() {
@@ -3416,7 +4716,7 @@
       }
       document.getElementById('searchResultsBox').style.display = 'block';
       document.getElementById('clearSearchBtn').style.display = 'inline-flex';
-      document.getElementById('aiSearchAnswerWrap').innerHTML = `<div class="ai-answer-card">🤖 正在执行两段式 FTS5 初筛与 AI 智能语义汇总...</div>`;
+      document.getElementById('aiSearchAnswerWrap').innerHTML = `<div class="ai-answer-card">🤖 正在执行四维 FTS5 初筛与 AI 智能语义汇总...</div>`;
       const res = await apiFetch('/api/ai/search', {
         method: 'POST',
         body: JSON.stringify({ query: q })
@@ -3427,31 +4727,67 @@
           <div style="font-weight:700;margin-bottom:6px;color:var(--purple);">
             🤖 AI 智能检索回答（提取检索词：${(res.keywords || []).map(k => `<code>${escapeHtml(k)}</code>`).join('、')}）
           </div>
-          <div>${highlightKeywordsHtml(res.answer, STATE.searchKeywords)}</div>
+          <div>${renderSimpleMarkdown(res.answer, STATE.searchKeywords)}</div>
         </div>
       `;
-      renderSearchResultsList(res.tasks || [], res.documents || [], 'AI 语义关联召回明细', STATE.searchKeywords);
+      renderSearchResultsList(
+        res.tasks || [],
+        res.documents || [],
+        res.archives || [],
+        res.important_records || [],
+        'AI 语义关联召回明细',
+        STATE.searchKeywords
+      );
     }
 
-    function renderSearchResultsList(tasks, docs, titleLabel, kws = []) {
+    function renderSearchResultsList(tasks, docs, archives, records, titleLabel, kws = []) {
       const box = document.getElementById('searchMatchedContent');
-      let html = `<div style="font-weight:700;margin-bottom:8px;color:var(--text-secondary);">🔎 ${escapeHtml(titleLabel)}：命中 ${tasks.length} 项工作事项，${docs.length} 份公文与材料</div>`;
+      let html = `<div style="font-weight:700;margin-bottom:8px;color:var(--text-secondary);">🔎 ${escapeHtml(titleLabel)}：命中 ${records.length} 条重要事项，${archives.length} 个资料存档包，${tasks.length} 项工作待办，${docs.length} 份文件</div>`;
+
+      if (records.length > 0) {
+        html += `<div style="margin-bottom:10px;display:flex;flex-direction:column;gap:6px;">` + records.map(r => `
+          <div style="background:var(--primary-soft);border:1px solid #93c5fd;padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <div>
+              <strong>📌 [重要事项记录] ${highlightKeywordsHtml(r.title, kws)}</strong>
+              <span class="badge badge-routine" style="margin-left:6px;">${escapeHtml(r.category)}</span>
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${highlightKeywordsHtml(r.match_snippet || (r.content_md || '').slice(0, 140), kws)}</div>
+            </div>
+            <button class="btn btn-xs btn-primary" onclick="openRecordInTab(${r.id}); clearSearch();">📖 直读内容</button>
+          </div>
+        `).join('') + `</div>`;
+      }
+
+      if (archives.length > 0) {
+        html += `<div style="margin-bottom:10px;display:flex;flex-direction:column;gap:6px;">` + archives.map(a => `
+          <div style="background:var(--teal-soft);border:1px solid #99f6e4;padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <div>
+              <strong>📦 [资料存档包] ${highlightKeywordsHtml(a.title, kws)}</strong>
+              <span class="badge badge-teal" style="margin-left:6px;">${escapeHtml(a.archive_date)}</span>
+              <span class="badge badge-routine">${escapeHtml(a.category)} (${(a.files||[]).length}份附件)</span>
+              <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${highlightKeywordsHtml(a.match_snippet || (a.notes_md || '').slice(0, 140), kws)}</div>
+            </div>
+            <button class="btn btn-xs btn-teal" onclick="locateArchiveCard(${a.id})">🎯 定位存档包</button>
+          </div>
+        `).join('') + `</div>`;
+      }
+
       if (tasks.length > 0) {
         html += `<div style="margin-bottom:10px;display:flex;flex-direction:column;gap:6px;">` + tasks.map(t => `
           <div style="background:var(--surface-alt);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div>
-              <strong>[事项] ${highlightKeywordsHtml(t.title, kws)}</strong>
+              <strong>📋 [待办事项] ${highlightKeywordsHtml(t.title, kws)}</strong>
               <span class="badge badge-routine" style="margin-left:6px;">${escapeHtml(t.category)}</span>
               ${t.doc_number ? `<span class="badge badge-warning">${highlightKeywordsHtml(t.doc_number, kws)}</span>` : ''}
               <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${highlightKeywordsHtml(t.match_snippet || t.summary || '', kws)}</div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0;">
               <button class="btn btn-xs btn-primary" onclick="locateTaskCard(${t.id})">🎯 定位事项</button>
-              <a class="btn btn-xs" href="/api/tasks/${t.id}/zip">📦 下载事项包</a>
+              <a class="btn btn-xs" href="/api/tasks/${t.id}/zip">📦 下载包</a>
             </div>
           </div>
         `).join('') + `</div>`;
       }
+
       if (docs.length > 0) {
         html += `<div style="display:flex;flex-direction:column;gap:6px;">` + docs.map(d => `
           <div style="background:var(--surface);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
@@ -3461,7 +4797,7 @@
               <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">匹配摘录：${highlightKeywordsHtml(d.snippet || '', kws)}</div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0;">
-              <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览/复制</button>
+              <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览/直读</button>
               <a class="btn btn-xs" href="/api/docs/${d.id}/download">⬇️ 下载</a>
             </div>
           </div>
@@ -3493,6 +4829,23 @@
       }, 80);
     }
 
+    function locateArchiveCard(archiveId) {
+      switchMainTab('archives');
+      STATE.archCategoryFilter = '';
+      const sInp = document.getElementById('archSearchInput');
+      if (sInp) sInp.value = '';
+      renderArchives();
+      setTimeout(() => {
+        const el = document.getElementById(`archive_card_${archiveId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          el.classList.remove('pulse-locate');
+          void el.offsetWidth;
+          el.classList.add('pulse-locate');
+        }
+      }, 80);
+    }
+
     function clearSearch() {
       document.getElementById('globalSearchInput').value = '';
       STATE.searchKeywords = [];
@@ -3500,7 +4853,24 @@
       document.getElementById('clearSearchBtn').style.display = 'none';
     }
 
-    // ==================== 双栏对照撰稿工作台 & 正文预览抽屉 ====================
+    // ==================== 双栏对照撰稿工作台 & 多格式预览抽屉（含防误触拦截） ====================
+    function markEditorDirty() {
+      STATE.editorDirty = true;
+      document.getElementById('editorDirtyBadge').style.display = 'inline-flex';
+      try {
+        localStorage.setItem('wb_autosave_draft', JSON.stringify({
+          filename: document.getElementById('drawerEditorFilename').value,
+          content: document.getElementById('drawerEditorTextarea').value,
+          time: new Date().toLocaleTimeString()
+        }));
+      } catch (e) {}
+    }
+
+    function clearEditorDirty() {
+      STATE.editorDirty = false;
+      document.getElementById('editorDirtyBadge').style.display = 'none';
+    }
+
     function populateSplitRefSelector(taskId) {
       const sel = document.getElementById('splitRefSelect');
       const t = (STATE.tasks || []).find(x => x.id === taskId);
@@ -3514,7 +4884,14 @@
           opts.push(`<option value="doc_${r.id}">💡 [关联参考旧稿] ${escapeHtml(r.filename)}</option>`);
         });
       }
-      (STATE.documents || []).filter(d => d.is_starred || d.doc_role === 'template' || d.doc_role === 'draft').slice(0, 25).forEach(d => {
+      // 打通【📌 重要事项记录】与【📦 资料存档】供左栏直接对照引用！
+      (STATE.important_records || []).forEach(rec => {
+        opts.push(`<option value="rec_${rec.id}">📌 [重要事项底数/预案] ${escapeHtml(rec.title)}</option>`);
+      });
+      (STATE.archives || []).slice(0, 15).forEach(arch => {
+        opts.push(`<option value="arch_${arch.id}">📦 [资料存档纪要] ${escapeHtml(arch.title)} (${escapeHtml(arch.archive_date)})</option>`);
+      });
+      (STATE.documents || []).filter(d => d.is_starred || d.doc_role === 'template' || d.doc_role === 'draft').slice(0, 20).forEach(d => {
         const val = `doc_${d.id}`;
         if (!opts.some(o => o.includes(`value="${val}"`))) {
           opts.push(`<option value="${val}">${d.is_starred ? '⭐ [常用范文]' : '✍️ [历史材料]'} ${escapeHtml(d.filename)}</option>`);
@@ -3539,6 +4916,19 @@
             `【核心要求摘要】\n${t.summary || ''}\n\n` +
             `【待办细项清单】\n${chkStr}\n\n` +
             `【原始来文/通知全文】\n${t.raw_notice_text || '（无）'}`;
+        }
+      } else if (val.startsWith('rec_')) {
+        const rid = parseInt(val.replace('rec_', ''));
+        box.textContent = '正在加载重要事项底数...';
+        const res = await apiFetch(`/api/records/${rid}`);
+        const rec = res.record;
+        const attTexts = (rec.files || []).map(f => `\n--- 附件《${f.filename}》提取内容 ---\n${f.extracted_text || ''}`).join('\n');
+        box.textContent = `【重要事项】${rec.title}（${rec.category}）\n\n${rec.content_md || ''}${attTexts}`;
+      } else if (val.startsWith('arch_')) {
+        const aid = parseInt(val.replace('arch_', ''));
+        const arch = (STATE.archives || []).find(x => x.id === aid);
+        if (arch) {
+          box.textContent = `【资料存档】${arch.title}（日期：${arch.archive_date}，分类：${arch.category}）\n\n【纪要与备注】\n${arch.notes_md || '（无）'}\n\n【包含文件】\n${(arch.files||[]).map(f => '- ' + f.filename).join('\n')}`;
         }
       } else if (val.startsWith('doc_')) {
         const did = parseInt(val.replace('doc_', ''));
@@ -3583,13 +4973,13 @@
       ta.value = val.slice(0, start) + snippet + val.slice(end);
       ta.selectionStart = ta.selectionEnd = start + snippet.length;
       ta.focus();
+      markEditorDirty();
       updateEditorWordCount();
     }
 
     function insertEditorSignDate() {
       const now = new Date();
-      const t = (STATE.tasks || []).find(x => x.id === STATE.drawerTaskId);
-      const org = (t && t.issuing_org) ? '县应急管理局' : '县应急管理局';
+      const org = STATE.default_org_name || '县应急管理局';
       insertEditorSnippet(`\n\n${org}\n${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日\n`);
     }
 
@@ -3611,6 +5001,7 @@
       const d = res.document;
       STATE.drawerDoc = d;
       STATE.drawerTaskId = d.task_id || null;
+      clearEditorDirty();
 
       document.getElementById('drawerTitle').textContent = d.filename;
       document.getElementById('drawerSubMeta').textContent = `所属目录：${d.category} | 类型：${d.file_type || d.doc_role} | 更新：${d.updated_at}`;
@@ -3624,7 +5015,7 @@
       document.getElementById('btnDrawerOpenWps').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerDelete').style.display = STATE.can_edit ? 'inline-flex' : 'none';
-      document.getElementById('drawerTabEditBtn').style.display = STATE.can_edit ? 'inline-block' : 'none';
+      document.getElementById('drawerTabEditBtn').style.display = (STATE.can_edit && d.is_editable_text) ? 'inline-block' : 'none';
 
       document.getElementById('drawerEditorFilename').value = d.filename;
       document.getElementById('drawerEditorTextarea').value = d.extracted_text || '';
@@ -3641,6 +5032,7 @@
       if (!t) return;
       STATE.drawerDoc = null;
       STATE.drawerTaskId = taskId;
+      clearEditorDirty();
       const defaultName = `我县${t.title.replace(/^关于/, '').replace(/的通知$/, '')}总结汇报_初稿.md`;
 
       document.getElementById('drawerTitle').textContent = `✍️ 双栏对照撰稿台 — 关联事项 #${t.id}`;
@@ -3652,6 +5044,7 @@
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
       document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerDelete').style.display = 'none';
+      document.getElementById('drawerTabEditBtn').style.display = 'inline-block';
 
       document.getElementById('drawerEditorFilename').value = defaultName;
       document.getElementById('drawerEditorTextarea').value =
@@ -3674,6 +5067,7 @@
     function openOnlineEditorNewStandalone() {
       STATE.drawerDoc = null;
       STATE.drawerTaskId = null;
+      clearEditorDirty();
       const cat = STATE.libCategoryFilter || '03_综合汇报与总结';
       document.getElementById('drawerTitle').textContent = `✍️ 在线新建独立材料 (${cat})`;
       document.getElementById('drawerSubMeta').textContent = `保存目录：${cat}`;
@@ -3684,6 +5078,7 @@
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
       document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerDelete').style.display = 'none';
+      document.getElementById('drawerTabEditBtn').style.display = 'inline-block';
 
       document.getElementById('drawerEditorFilename').value = `新建综合汇报材料_${new Date().toISOString().slice(0,10)}.md`;
       document.getElementById('drawerEditorTextarea').value = `# 综合工作汇报材料\n\n一、基本情况\n\n二、存在问题\n\n三、下一步打算\n`;
@@ -3702,7 +5097,9 @@
 
       const renderedBox = document.getElementById('drawerRenderedBox');
       const editorWrap = document.getElementById('drawerEditorWrap');
-      const rawText = STATE.drawerDoc ? (STATE.drawerDoc.extracted_text || '') : document.getElementById('drawerEditorTextarea').value;
+      const rawText = STATE.drawerDoc && !STATE.editorDirty
+        ? (STATE.drawerDoc.extracted_text || '')
+        : document.getElementById('drawerEditorTextarea').value;
 
       if (mode === 'edit') {
         renderedBox.style.display = 'none';
@@ -3717,7 +5114,11 @@
         editorWrap.style.display = 'none';
         renderedBox.style.display = 'block';
         renderedBox.style.whiteSpace = 'normal';
-        renderedBox.innerHTML = renderSimpleMarkdown(rawText, STATE.searchKeywords);
+        if (STATE.drawerDoc && STATE.drawerDoc.structured_preview && !STATE.editorDirty && STATE.drawerDoc.structured_preview.render_mode !== 'text') {
+          renderedBox.innerHTML = renderStructuredPreviewHtml(STATE.drawerDoc, STATE.searchKeywords, `drawer_sp_${STATE.drawerDoc.id}`);
+        } else {
+          renderedBox.innerHTML = renderSimpleMarkdown(rawText, STATE.searchKeywords);
+        }
       }
     }
 
@@ -3742,6 +5143,7 @@
         })
       });
 
+      clearEditorDirty();
       STATE.drawerDoc = res.document;
       STATE.drawerDoc.extracted_text = content;
       document.getElementById('btnDrawerFormatGw').style.display = 'inline-flex';
@@ -3773,6 +5175,7 @@
     function previewTaskRawNotice(taskId) {
       const t = STATE.tasks.find(x => x.id === taskId);
       if (!t) return;
+      clearEditorDirty();
       STATE.drawerDoc = { extracted_text: t.raw_notice_text || t.summary || '', abs_path: t.folder_abs_path };
       STATE.drawerTaskId = t.id;
       document.getElementById('drawerTitle').textContent = `【原始通知/来文记录】${t.title}`;
@@ -3784,19 +5187,35 @@
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
       document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerDelete').style.display = 'none';
+      document.getElementById('drawerTabEditBtn').style.display = 'none';
       toggleSplitDraftingStudio(false);
       switchDrawerMode('read');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
     }
 
-    function closePreviewDrawer() {
+    async function attemptClosePreviewDrawer() {
+      if (STATE.editorDirty && STATE.drawerMode === 'edit') {
+        const dlg = await showCustomDialog({
+          title: '⚠️ 尚未保存草稿修改',
+          message: '您当前在编辑器中有未保存的文字修改，确定要直接关闭吗？（点击取消可返回按 Ctrl+S 保存）',
+          danger: true
+        });
+        if (!dlg || !dlg.confirmed) return;
+      }
+      closePreviewDrawerForce();
+    }
+
+    function closePreviewDrawerForce() {
+      clearEditorDirty();
       document.getElementById('drawerBackdrop').style.display = 'none';
       document.getElementById('previewDrawer').style.display = 'none';
     }
 
     function copyDrawerText() {
-      const txt = STATE.drawerDoc ? (STATE.drawerDoc.extracted_text || '') : document.getElementById('drawerEditorTextarea').value;
+      const txt = STATE.drawerDoc && STATE.drawerMode !== 'edit'
+        ? (STATE.drawerDoc.extracted_text || '')
+        : document.getElementById('drawerEditorTextarea').value;
       copyText(txt, '📋 已复制正文内容到剪贴板！');
     }
 
@@ -3818,7 +5237,7 @@
         `- 核心要求摘要：${t.summary || ''}`,
         `- 具体待办细项：\n${chk}`,
         refs ? `- 库内关联参考旧稿：\n${refs}` : '',
-        `\n【写入纪律】：只在工作台里维护「核心要求」与「待办要求细项」；不要把办理要点、说明书骨架、职责原文摘录、分办清单之类的东西另存成文件塞进“我写的材料”。`,
+        `\n【写入纪律】：可先通过 python3 wb.py record list 或 python3 wb.py archive list 查阅重要事项底数与会议记录；不要把办理要点、说明书骨架另存成文件塞进“我写的材料”。`,
         `\n【操作指令】：请直接调用 python3 wb.py draft ${t.id} --filename "材料初稿.md" --content "..." --to-docx 保存材料并自动生成符合 GB/T 9704 国标格式的 .docx 正式公文，然后调用 python3 wb.py progress ${t.id} "已完成初稿撰写与国标排版" 更新进展。`
       ].filter(Boolean).join('\n');
       copyText(promptText, '🤖 已复制本地 Agent 撰稿指令（含国标 .docx 自动排版命令）！');
@@ -3929,21 +5348,24 @@
     async function generatePeriodicSummary() {
       const period = document.getElementById('summaryPeriodInput').value.trim() || '近期阶段工作';
       const box = document.getElementById('summaryResultArea');
-      box.textContent = '🤖 正在汇总工作台台账并生成阶段工作总结汇报初稿...';
+      box.textContent = '🤖 正在汇总工作台办文台账、会议培训下沉存档并生成阶段工作总结汇报初稿...';
       const res = await apiFetch('/api/ai/summary', {
         method: 'POST',
         body: JSON.stringify({ period_label: period })
       });
-      box.textContent = res.summary_markdown || '';
+      box.dataset.rawMd = res.summary_markdown || '';
+      box.innerHTML = renderSimpleMarkdown(res.summary_markdown || '');
       showToast('✅ 阶段工作总结初稿已生成！');
     }
 
     function copySummaryText() {
-      copyText(document.getElementById('summaryResultArea').textContent, '📋 已复制工作总结全文！');
+      const box = document.getElementById('summaryResultArea');
+      copyText(box.dataset.rawMd || box.textContent, '📋 已复制工作总结全文！');
     }
 
     function openSettingsModal() {
       document.getElementById('cfgWorkspaceRoot').value = STATE.workspace_root || '';
+      document.getElementById('cfgDefaultOrg').value = STATE.default_org_name || '县应急管理局';
       document.getElementById('cfgViewPwd').value = '';
       document.getElementById('cfgEditPwd').value = '';
       document.getElementById('cfgAiKey').value = '';
@@ -3958,6 +5380,7 @@
     async function saveSettings() {
       const payload = {
         workspace_root: document.getElementById('cfgWorkspaceRoot').value.trim(),
+        default_org_name: document.getElementById('cfgDefaultOrg').value.trim() || '县应急管理局',
         view_password: document.getElementById('cfgViewPwd').value.trim(),
         edit_password: document.getElementById('cfgEditPwd').value.trim(),
         lan_notice: document.getElementById('cfgLanNotice').value.trim(),
@@ -3977,7 +5400,7 @@
       const res = await apiFetch('/api/sync', { method: 'POST', body: '{}' });
       await loadBootstrap();
       const st = res.stats || {};
-      showToast(`🔄 双向同步完成（新增 ${st.added||0} 份，更新 ${st.updated||0} 份，本地进展反向同步 ${st.reverse_synced_tasks||0} 项）`);
+      showToast(`🔄 四维双向同步完成（新增 ${st.added||0} 份，更新 ${st.updated||0} 份，本地反向同步 ${st.reverse_synced_tasks||0} 项）`);
     }
 
     function toggleTheme() {
@@ -4004,10 +5427,25 @@
       copyText(STATE.lan_url, `🌐 已复制局域网访问链接 (${STATE.lan_url})，可直接发给同事！`);
     }
 
+    // 全局键盘快捷键：Ctrl+K 搜索，Alt+1~6 切换六大栏目，灯箱方向键翻图
     window.addEventListener('keydown', ev => {
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
         ev.preventDefault();
         document.getElementById('globalSearchInput').focus();
+      }
+      if (ev.altKey && !ev.ctrlKey && !ev.metaKey) {
+        const tabOrder = ['workbench', 'archives', 'records', 'library', 'recurring', 'summary'];
+        const num = parseInt(ev.key);
+        if (num >= 1 && num <= 6) {
+          ev.preventDefault();
+          switchMainTab(tabOrder[num - 1]);
+        }
+      }
+      const lb = document.getElementById('imageLightboxBackdrop');
+      if (lb && lb.style.display === 'flex') {
+        if (ev.key === 'Escape') closeImageLightbox();
+        if (ev.key === 'ArrowLeft') stepLightbox(-1);
+        if (ev.key === 'ArrowRight') stepLightbox(1);
       }
     });
 
