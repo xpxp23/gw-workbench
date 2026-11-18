@@ -562,9 +562,11 @@
 
     .task-body-grid {
       display: grid;
-      grid-template-columns: 1.12fr 0.93fr 1.45fr;
+      grid-template-columns: 1.06fr 1fr 1.4fr;
       gap: 11px;
-      align-items: stretch;
+      /* 各栏按自身内容高度收缩：矮的那栏不再被拉到跟文件柜一样高，
+         从而消除【内容已结束、底部却空出一大块】的观感 */
+      align-items: start;
     }
     @media (max-width: 1100px) {
       .task-body-grid { grid-template-columns: 1fr; }
@@ -576,7 +578,7 @@
       padding: 9px 11px;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      justify-content: flex-start;
     }
     .sub-box-title {
       font-size: 12px;
@@ -594,6 +596,10 @@
       flex-direction: column;
       gap: 5px;
       margin-bottom: 6px;
+      /* 只在细项确实很多时才出现滚动条，短清单自然展开 */
+      max-height: 340px;
+      overflow-y: auto;
+      padding-right: 2px;
     }
     .chk-item {
       display: flex;
@@ -651,9 +657,12 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
-      max-height: 115px;
+      /* 原来卡死在 115px，明明还有地方却先出了拖动条；改为按内容展开，
+         仅当流水超过 300px 时才滚动 */
+      max-height: 300px;
       overflow-y: auto;
       margin-bottom: 6px;
+      padding-right: 2px;
     }
     .prog-item {
       font-size: 12px;
@@ -668,35 +677,54 @@
       margin-right: 4px;
     }
 
-    /* 双栏文件柜 */
+    /* 双栏文件柜：窗口窄的时候自动收成一栏，让长文件名有更大的换行宽度 */
     .dual-files {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
       gap: 8px;
     }
     .file-col {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
-      padding: 7px 9px;
+      padding: 0 9px 7px;
+      /* 文件很多时在本栏内滚动，不把整张卡片撑得过高 */
+      max-height: 340px;
+      overflow-y: auto;
+    }
+    .file-col .sub-box-title {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--surface);
+      padding: 7px 0 5px;
+      margin-bottom: 0;
     }
     .file-item {
+      /* 文件名占满整行、自动换行；操作按钮排到文件名下面，
+         这样长文件名（来文标题常常很长）能完整显示，不再被截成半截 */
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 4px;
-      padding: 3px 0;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 3px;
+      padding: 5px 0;
       border-bottom: 1px dashed var(--border);
       font-size: 12px;
     }
     .file-item:last-child { border-bottom: none; }
+    .file-acts {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .file-name-link {
       color: var(--primary);
       cursor: pointer;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 165px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.4;
       font-weight: 500;
     }
     .file-name-link:hover { text-decoration: underline; }
@@ -1339,7 +1367,7 @@
   <aside class="drawer" id="previewDrawer">
     <div class="drawer-header">
       <div style="overflow:hidden;">
-        <div id="drawerTitle" style="font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+        <div id="drawerTitle" style="font-weight:700;font-size:15px;overflow-wrap:anywhere;line-height:1.35;"></div>
         <div id="drawerSubMeta" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
@@ -1350,6 +1378,7 @@
         <button class="btn btn-xs" onclick="adjustDrawerFont(1)">A+</button>
         <button class="btn btn-primary btn-sm" onclick="copyDrawerText()">📋 复制全文</button>
         <a class="btn btn-sm" id="drawerDownloadLink" href="#" target="_blank">⬇️ 下载</a>
+        <button class="btn btn-sm" id="btnDrawerDelete" style="display:none;color:var(--danger);border-color:#fecaca;" onclick="deleteCurrentDrawerDoc()" title="从工作台删除这份文件（可选择是否同时删掉硬盘上的副本）">🗑 删除</button>
         <button class="btn btn-sm" onclick="closePreviewDrawer()">✖</button>
       </div>
     </div>
@@ -1376,7 +1405,10 @@
     <div class="drawer-body">
       <div id="drawerPathBar" style="font-size:12px;background:var(--primary-soft);color:var(--primary);padding:6px 10px;border-radius:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
         <span id="drawerPathText" style="word-break:break-all;"></span>
-        <button class="btn btn-xs" onclick="copyDrawerPath()">复制路径</button>
+        <div style="display:flex;gap:5px;flex-shrink:0;align-items:center;">
+          <button class="btn btn-xs" id="btnDrawerOpenDir" onclick="openDrawerFolder()" title="在本机文件管理器中打开该文件所在目录">📂 打开目录</button>
+          <button class="btn btn-xs" onclick="copyDrawerPath()">复制路径</button>
+        </div>
       </div>
 
       <div class="drawer-split-container">
@@ -2340,8 +2372,8 @@
 
       const incFilesHtml = (t.incoming_files || []).map(f => `
         <div class="file-item">
-          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击免WPS直接预览全文">📄 ${escapeHtml(f.filename)}</span>
-          <div style="display:flex;gap:3px;flex-shrink:0;">
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击免WPS直接预览全文（删除也在预览页里）">📄 ${escapeHtml(f.filename)}</span>
+          <div class="file-acts">
             ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开">WPS</button>` : ''}
             ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, 'draft')" title="切换为【我写的材料】">⇄</button>` : ''}
             <a class="btn btn-xs" href="/api/docs/${f.id}/download">下</a>
@@ -2351,8 +2383,8 @@
 
       const draftFilesHtml = (t.drafted_files || []).map(f => `
         <div class="file-item">
-          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、双栏在线改稿或导出国标公文">✍️ ${escapeHtml(f.filename)}</span>
-          <div style="display:flex;gap:3px;flex-shrink:0;">
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、双栏在线改稿或导出国标公文（删除也在预览页里）">✍️ ${escapeHtml(f.filename)}</span>
+          <div class="file-acts">
             ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${f.id})" title="按 GB/T 9704 国标公文排版导出 .docx">国标</button>` : ''}
             ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开编辑">WPS</button>` : ''}
             ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, 'incoming')" title="切换为【来文原件】">⇄</button>` : ''}
@@ -2679,6 +2711,49 @@
         await loadBootstrap();
       }
       showToast(`⇄ 已切换文件角色为【${targetRole === 'incoming' ? '来文原件' : '我写的材料'}】`);
+    }
+
+    // 事项卡片里直接删除某份来文/材料，不必再跑去本机文件夹里找
+    async function deleteDocQuick(docId) {
+      const d = (STATE.documents || []).find(x => x.id === docId);
+      const name = d ? d.filename : `文件 #${docId}`;
+      const dlg = await showCustomDialog({
+        title: '🗑️ 删除这份文件',
+        message: `确定删除《${name}》吗？删掉后它不再出现在本事项的“来文原件 / 我写的材料”里。`,
+        checkLabel: '同时删掉本机硬盘上这份副本（推荐；不勾选则文件仍留在原处，下次同步会重新出现在列表里）',
+        checkDefault: true,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      await apiFetch(`/api/docs/${docId}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
+      if (STATE.drawerDoc && STATE.drawerDoc.id === docId) closePreviewDrawer();
+      await loadBootstrap();
+      showToast(dlg.checked ? '🗑️ 已删除，硬盘副本一并清掉' : '🗑️ 已从工作台移除（文件仍在硬盘上）');
+    }
+
+    // 预览页里的删除入口：删的就是当前正在看的这份文件
+    function deleteCurrentDrawerDoc() {
+      if (!STATE.drawerDoc) {
+        showToast('当前预览的不是单独文件，无法删除');
+        return;
+      }
+      deleteDocQuick(STATE.drawerDoc.id);
+    }
+
+    // 预览页里的“打开目录”：在本机文件管理器里定位到该文件所在文件夹
+    async function openDrawerFolder() {
+      if (STATE.drawerDoc && STATE.drawerDoc.id) {
+        await openLocalPath('folder', STATE.drawerDoc.id, STATE.drawerDoc.rel_path || '');
+        return;
+      }
+      const t = (STATE.tasks || []).find(x => x.id === STATE.drawerTaskId);
+      if (t) {
+        await openLocalPath('folder', null, t.folder_rel_path);
+      } else if (STATE.workspace_root) {
+        await openLocalPath('folder', null, '');
+      } else {
+        showToast('当前没有可打开的目录');
+      }
     }
 
     async function uploadTaskFiles(taskId, role, fileList) {
@@ -3547,6 +3622,8 @@
       document.getElementById('btnDrawerFormatGw').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerFormatRedhead').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerOpenWps').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerDelete').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       document.getElementById('drawerTabEditBtn').style.display = STATE.can_edit ? 'inline-block' : 'none';
 
       document.getElementById('drawerEditorFilename').value = d.filename;
@@ -3573,6 +3650,8 @@
       document.getElementById('btnDrawerFormatGw').style.display = 'none';
       document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
+      document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerDelete').style.display = 'none';
 
       document.getElementById('drawerEditorFilename').value = defaultName;
       document.getElementById('drawerEditorTextarea').value =
@@ -3603,6 +3682,8 @@
       document.getElementById('btnDrawerFormatGw').style.display = 'none';
       document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
+      document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerDelete').style.display = 'none';
 
       document.getElementById('drawerEditorFilename').value = `新建综合汇报材料_${new Date().toISOString().slice(0,10)}.md`;
       document.getElementById('drawerEditorTextarea').value = `# 综合工作汇报材料\n\n一、基本情况\n\n二、存在问题\n\n三、下一步打算\n`;
@@ -3701,6 +3782,8 @@
       document.getElementById('btnDrawerFormatGw').style.display = 'none';
       document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
+      document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerDelete').style.display = 'none';
       toggleSplitDraftingStudio(false);
       switchDrawerMode('read');
       document.getElementById('drawerBackdrop').style.display = 'block';
@@ -3735,6 +3818,7 @@
         `- 核心要求摘要：${t.summary || ''}`,
         `- 具体待办细项：\n${chk}`,
         refs ? `- 库内关联参考旧稿：\n${refs}` : '',
+        `\n【写入纪律】：只在工作台里维护「核心要求」与「待办要求细项」；不要把办理要点、说明书骨架、职责原文摘录、分办清单之类的东西另存成文件塞进“我写的材料”。`,
         `\n【操作指令】：请直接调用 python3 wb.py draft ${t.id} --filename "材料初稿.md" --content "..." --to-docx 保存材料并自动生成符合 GB/T 9704 国标格式的 .docx 正式公文，然后调用 python3 wb.py progress ${t.id} "已完成初稿撰写与国标排版" 更新进展。`
       ].filter(Boolean).join('\n');
       copyText(promptText, '🤖 已复制本地 Agent 撰稿指令（含国标 .docx 自动排版命令）！');

@@ -319,7 +319,7 @@ MCP_TOOLS_SPEC = [
     },
     {
         "name": "wb_add_task",
-        "description": "将上级来文或微信群/电话通知填入公文工作台，自动建立本地事项专属文件夹与 00_事项要求与进展.md",
+        "description": "将上级来文或微信群/电话通知填入公文工作台，自动建立本地事项专属文件夹与 00_事项要求与进展.md。只需填好 summary（核心要求）与 checklist（待办细项）两块内容——不要另建“办理要点/说明书骨架/职责原文摘录/分办清单”之类文件塞进材料栏。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -332,8 +332,14 @@ MCP_TOOLS_SPEC = [
                 "priority": {"type": "string", "description": "普通 | 重要 | 紧急"},
                 "deadline": {"type": "string", "description": "截止日期 YYYY-MM-DD"},
                 "category": {"type": "string", "description": "所属物理分类目录"},
-                "summary": {"type": "string", "description": "核心工作要求摘要"},
-                "progress": {"type": "string", "description": "初始进展记录"},
+                "summary": {"type": "string", "description": "核心要求：一段话说清谁要什么、交几件、报给谁、什么时间、什么形式"},
+                "checklist": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "待办要求细项：逐条可勾选的动作，一条一个动作（核对/起草/填报/审签/盖章/报送/电话确认），带时间节点或报送对象；不要写“梳理办理要点”“高度重视”这类空话",
+                },
+                "progress": {"type": "string", "description": "初始进展记录（办事过程写这里，不要写成文件）"},
+                "auto_ai": {"type": "boolean", "description": "是否让内置规则引擎补全缺失字段；自己已写好 summary/checklist 时建议传 false"},
             },
         },
     },
@@ -501,6 +507,14 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     fp = Path(t_args["file_path"]).expanduser().resolve()
                     if fp.is_file():
                         files.append({"filename": fp.name, "local_source_path": str(fp), "doc_role": "incoming"})
+                # 待办细项：支持数组或分号（中英文）分隔的字符串
+                raw_chk = t_args.get("checklist")
+                if isinstance(raw_chk, str):
+                    chk_items = [x.strip() for x in raw_chk.replace("；", ";").split(";") if x.strip()]
+                elif isinstance(raw_chk, list):
+                    chk_items = [str(x).strip() for x in raw_chk if str(x).strip()]
+                else:
+                    chk_items = None
                 res = _do_add({
                     "title": t_args.get("title") or "",
                     "raw_notice_text": t_args.get("text") or "",
@@ -511,8 +525,9 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     "deadline": t_args.get("deadline"),
                     "category": t_args.get("category") or "",
                     "summary": t_args.get("summary") or "",
+                    "checklist": chk_items,
                     "initial_progress": t_args.get("progress") or "",
-                    "auto_ai": True,
+                    "auto_ai": bool(t_args.get("auto_ai", True)),
                     "files": files,
                 })
             elif t_name == "wb_update_progress":

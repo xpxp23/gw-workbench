@@ -312,9 +312,12 @@ def _rule_based_parse_document(
             break
 
     if not checklist_items:
+        # 兜底也不写“梳理办理要点”这类空话，直接给可执行动作
+        submit_target = f"报{issuing_org}" if issuing_org else "报送上级"
+        when = f"{deadline}前" if deadline else "按来文时限"
         checklist_items = [
-            f"审阅《{title}》要求并梳理办理要点",
-            "撰写并报送相关汇报/落实材料",
+            f"核对报送要求：材料名称、份数、报送方式与接收人（{submit_target}）",
+            f"{when}完成材料起草、审签盖章并{submit_target}",
         ]
 
     # 8. 生成核心工作要求摘要
@@ -377,8 +380,9 @@ def parse_incoming_content(
         "- priority: '普通' | '重要' | '紧急'\n"
         "- deadline: 截止日期，格式 YYYY-MM-DD（如无明确截止期则为空字符串）\n"
         f"- category: 从 {json.dumps(cats, ensure_ascii=False)} 中选择最匹配的一项\n"
-        "- summary: 1-2句话提炼核心工作要求与需撰写的材料\n"
-        "- checklist: 字符串数组，列出 2~5 条可逐条打钩的具体待办动作（含时间节点和需报送的材料名称）"
+        "- summary: 1-2句话说清核心要求：谁要什么、交几件、报给谁、什么时间、以什么形式（盖章PDF/电子版），不要罗列文件清单\n"
+        "- checklist: 字符串数组，2~5 条可直接照做的待办动作。每条只写一个动作（核对/起草/填报/审签/盖章/报送/电话确认），必须带时间节点或报送对象。"
+        "严禁出现“梳理办理要点”“研读文件”“高度重视”“研究部署”这类空泛动作，也不要把办事过程另存成文件"
     )
     user_prompt = f"文件名：{filename}\n来源提示：{source_hint}\n正文内容：\n{text[:6000]}"
 

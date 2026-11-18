@@ -8,5 +8,7 @@
   "ai_api_base": "",
   "ai_api_key": "",
   "ai_model": "deepseek-chat",
+  "xkl_gw_cli": "",
+  "fts_version": 2,
   "lan_notice": "📌 欢迎访问科室公文与材料工作台！支持按【标题】或【标题+正文】秒搜公文，点开任意文件可直接预览复制全文或打包下载。"
 }

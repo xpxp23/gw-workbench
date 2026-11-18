@@ -43,7 +43,7 @@ from ai_engine import (
 )
 from gw_formatter import build_gb9704_docx
 
-VERSION = "2.0.0"
+VERSION = "2.0.2"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "workbench.db"
@@ -1219,7 +1219,7 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
     checklist = payload.get("checklist")
     if checklist is None:
         checklist = ai_parsed.get("checklist") or [
-            {"id": "chk_1", "text": f"办理《{title}》相关要求", "done": False}
+            {"id": "chk_1", "text": "核对报送要求：材料名称、份数、报送方式与截止时间", "done": False}
         ]
     elif isinstance(checklist, list):
         norm_chk = []
