@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench v3.0.0) 本地 Agent 专用命令行工具 & 原生 MCP Server
+公文与材料智能工作台 (GW-Workbench v3.0.1) 本地 Agent 专用命令行工具 & 原生 MCP Server
 支持：
 1. 命令行直接操作 (list / add / progress / attach / draft / format-gw / archive / record / recurring / search / sync)
 2. 原生 Model Context Protocol (MCP) Server 协议 (`python3 wb.py mcp`)，基于标准 stdio JSON-RPC 2.0，

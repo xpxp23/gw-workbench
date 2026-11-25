@@ -116,14 +116,15 @@ def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool =
 def match_best_category(text_and_title: str, categories: Optional[List[str]] = None) -> str:
     """根据主题词智能推荐物理分类目录"""
     avail_cats = categories or [
-        "01_防灾减灾",
-        "02_隐患排查与安全生产",
-        "03_综合汇报与总结",
-        "04_上级日常通知",
-        "05_历史公文归档",
+        "01_需反馈意见",
+        "02_省及潍坊来文",
+        "03_高密部门来文",
+        "04_协助潍坊工作",
+        "05_会议培训通知",
+        "06_督查考核整改",
     ]
     if not avail_cats:
-        return "01_防灾减灾"
+        return "02_省及潍坊来文"
 
     for c in avail_cats:
         clean_c = re.sub(r"^\d+[_\-\s]*", "", c)
@@ -344,11 +345,12 @@ def parse_incoming_content(
 ) -> Dict[str, Any]:
     cfg = config or {}
     cats = categories or [
-        "01_防灾减灾",
-        "02_隐患排查与安全生产",
-        "03_综合汇报与总结",
-        "04_上级日常通知",
-        "05_历史公文归档",
+        "01_需反馈意见",
+        "02_省及潍坊来文",
+        "03_高密部门来文",
+        "04_协助潍坊工作",
+        "05_会议培训通知",
+        "06_督查考核整改",
     ]
     rule_res = _rule_based_parse_document(text, filename, source_hint, cats)
 
@@ -404,7 +406,7 @@ def extract_search_keywords(natural_query: str) -> List[str]:
     split_delimiters = (
         r"或者|还是|以及|关于|有关|请问|帮我|找一下|找出|搜索|查询|哪些|什么|"
         r"我写过的|我写过|我写的|以前的|以前|历史的|历史|今年的|今年|去年的|去年|"
-        r"有没有|在哪里|的|了|和|与|或|及|[，。？！、；：""''（）《》【】\s]+"
+        r"有没有|在哪里|的|了|和|与|或|及|[，。？！、；：\"\"''（）《》【】\s]+"
     )
     parts = [p.strip() for p in re.split(split_delimiters, natural_query.strip()) if p and p.strip()]
     generic_tail = {"材料", "公文", "通知", "文件", "要求", "工作", "事项", "记录", "情况"}

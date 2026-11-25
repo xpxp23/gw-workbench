@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench v3.0.0) 核心服务端
+公文与材料智能工作台 (GW-Workbench v3.0.1) 核心服务端
 专为银河麒麟 Kylin V10 (海光 3350) 与局域网跨平台协同设计
 v3.0.0 架构升级与全量缺陷清零特性：
 1. 四维政务知识资产模型：
@@ -21,6 +21,7 @@ import base64
 import csv
 import hashlib
 import io
+import ipaddress
 import json
 import mimetypes
 import os
@@ -57,7 +58,7 @@ from ai_engine import (
 )
 from gw_formatter import build_gb9704_docx
 
-VERSION = "3.0.0"
+VERSION = "3.0.3"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "workbench.db"
@@ -69,12 +70,21 @@ RECORD_ROOT_DIRNAME = "重要事项记录"
 RESERVED_TOP_DIRS = {ARCHIVE_ROOT_DIRNAME, RECORD_ROOT_DIRNAME}
 
 DEFAULT_CATEGORIES = [
-    "01_防灾减灾",
-    "02_隐患排查与安全生产",
-    "03_综合汇报与总结",
-    "04_上级日常通知",
-    "05_历史公文归档",
+    "01_需反馈意见",
+    "02_省及潍坊来文",
+    "03_高密部门来文",
+    "04_协助潍坊工作",
+    "05_会议培训通知",
+    "06_督查考核整改",
+    "90_历史资料",
 ]
+
+# 待办默认归入的分类（新收文最常见来源）
+DEFAULT_TASK_CATEGORY = "02_省及潍坊来文"
+# 资料库/历史上传默认归入的分类
+DEFAULT_LIBRARY_CATEGORY = "90_历史资料"
+# 只在【公文与材料库】展示、不在【待办】筛选里出现的分类前缀
+LIBRARY_ONLY_PREFIX = "90_"
 
 DEFAULT_ARCHIVE_CATEGORIES = [
     "01_会议记录",
@@ -106,6 +116,15 @@ DEFAULT_CONFIG = {
     "xkl_gw_cli": "",
     "fts_version": 3,
     "lan_notice": "📌 欢迎访问科室公文与材料智能工作台！现已支持【📦 资料存档】与【📌 重要事项记录】直读速查。",
+    # IP 白名单：一行一条，支持 `172.19.51.*` 通配、`172.19.51.0/24` CIDR、`172.19.51.69` 单 IP。
+    # 留空 = 不限制（仅靠密码保护）。127.0.0.1 与 ::1 永远放行，不受此限制。
+    "ip_whitelist": "172.19.51.*",
+    # 被白名单拦截时是否直接断开 TCP 连接（不回任何 HTTP 响应）
+    "ip_block_mode": "drop",
+    # 是否允许灌入示例数据。仅当 seed_demo_done 为 false 且此项为 true 时才会灌一次，
+    # 灌完立刻把 seed_demo_done 置 true —— 用户删光后不会再次出现。
+    "demo_data_enabled": False,
+    "seed_demo_done": True,
 }
 
 DB_LOCK = threading.RLock()
@@ -154,6 +173,119 @@ def save_config(cfg: Dict[str, Any]) -> None:
     except Exception:
         pass
     CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def parse_whitelist_rules(raw: Any) -> List[Tuple[str, Any]]:
+    """把白名单文本解析成规则列表。每条形如 ("net", ip_network) 或 ("exact", ip_address)。
+
+    支持写法（一行一条，# 开头为注释）：
+      172.19.51.*          → 等价于 172.19.51.0/24
+      172.19.51.0/24       → CIDR
+      172.19.51.69         → 单个 IP
+      172.19.51.69/32      → 同上
+    无法解析的行直接忽略（不静默扩大放行范围）。
+    """
+    rules: List[Tuple[str, Any]] = []
+    text = str(raw or "")
+    for line in re.split(r"[\n,;]+", text):
+        item = line.strip()
+        if not item or item.startswith("#"):
+            continue
+        if item.startswith("!"):
+            continue
+        try:
+            if "*" in item:
+                octets = item.split(".")
+                # 只允许形如 a.b.c.* / a.b.* / * 这种尾部通配
+                if not all(o == "*" or (o.isdigit() and 0 <= int(o) <= 255) for o in octets):
+                    continue
+                first_star = next((i for i, o in enumerate(octets) if o == "*"), len(octets))
+                # 通配符之后不允许再出现具体数字
+                if any(o != "*" for o in octets[first_star:]):
+                    continue
+                cidr = f"{'.'.join(octets[:first_star])}.{'0.' * (4 - first_star)}".rstrip(".")
+                prefix = first_star * 8
+                rules.append(("net", ipaddress.ip_network(f"{cidr}/{prefix}", strict=False)))
+            elif "/" in item:
+                rules.append(("net", ipaddress.ip_network(item, strict=False)))
+            else:
+                rules.append(("exact", ipaddress.ip_address(item)))
+        except ValueError:
+            continue
+    return rules
+
+
+def ip_allowed(client_ip: str, cfg: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+    """判断来源 IP 是否放行。返回 (是否放行, 原因)。
+
+    - 127.0.0.1 / ::1 永远放行（保证本机永远能改回设置）
+    - 白名单为空时视为不限制
+    - 非 IPv4 地址（IPv6）默认拒绝，除非白名单里显式写了 IPv6 规则
+    """
+    ip_txt = (client_ip or "").strip()
+    if ip_txt in ("127.0.0.1", "::1", "localhost"):
+        return True, "本机直连"
+
+    c = cfg or load_config()
+    rules = parse_whitelist_rules(c.get("ip_whitelist"))
+
+    # 去掉可能的 IPv6 域后缀，如 ::ffff:172.19.51.3
+    try:
+        addr = ipaddress.ip_address(ip_txt)
+    except ValueError:
+        return False, f"无法识别的来源地址 {ip_txt}"
+
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+
+    # 白名单为空 = 不限制，但 IPv6 仍然默认拒绝（除白名单里显式写了 IPv6 规则）
+    if not rules:
+        if isinstance(addr, ipaddress.IPv6Address):
+            return False, "IPv6 访问默认拒绝（白名单为空）"
+        return True, "白名单为空（未限制）"
+
+    for kind, target in rules:
+        if kind == "net":
+            if addr.version == target.version and addr in target:
+                return True, f"匹配规则 {target}"
+        else:
+            if addr == target:
+                return True, f"匹配规则 {target}"
+    return False, f"{ip_txt} 不在白名单内"
+
+
+# ---------------- 访问记录（内存环形缓冲，仅本机可读） ----------------
+_ACCESS_LOG: List[Dict[str, Any]] = []
+_ACCESS_LOG_LOCK = threading.Lock()
+_ACCESS_LOG_MAX = 300
+
+
+def record_access(
+    client_ip: str,
+    path: str,
+    method: str,
+    result: str,
+    reason: str = "",
+) -> None:
+    """记一条访问记录。result: allow / block / badpwd / denied。"""
+    entry = {
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "ip": client_ip or "?",
+        "method": method or "",
+        "path": (path or "")[:180],
+        "result": result,
+        "reason": (reason or "")[:160],
+    }
+    with _ACCESS_LOG_LOCK:
+        _ACCESS_LOG.append(entry)
+        if len(_ACCESS_LOG) > _ACCESS_LOG_MAX:
+            del _ACCESS_LOG[: len(_ACCESS_LOG) - _ACCESS_LOG_MAX]
+
+
+def get_access_log(limit: int = 100) -> List[Dict[str, Any]]:
+    with _ACCESS_LOG_LOCK:
+        items = list(_ACCESS_LOG)
+    return items[-max(1, min(limit, _ACCESS_LOG_MAX)):][::-1]
 
 
 def get_workspace_root(cfg: Optional[Dict[str, Any]] = None) -> Path:
@@ -344,7 +476,7 @@ def init_db() -> None:
                 issuing_org TEXT DEFAULT '',
                 priority TEXT DEFAULT '普通',
                 deadline TEXT DEFAULT '',
-                category TEXT DEFAULT '01_防灾减灾',
+                category TEXT DEFAULT '02_省及潍坊来文',
                 summary TEXT DEFAULT '',
                 raw_notice_text TEXT DEFAULT '',
                 checklist_json TEXT DEFAULT '[]',
@@ -404,7 +536,7 @@ def init_db() -> None:
                 record_id INTEGER DEFAULT NULL,
                 filename TEXT NOT NULL,
                 rel_path TEXT NOT NULL UNIQUE,
-                category TEXT DEFAULT '01_防灾减灾',
+                category TEXT DEFAULT '02_省及潍坊来文',
                 doc_role TEXT DEFAULT 'incoming',
                 file_type TEXT DEFAULT '',
                 file_size INTEGER DEFAULT 0,
@@ -423,7 +555,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS recurring_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title_template TEXT NOT NULL,
-                category TEXT DEFAULT '01_防灾减灾',
+                category TEXT DEFAULT '02_省及潍坊来文',
                 source_channel TEXT DEFAULT '上级来文',
                 issuing_org TEXT DEFAULT '',
                 priority TEXT DEFAULT '重要',
@@ -2405,7 +2537,7 @@ def spawn_task_from_recurring_rule(rule_id: int, force_manual: bool = False) -> 
             "issuing_org": rule["issuing_org"] or "",
             "priority": rule["priority"] or "重要",
             "deadline": deadline_str,
-            "category": rule["category"] or "01_防灾减灾",
+            "category": rule["category"] or DEFAULT_TASK_CATEGORY,
             "summary": rule["summary"] or f"周期性常态化工作（周期：{pkey}）",
             "checklist": chk_list,
             "initial_progress": prev_draft_hint,
@@ -2506,6 +2638,22 @@ def _build_minimal_pptx_bytes(slides_content: List[Tuple[str, List[str]]]) -> by
 
 
 def seed_demo_data_if_empty() -> None:
+    """灌入示例数据。**整个进程生命周期内最多执行一次**。
+
+    历史缺陷：本函数原先只判断「表是否为空」，导致用户删光示例后，下次启动又被重新灌回，
+    表现为「删了又自己出来」。现在用 config 里的 `seed_demo_done` 做一次性闸门，
+    并且 `demo_data_enabled` 默认 false，升级后的运行环境绝不会再自动生成示例。
+    """
+    cfg = load_config()
+    if cfg.get("seed_demo_done", True):
+        return
+    if not cfg.get("demo_data_enabled", False):
+        return
+
+    # 先落标记，保证即便中途异常也不会无限重试
+    cfg["seed_demo_done"] = True
+    save_config(cfg)
+
     with DB_LOCK:
         conn = get_db()
         rec_cnt = conn.execute("SELECT COUNT(*) FROM recurring_rules").fetchone()[0]
@@ -2523,7 +2671,7 @@ def seed_demo_data_if_empty() -> None:
                 """,
                 (
                     "报送《重点行业领域重大事故隐患排查整治周调度简表》({period})",
-                    "02_隐患排查与安全生产",
+                    "02_省及潍坊来文",
                     "上级来文",
                     "县安委办",
                     "重要",
@@ -2550,7 +2698,7 @@ def seed_demo_data_if_empty() -> None:
                 """,
                 (
                     "{month}全县自然灾害风险形势联合会商与月度防灾减灾工作总结",
-                    "01_防灾减灾",
+                    "02_省及潍坊来文",
                     "上级来文",
                     "市应急管理局",
                     "重要",
@@ -2755,7 +2903,7 @@ def seed_demo_data_if_empty() -> None:
         "issuing_org": "市应急管理局",
         "priority": "紧急",
         "deadline": datetime.now().strftime("%Y-%m-%d"),
-        "category": "01_防灾减灾",
+        "category": "02_省及潍坊来文",
         "raw_notice_text": sample_incoming_text,
         "auto_ai": True,
         "is_pinned": True,
@@ -2780,6 +2928,54 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: Any) -> None:
         pass
+
+    def _guard_ip(self) -> bool:
+        """IP 白名单闸门。放行返回 True；拦截返回 False 且请求已被终止。
+
+        位于一切业务逻辑之前，覆盖所有 HTTP 路径（页面、API、静态文件、下载）。
+        - 127.0.0.1 / ::1 永远放行
+        - 携带正确 X-Agent-Token 的请求放行（本机 MCP 客户端用）
+        - 不在白名单：默认直接断开 TCP 连接，不回任何 HTTP 响应
+        """
+        cfg = load_config()
+        cfg_key = (str(cfg.get("ip_whitelist") or ""), str(cfg.get("ip_block_mode") or "drop"))
+
+        # 白名单未变化时复用上次判定结果，避免每个请求都解析一遍规则
+        if getattr(self, "_wl_cache_key", None) == cfg_key:
+            allowed, reason = self._wl_cache_val
+        else:
+            client_ip = self.client_address[0]
+            agent_tok = self.headers.get("X-Agent-Token", "")
+            if agent_tok and agent_tok == cfg.get("agent_token"):
+                allowed, reason = True, "Agent Token"
+            else:
+                allowed, reason = ip_allowed(client_ip, cfg)
+            self._wl_cache_key = cfg_key
+            self._wl_cache_val = (allowed, reason)
+
+        if allowed:
+            return True
+
+        client_ip = self.client_address[0]
+        record_access(client_ip, urllib.parse.urlparse(self.path).path, self.command, "block", reason)
+        print(f"  ⛔ [IP拦截] {client_ip} - {self.command} {self.path[:80]} ({reason})", flush=True)
+
+        if str(cfg.get("ip_block_mode") or "drop") == "drop":
+            # 不回任何响应，直接断开 TCP 连接
+            self.close_connection = True
+            try:
+                self.connection.close()
+            except Exception:
+                pass
+            self._guard_blocked = True
+            return False
+
+        # 备用模式：返回 403，但不透露任何白名单信息
+        try:
+            self._send_json({"error": "访问受限"}, status=403)
+        except Exception:
+            pass
+        return False
 
     def _is_localhost(self) -> bool:
         client_ip = self.client_address[0]
@@ -2820,6 +3016,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         set_cookies: Optional[Dict[str, str]] = None,
         clear_cookies: Optional[List[str]] = None,
     ) -> None:
+        if getattr(self, "_guard_blocked", False):
+            return  # 连接已被 IP 闸门断开，不再写任何内容
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2851,6 +3049,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self) -> None:
+        if not self._guard_ip():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         qs = urllib.parse.parse_qs(parsed_url.query)
@@ -2885,6 +3085,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Not Found")
 
     def do_POST(self) -> None:
+        if not self._guard_ip():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path.startswith("/api/"):
             self.handle_api_post(parsed_url.path)
@@ -2892,6 +3094,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_PUT(self) -> None:
+        if not self._guard_ip():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path.startswith("/api/"):
             self.handle_api_put(parsed_url.path)
@@ -2899,6 +3103,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404, "Not Found")
 
     def do_DELETE(self) -> None:
+        if not self._guard_ip():
+            return
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path.startswith("/api/"):
             self.handle_api_delete(parsed_url.path)
@@ -2917,6 +3123,60 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 "can_edit": can_edit,
                 "is_localhost": self._is_localhost(),
                 "lan_url": f"http://{get_lan_ip()}:{cfg.get('port', 8090)}",
+            })
+            return
+
+        if path == "/api/demo/status":
+            sig = _demo_signatures()
+            with DB_LOCK:
+                conn = get_db()
+                remain = {
+                    "recurring": sum(
+                        conn.execute("SELECT COUNT(*) FROM recurring_rules WHERE title_template = ?", (t,)).fetchone()[0]
+                        for t in sig["recurring_titles"]
+                    ),
+                    "records": sum(
+                        conn.execute("SELECT COUNT(*) FROM important_records WHERE title = ?", (t,)).fetchone()[0]
+                        for t in sig["record_titles"]
+                    ),
+                    "archives": sum(
+                        conn.execute("SELECT COUNT(*) FROM archives WHERE title = ?", (t,)).fetchone()[0]
+                        for t in sig["archive_titles"]
+                    ),
+                    "tasks": sum(
+                        conn.execute("SELECT COUNT(*) FROM tasks WHERE doc_number = ?", (n,)).fetchone()[0]
+                        for n in sig["task_doc_numbers"]
+                    ),
+                }
+                conn.close()
+            self._send_json({
+                "ok": True,
+                "remain": remain,
+                "total": sum(remain.values()),
+                "seed_demo_done": bool(cfg.get("seed_demo_done", True)),
+                "demo_data_enabled": bool(cfg.get("demo_data_enabled", False)),
+            })
+            return
+
+        if path == "/api/access-log":
+            # 仅本机可读，避免把内网访问情况暴露给其他设备
+            if not self._is_localhost():
+                self._send_json({"error": "仅本机可查看访问记录"}, status=403)
+                return
+            try:
+                limit = int((qs.get("limit") or ["100"])[0])
+            except Exception:
+                limit = 100
+            rows = get_access_log(limit)
+            summary = {"allow": 0, "block": 0, "badpwd": 0, "denied": 0}
+            for r in rows:
+                summary[r["result"]] = summary.get(r["result"], 0) + 1
+            self._send_json({
+                "ok": True,
+                "items": rows,
+                "summary": summary,
+                "whitelist_effective": str(cfg.get("ip_whitelist") or "").strip(),
+                "my_ip": self.client_address[0],
             })
             return
 
@@ -2988,6 +3248,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 "ai_api_base": cfg.get("ai_api_base", ""),
                 "xkl_gw_cli": cfg.get("xkl_gw_cli", ""),
                 "prefix_archived_folder": bool(cfg.get("prefix_archived_folder", False)),
+                "ip_whitelist": cfg.get("ip_whitelist", ""),
+                "my_lan_ip": get_lan_ip(),
                 "categories": categories,
                 "archive_categories": archive_categories,
                 "record_categories": record_categories,
@@ -3439,13 +3701,16 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             if pwd == str(cfg.get("edit_password")):
                 cookies_to_set["wb_view_pwd"] = str(cfg.get("view_password"))
                 cookies_to_set["wb_edit_pwd"] = str(cfg.get("edit_password"))
+                record_access(self.client_address[0], path, "POST", "allow", "编辑口令登录成功")
                 self._send_json({"ok": True, "can_view": True, "can_edit": True}, set_cookies=cookies_to_set)
                 return
             elif pwd == str(cfg.get("view_password")):
                 cookies_to_set["wb_view_pwd"] = pwd
+                record_access(self.client_address[0], path, "POST", "allow", "访问密码登录成功")
                 self._send_json({"ok": True, "can_view": True, "can_edit": False}, set_cookies=cookies_to_set)
                 return
             else:
+                record_access(self.client_address[0], path, "POST", "badpwd", "访问密码不正确")
                 self._send_json({"ok": False, "error": "访问密码不正确"}, status=403)
                 return
 
@@ -3457,6 +3722,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     set_cookies={"wb_edit_pwd": str(cfg.get("edit_password"))},
                 )
             else:
+                record_access(self.client_address[0], path, "POST", "badpwd", "主理人编辑口令不正确")
                 self._send_json({"ok": False, "error": "主理人编辑口令不正确"}, status=403)
             return
 
@@ -3703,7 +3969,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     self._send_json({"ok": True, "document": u_doc, "task": u_task})
                     return
                 else:
-                    cat = sanitize_filename(body.get("category") or "03_综合汇报与总结")
+                    cat = sanitize_filename(body.get("category") or DEFAULT_LIBRARY_CATEGORY)
                     cat_dir = ensure_category_dir(ws_root, cat, scope="task")
                     dest_path = resolve_unique_dest_path(cat_dir, filename, content.encode("utf-8"))
                     dest_path.write_text(content, encoding="utf-8")
@@ -3954,7 +4220,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/docs/upload":
-            category = sanitize_filename(body.get("category") or "05_历史公文归档")
+            category = sanitize_filename(body.get("category") or DEFAULT_LIBRARY_CATEGORY)
             doc_role = body.get("doc_role") or "draft"
             tags = body.get("tags") or []
             files_list = body.get("files") or []
@@ -4086,7 +4352,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
         if path == "/api/docs/scan-local-dir":
             src_dir_str = str(body.get("source_dir") or "").strip()
-            target_cat = sanitize_filename(body.get("category") or "05_历史公文归档")
+            target_cat = sanitize_filename(body.get("category") or DEFAULT_LIBRARY_CATEGORY)
             smart_auto_cat = bool(body.get("smart_auto_category", False))
             if not src_dir_str:
                 self._send_json({"error": "请输入本机文件夹路径"}, status=400)
@@ -4178,7 +4444,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             src_file = ws_root / d_row["rel_path"]
             task_obj = create_task_record({
                 "raw_notice_text": d_row["extracted_text"] or "",
-                "category": d_row["category"] if d_row["category"] in list_physical_categories("task") else "01_防灾减灾",
+                "category": d_row["category"] if d_row["category"] in list_physical_categories("task") else DEFAULT_TASK_CATEGORY,
                 "source_channel": "上级来文",
                 "auto_ai": True,
                 "reuse_doc_id": doc_id if d_row["task_id"] is None and d_row["archive_id"] is None and d_row["record_id"] is None else None,
@@ -4234,7 +4500,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     """,
                     (
                         title_tpl,
-                        sanitize_filename(body.get("category") or "01_防灾减灾"),
+                        sanitize_filename(body.get("category") or DEFAULT_TASK_CATEGORY),
                         body.get("source_channel") or "上级来文",
                         body.get("issuing_org") or "",
                         body.get("priority") or "重要",
@@ -4363,7 +4629,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/settings":
-            for k in ("workspace_root", "default_org_name", "prefix_archived_folder", "ai_api_base", "ai_model", "lan_notice", "xkl_gw_cli"):
+            for k in ("workspace_root", "default_org_name", "prefix_archived_folder", "ai_api_base", "ai_model", "lan_notice", "xkl_gw_cli", "ip_whitelist"):
                 if k in body and body[k] is not None:
                     cfg[k] = body[k]
             for pwd_key in ("view_password", "edit_password", "ai_api_key"):
@@ -4373,6 +4639,23 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             save_config(cfg)
             init_db()
             self._send_json({"ok": True})
+            return
+
+        if path == "/api/demo/purge":
+            # 只允许主理人操作；仅本机或已开启编辑模式
+            can_view2, can_edit2 = self._check_auth()
+            if not can_edit2:
+                self._send_json({"error": "需要开启【主理人编辑模式】"}, status=403)
+                return
+            delete_disk = bool(body.get("delete_disk", True))
+            stats = purge_demo_data(delete_disk=delete_disk)
+            # 无论是否清理到内容，都把一次性闸门关上，从此不再灌示例
+            cfg2 = load_config()
+            cfg2["seed_demo_done"] = True
+            cfg2["demo_data_enabled"] = False
+            save_config(cfg2)
+            sync_filesystem(force=True)
+            self._send_json({"ok": True, "purged": stats})
             return
 
         self._send_json({"error": f"未知接口: {path}"}, status=404)
@@ -4982,9 +5265,135 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         self._send_json({"error": f"未知接口: {path}"}, status=404)
 
 
+def _demo_signatures() -> Dict[str, List[str]]:
+    """示例数据的识别特征。只用于「清理示例数据」，绝不用于任何自动删除。"""
+    return {
+        # 由 seed_demo_data_if_empty 插入的两条周期规则
+        "recurring_titles": [
+            "报送《重点行业领域重大事故隐患排查整治周调度简表》({period})",
+            "{month}全县自然灾害风险形势联合会商与月度防灾减灾工作总结",
+        ],
+        # 由 seed_demo_data_if_empty 写入的两条重要事项记录
+        "record_titles": ["高密汛情基本情况", "地震应急预案"],
+        # 由 seed_demo_data_if_empty 写入的两个归档包
+        "archive_titles": [
+            "11.17冬春防灾减灾会商暨业务培训会议记录",
+            "11.18救灾物资库与重点企业隐患排查下沉照片",
+        ],
+        # 示例事项
+        "task_doc_numbers": ["鲁应急发〔2026〕42号"],
+    }
+
+
+def purge_demo_data(delete_disk: bool = True) -> Dict[str, int]:
+    """清除由示例种子函数生成的示例数据（数据库行 + 对应磁盘文件夹）。
+
+    识别依据是标题/文号的精确匹配，不做模糊删除，避免误伤用户真实数据。
+    """
+    sig = _demo_signatures()
+    stats = {"recurring": 0, "records": 0, "archives": 0, "tasks": 0}
+    cfg = load_config()
+    ws_root = get_workspace_root(cfg)
+
+    with DB_LOCK:
+        conn = get_db()
+
+        # 1) 周期规则（纯数据库行，无磁盘文件）
+        for title in sig["recurring_titles"]:
+            cur = conn.execute("DELETE FROM recurring_rules WHERE title_template = ?", (title,))
+            stats["recurring"] += cur.rowcount or 0
+
+        # 2) 重要事项记录
+        for title in sig["record_titles"]:
+            row = conn.execute("SELECT * FROM important_records WHERE title = ?", (title,)).fetchone()
+            if not row:
+                continue
+            rid = row["id"]
+            folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
+            if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                if delete_disk:
+                    shutil.rmtree(folder_abs, ignore_errors=True)
+                else:
+                    rm_f = folder_abs / "00_重要事项内容.md"
+                    if rm_f.is_file():
+                        rm_f.unlink(missing_ok=True)
+            for d in conn.execute("SELECT id FROM documents WHERE record_id = ?", (rid,)).fetchall():
+                conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
+            conn.execute("DELETE FROM documents WHERE record_id = ?", (rid,))
+            conn.execute("DELETE FROM important_records WHERE id = ?", (rid,))
+            stats["records"] += 1
+
+        # 3) 资料存档包
+        for title in sig["archive_titles"]:
+            row = conn.execute("SELECT * FROM archives WHERE title = ?", (title,)).fetchone()
+            if not row:
+                continue
+            aid = row["id"]
+            folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
+            if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                if delete_disk:
+                    shutil.rmtree(folder_abs, ignore_errors=True)
+                else:
+                    rm_f = folder_abs / "00_存档说明与纪要.md"
+                    if rm_f.is_file():
+                        rm_f.unlink(missing_ok=True)
+            for d in conn.execute("SELECT id FROM documents WHERE archive_id = ?", (aid,)).fetchall():
+                conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
+            conn.execute("DELETE FROM documents WHERE archive_id = ?", (aid,))
+            conn.execute("DELETE FROM archives WHERE id = ?", (aid,))
+            stats["archives"] += 1
+
+        # 4) 示例事项（按文号精确匹配）
+        for num in sig["task_doc_numbers"]:
+            row = conn.execute("SELECT * FROM tasks WHERE doc_number = ?", (num,)).fetchone()
+            if not row:
+                continue
+            tid = row["id"]
+            folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
+            if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                if delete_disk:
+                    shutil.rmtree(folder_abs, ignore_errors=True)
+                else:
+                    rm_f = folder_abs / "00_事项要求与进展.md"
+                    if rm_f.is_file():
+                        rm_f.unlink(missing_ok=True)
+            for d in conn.execute("SELECT id FROM documents WHERE task_id = ?", (tid,)).fetchall():
+                conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
+            conn.execute("DELETE FROM documents WHERE task_id = ?", (tid,))
+            conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
+            stats["tasks"] += 1
+
+        # 5) 兜底：清掉因历史启动残留、但已无归属的记录文件
+        for d in conn.execute(
+            "SELECT id, rel_path FROM documents WHERE record_id IS NULL AND archive_id IS NULL AND task_id IS NULL "
+            "AND rel_path LIKE '%高密防汛重点水库与易涝点责任人底数表%'"
+        ).fetchall():
+            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
+            conn.execute("DELETE FROM documents WHERE id = ?", (d["id"],))
+
+        conn.commit()
+        conn.close()
+
+    # 清掉空分类目录，保持文件系统整洁
+    for root_name in ("重要事项记录", "资料存档"):
+        base = ws_root / root_name
+        if not base.is_dir():
+            continue
+        for cat_dir in base.iterdir():
+            if cat_dir.is_dir():
+                try:
+                    if not any(cat_dir.iterdir()):
+                        cat_dir.rmdir()
+                except OSError:
+                    pass
+
+    return stats
+
+
 def run_server(port: Optional[int] = None) -> None:
     cfg = load_config()
     init_db()
+    # 示例数据只在首次全新部署时灌一次；正常使用环境（含本机升级后的库）绝不会自动生成
     seed_demo_data_if_empty()
     sync_filesystem(force=True)
     check_and_spawn_all_recurring()
@@ -4995,7 +5404,12 @@ def run_server(port: Optional[int] = None) -> None:
     print("=" * 72)
     print(f"  🚀 公文与材料智能工作台 (GW-Workbench v{VERSION}) 已启动")
     print(f"  👉 本机主理人直连 (自动免密编辑 & WPS直连): http://127.0.0.1:{listen_port}")
-    print(f"  👉 局域网同事访问地址 (默认密码 {cfg.get('view_password')}): http://{lan_ip}:{listen_port}")
+    print(f"  👉 局域网同事访问地址: http://{lan_ip}:{listen_port}")
+    _wl_rules = parse_whitelist_rules(cfg.get("ip_whitelist"))
+    if _wl_rules:
+        print(f"  🛡️  IP 白名单已启用，允许 {len(_wl_rules)} 条规则；不在名单内的访问将被直接断开")
+    else:
+        print("  ⚠️  IP 白名单为空，局域网内任意设备均可尝试访问（仅受密码保护）")
     print(f"  📂 本地物理资料库目录: {get_workspace_root(cfg)}")
     print(f"  🤖 原生 MCP Server 启动命令: python3 {(BASE_DIR / 'wb.py')} mcp")
     print("=" * 72)

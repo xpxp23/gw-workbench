@@ -865,6 +865,215 @@
       min-width: 220px;
     }
 
+    /* ---------- v3.0.1 资料存档列表改版：卡片网格 + 折叠摘要 + 单包详情抽屉 ---------- */
+    /* 右侧主列必须是块级满宽，否则 auto-fit 网格会把卡片挤在左边一条窄带里 */
+    .arch-main-col {
+      min-width: 0;
+      width: 100%;
+    }    /* 原来每包都把纪要全文、全部照片、音频播放器、文档列表一次性摊开，卡片高度随内容线性暴涨。
+       现在列表只给"一屏扫读"所需的信息，全文和全部附件都收进单包详情抽屉。 */
+    .arch-grid {
+      display: grid;
+      /* auto-fill + 固定列数：包的数量多少都不改变单块宽度，避免 1~2 个包被拉成超宽横条 */
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 11px;
+      align-items: stretch;
+    }
+    /* 大屏按层级锁定每行块数，块宽稳定在 280~330px 这个最舒服的阅读区间 */
+    @media (min-width: 1360px) { .arch-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    @media (min-width: 1080px) and (max-width: 1359px) { .arch-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    .arch-grid.dense {
+      grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+      gap: 7px;
+    }
+    @media (min-width: 1360px) { .arch-grid.dense { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+    @media (min-width: 1080px) and (max-width: 1359px) { .arch-grid.dense { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+    /* 同一行内的磁贴等高：标题行数少的用 flex 撑开，底部资源徽标永远贴底对齐 */
+    .arch-grid > .arch-tile { height: 100%; }
+    .arch-tile {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--teal);
+      border-radius: 9px;
+      padding: 10px 12px 9px;
+      cursor: pointer;
+      transition: box-shadow .15s, border-color .15s, transform .12s;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      min-width: 0;
+      position: relative;
+    }
+    .arch-tile:hover {
+      box-shadow: var(--shadow-hover);
+      border-color: var(--teal);
+    }
+    .arch-tile:focus-visible {
+      outline: 2px solid var(--teal);
+      outline-offset: 2px;
+    }
+    .arch-tile.pinned { border-left-color: var(--warning); }
+    .arch-tile.is-active {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 2px var(--teal-soft);
+    }
+    .arch-tile-top {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+    .arch-cover {
+      width: 40px;
+      height: 40px;
+      border-radius: 7px;
+      flex-shrink: 0;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      overflow: hidden;
+    }
+    .arch-cover img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .arch-tile-main { min-width: 0; flex: 1; }    .arch-tile-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1.35;
+      /* 标题最多两行，超出省略；完整标题在详情抽屉和 title 属性里 */
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+    }
+    .arch-tile-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .arch-tile-notes {
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.55;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      word-break: break-word;
+      /* 等高磁贴：纪要下的空余全部收在这里，资源徽标永远贴底对齐 */
+      margin-bottom: auto;
+    }
+    .arch-grid.dense .arch-tile-notes { display: none; }
+    .arch-grid.dense .arch-tile { padding: 7px 9px; gap: 4px; }
+    .arch-grid.dense .arch-cover { width: 30px; height: 30px; font-size: 14px; }
+    .arch-grid.dense .arch-tile-title { font-size: 12.5px; -webkit-line-clamp: 1; }
+    .arch-chips {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      margin-top: auto;
+    }
+    .arch-chip {
+      font-size: 11px;
+      padding: 1px 6px;
+      border-radius: 20px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      white-space: nowrap;
+      line-height: 1.6;
+    }
+    .arch-chip.t-teal { background: var(--teal-soft); border-color: rgba(13,148,136,.3); color: var(--teal); }
+    /* 分组标题 */
+    .arch-group-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0 8px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .arch-group-head .g-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2px 11px;
+    }
+    .arch-group-head .g-count {
+      font-size: 11.5px;
+      color: var(--text-muted);
+    }
+    .arch-group-head .g-line {
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .arch-group-head .g-caret { font-size: 11px; color: var(--text-muted); transition: transform .15s; }
+    .arch-group-head.collapsed .g-caret { transform: rotate(-90deg); }
+    .arch-group-body { margin-bottom: 14px; }
+    .arch-group-body.collapsed { display: none; }
+
+    /* 单包详情抽屉（复用右侧抽屉容器，但独立排版，避免打开时整页跳动） */
+    .arch-detail-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .arch-detail-title {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--text);
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .arch-detail-acts {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin: 2px 0 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .arch-sec-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      margin: 14px 0 6px;
+    }
+    .arch-doc-row {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      margin-bottom: 5px;
+    }
+    .arch-doc-row .nm { flex: 1; min-width: 0; word-break: break-word; }
+
     /* ==================== 新增栏目 6：📌 重要事项记录 (左树 + 右直读画布) 样式 ==================== */
     .records-split-layout {
       display: grid;
@@ -1355,7 +1564,7 @@
           <ul class="cat-list" id="archiveCategoryList"></ul>
         </aside>
 
-        <div>
+        <div class="arch-main-col">
           <!-- 按次极速存入归档包面板 -->
           <div class="archive-intake-box" id="archiveIntakeBox"
                ondragover="event.preventDefault(); this.style.background='var(--teal-soft)';"
@@ -1396,6 +1605,14 @@
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
               <input type="text" id="archSearchInput" class="form-control" style="width:240px;padding:4px 10px;font-size:12.5px;"
                      placeholder="🔍 过滤存档标题、纪要、课件或照片名..." oninput="renderArchives()" />
+              <div class="scope-group" style="display:inline-flex;">
+                <button class="scope-btn" id="archViewGroupBtn" onclick="setArchiveView('group')" title="按月份分组，适合包很多时翻阅">📅 按月分组</button>
+                <button class="scope-btn" id="archViewFlatBtn" onclick="setArchiveView('flat')" title="不分组，按时间倒序平铺">☰ 平铺</button>
+              </div>
+              <div class="scope-group" style="display:inline-flex;">
+                <button class="scope-btn" id="archModeCardBtn" onclick="setArchiveMode('card')" title="卡片视图：带摘要和缩略图">🗂 卡片</button>
+                <button class="scope-btn" id="archModeDenseBtn" onclick="setArchiveMode('dense')" title="紧凑视图：一行一包，一屏能看几十包">≡ 紧凑</button>
+              </div>
             </div>
           </div>
 
@@ -1625,7 +1842,9 @@
         </div>
       </div>
 
-      <div class="drawer-split-container">
+      <!-- 资料存档单包详情（v3.0.1）：归档包有自己的排版，不与文档双栏改稿混用 -->
+      <div id="archDetailBody" style="display:none;flex:1;overflow-y:auto;padding-right:2px;"></div>
+      <div class="drawer-split-container" id="drawerSplitContainer">
         <!-- 左栏：对照参考区（支持来文要求 / 📌重要事项底数 / 📦资料存档纪要 / ⭐常用范文） -->
         <div class="split-left-pane" id="drawerSplitLeftPane">
           <div style="padding:8px 10px;border-bottom:1px solid var(--border);background:var(--surface);display:flex;gap:6px;align-items:center;justify-content:space-between;">
@@ -2018,9 +2237,9 @@
 
   <!-- 弹窗：系统设置 -->
   <div class="modal-backdrop" id="settingsModalBackdrop">
-    <div class="modal">
+    <div class="modal" style="width:min(760px,96vw);">
       <div class="modal-header">
-        <span>⚙️ 工作台、单位署名、AI 接口与 xkl-gw 联动设置</span>
+        <span>⚙️ 工作台、访问控制、AI 接口与 xkl-gw 联动设置</span>
         <button class="btn btn-sm" onclick="document.getElementById('settingsModalBackdrop').style.display='none'">✖</button>
       </div>
       <div class="form-grid">
@@ -2034,11 +2253,24 @@
         </div>
         <div class="form-group">
           <label>修改局域网访问密码（留空保持不变）</label>
-          <input type="password" id="cfgViewPwd" class="form-control" placeholder="留空不修改（默认 123456）" />
+          <input type="password" id="cfgViewPwd" class="form-control" placeholder="留空不修改" />
         </div>
         <div class="form-group">
           <label>修改主理人编辑口令（留空保持不变）</label>
-          <input type="password" id="cfgEditPwd" class="form-control" placeholder="留空不修改（默认 8888）" />
+          <input type="password" id="cfgEditPwd" class="form-control" placeholder="留空不修改" />
+        </div>
+        <div class="form-group full" style="border-top:1px dashed var(--border);padding-top:10px;">
+          <label>🛡️ IP 访问白名单（一行一条，留空则不限制）</label>
+          <textarea id="cfgIpWhitelist" class="form-control" rows="4" spellcheck="false"
+                    style="font-family:ui-monospace,Consolas,monospace;font-size:12.5px;"
+                    placeholder="172.19.51.*&#10;172.19.52.20&#10;10.0.0.0/8"></textarea>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:5px;line-height:1.6;">
+            支持三种写法：<code>172.19.51.*</code>（整段）、<code>172.19.51.0/24</code>（CIDR）、<code>172.19.51.69</code>（单个 IP）。
+            不在名单内的设备将被<b>直接断开连接</b>，浏览器只会显示"无法访问此网站"。本机 <code>127.0.0.1</code> 永远可访问。
+          </div>
+          <div id="ipWlWarn" style="display:none;font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:6px 9px;margin-top:7px;line-height:1.6;">
+            ⚠️ 当前未设置白名单，局域网内任意设备都可尝试访问（仅受密码保护）。
+          </div>
         </div>
         <div class="form-group full">
           <label>局域网共享公告文字</label>
@@ -2065,10 +2297,51 @@
             <input type="checkbox" id="cfgPrefixArchived" /> 归档事项时在本地文件夹名前自动加 <code>[已办]_</code> 前缀
           </label>
         </div>
+        <div class="form-group full" style="border-top:1px dashed var(--border);padding-top:10px;">
+          <label>🧹 示例数据清理</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span id="demoStatusText" style="font-size:12px;color:var(--text-secondary);">检查中…</span>
+            <button class="btn btn-sm" id="btnPurgeDemo" onclick="purgeDemoData()"
+                    style="margin-left:auto;color:var(--danger);border-color:#fecaca;">🧹 清除全部示例数据</button>
+          </div>
+          <div style="font-size:11.5px;color:var(--text-muted);margin-top:6px;line-height:1.6;">
+            示例数据仅在全新部署时生成一次。删除后不会再自动出现；点此按钮可把历史上残留的示例一并清除（含本地文件夹）。
+          </div>
+        </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
         <button class="btn" onclick="document.getElementById('settingsModalBackdrop').style.display='none'">取消</button>
         <button class="btn btn-primary" onclick="saveSettings()">💾 保存设置</button>
+      </div>
+
+      <!-- 访问记录（仅本机可见） -->
+      <div style="border-top:1px dashed var(--border);margin-top:14px;padding-top:12px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+          <span style="font-size:13px;font-weight:700;color:var(--text);">📋 访问记录</span>
+          <span style="font-size:11.5px;color:var(--text-muted);">仅本机可见 · 最近 100 条</span>
+          <div style="margin-left:auto;display:flex;gap:4px;">
+            <button class="btn btn-xs" id="logTabAll" onclick="setAccessLogFilter('all')">全部</button>
+            <button class="btn btn-xs" id="logTabBlock" onclick="setAccessLogFilter('block')">仅拦截</button>
+            <button class="btn btn-xs" id="logTabBadpwd" onclick="setAccessLogFilter('badpwd')">密码错误</button>
+            <button class="btn btn-xs" onclick="loadAccessLog()">🔄 刷新</button>
+          </div>
+        </div>
+        <div id="accessLogSummary" style="font-size:11.5px;color:var(--text-secondary);margin-bottom:6px;"></div>
+        <div id="accessLogBox" style="max-height:230px;overflow-y:auto;border:1px solid var(--border);border-radius:7px;">
+          <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+            <thead>
+              <tr style="position:sticky;top:0;background:var(--bg-soft,#f8fafc);z-index:1;">
+                <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted);">时间</th>
+                <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted);">来源 IP</th>
+                <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted);">请求</th>
+                <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted);">结果</th>
+              </tr>
+            </thead>
+            <tbody id="accessLogBody">
+              <tr><td colspan="4" style="padding:10px 8px;color:var(--text-muted);">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -2105,7 +2378,7 @@
         <span>🔐 请输入工作台访问密码</span>
       </div>
       <p style="font-size:13px;color:var(--text-secondary);margin-bottom:10px;">
-        首次访问请输入局域网共享密码（默认 <code>123456</code>），浏览器将自动记住密码，下次打开免输入。
+        请输入工作台访问密码，浏览器将自动记住，下次打开免输入。如不清楚密码，请联系管理员。
       </p>
       <div class="form-group">
         <input type="password" id="loginPwdInput" class="form-control" placeholder="输入访问密码..."
@@ -2148,6 +2421,11 @@
       libPageSize: 30,
       omniFiles: [],
       archCategoryFilter: '',
+      // v3.0.1 资料存档列表：group=按月分组，flat=平铺；card=卡片，dense=紧凑
+      archView: (function () { try { return localStorage.getItem('gw_arch_view') || 'group'; } catch (e) { return 'group'; } })(),
+      archMode: (function () { try { return localStorage.getItem('gw_arch_mode') || 'card'; } catch (e) { return 'card'; } })(),
+      archCollapsedGroups: {},
+      archDetailId: null,
       archPendingFiles: [],
       recCategoryFilter: '',
       activeRecordId: null,
@@ -2677,10 +2955,12 @@
     }
 
     function renderCategorySelectors() {
+      // 【待办】只显示收文办理分类；90_ 前缀（如 90_历史资料）只在【公文与材料库】出现
+      const taskCats = (STATE.categories || []).filter(c => !/^90_/.test(c));
       const wbSel = document.getElementById('wbCatFilter');
       const currentVal = wbSel.value;
       wbSel.innerHTML = `<option value="">📂 所有业务分类</option>` +
-        (STATE.categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        taskCats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       wbSel.value = currentVal;
 
       const catOptions = (STATE.categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
@@ -2741,7 +3021,7 @@
       }
       const dlg = await showCustomDialog({
         title: '🔓 开启主理人编辑模式',
-        message: '请输入主理人编辑模式口令（默认 8888）：',
+        message: '请输入主理人编辑模式口令：',
         inputDefault: '',
         inputType: 'password',
         inputPlaceholder: '输入口令...'
@@ -3544,99 +3824,255 @@
         return;
       }
 
-      container.innerHTML = filtered.map(a => {
-        const images = a.images || [];
-        const audios = a.audios || [];
-        const others = [...(a.videos || []), ...(a.other_docs || [])];
+      syncArchiveToolbar();
+      container.innerHTML = STATE.archView === 'group'
+        ? renderArchiveGroupsHtml(filtered, kw)
+        : `<div class="arch-grid ${STATE.archMode === 'dense' ? 'dense' : ''}">${filtered.map(a => archTileHtml(a, kw)).join('')}</div>`;
+    }
 
-        const audioHtml = audios.map(aud => `
-          <div class="archive-audio-row">
-            <span style="font-size:12.5px;font-weight:600;color:var(--text-secondary);">🎙️ ${escapeHtml(aud.filename)}</span>
-            <audio controls preload="metadata" src="${escapeHtml(aud.media_url)}"></audio>
-            <a class="btn btn-xs" href="/api/docs/${aud.id}/download">⬇️ 下载</a>
-            ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteDocQuick(${aud.id})">×</button>` : ''}
-          </div>
-        `).join('');
+    // 视图/分组按钮的选中态（每次重绘后同步，避免和 STATE 不一致）
+    function syncArchiveToolbar() {
+      const set = (id, on) => { const el = document.getElementById(id); if (el) el.classList.toggle('active', !!on); };
+      set('archViewGroupBtn', STATE.archView === 'group');
+      set('archViewFlatBtn', STATE.archView !== 'group');
+      set('archModeCardBtn', STATE.archMode !== 'dense');
+      set('archModeDenseBtn', STATE.archMode === 'dense');
+    }
 
-        const photoGridHtml = images.length > 0 ? `
-          <div style="margin-top:10px;">
-            <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:4px;">📸 现场照片与截图 (${images.length} 张，点击放大浏览)</div>
-            <div class="archive-photo-grid">
-              ${images.map((img, iIdx) => `
-                <div class="archive-photo-thumb" onclick="openArchiveGalleryLightbox(${a.id}, ${iIdx})">
-                  <img src="${escapeHtml(img.media_url)}" alt="${escapeHtml(img.filename)}" loading="lazy" />
-                  <div class="archive-photo-caption" title="${escapeHtml(img.filename)}">${escapeHtml(img.filename)}</div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        ` : '';
+    function setArchiveView(v) {
+      STATE.archView = v || 'group';
+      try { localStorage.setItem('gw_arch_view', STATE.archView); } catch (e) {}
+      renderArchives();
+    }
 
-        const docsHtml = others.length > 0 ? `
-          <div style="margin-top:10px;display:flex;flex-direction:column;gap:5px;">
-            <div style="font-size:12px;font-weight:700;color:var(--text-secondary);">📄 课件、纪要与文档附件 (${others.length} 份)</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px;">
-              ${others.map(d => `
-                <div style="background:var(--surface-alt);border:1px solid var(--border);border-radius:7px;padding:6px 10px;display:flex;align-items:center;gap:8px;font-size:12.5px;">
-                  <span class="file-name-link" style="font-weight:600;" onclick="openDocPreview(${d.id})">📎 ${escapeHtml(d.filename)}</span>
-                  <span style="font-size:11px;color:var(--text-muted);">(${escapeHtml(d.file_type || '')})</span>
-                  <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览</button>
-                  ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${d.id})">WPS</button>` : ''}
-                  <a class="btn btn-xs" href="/api/docs/${d.id}/download">下</a>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        ` : '';
+    function setArchiveMode(m) {
+      STATE.archMode = m || 'card';
+      try { localStorage.setItem('gw_arch_mode', STATE.archMode); } catch (e) {}
+      renderArchives();
+    }
 
+    function toggleArchiveGroup(key) {
+      STATE.archCollapsedGroups = STATE.archCollapsedGroups || {};
+      STATE.archCollapsedGroups[key] = !STATE.archCollapsedGroups[key];
+      renderArchives();
+    }
+
+    // 按月份分组（年月倒序），组内保持原有时间倒序
+    function renderArchiveGroupsHtml(list, kw) {
+      const groups = new Map();
+      list.forEach(a => {
+        const d = String(a.archive_date || '');
+        const key = d.slice(0, 7) || '未标日期';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(a);
+      });
+      const keys = [...groups.keys()].sort((x, y) => y.localeCompare(x));
+      const collapsed = STATE.archCollapsedGroups || {};
+      return keys.map(k => {
+        const items = groups.get(k);
+        const label = /^\d{4}-\d{2}$/.test(k) ? `${k.slice(0, 4)} 年 ${parseInt(k.slice(5, 7), 10)} 月` : k;
+        const isCol = !!collapsed[k];
         return `
-          <article class="archive-card ${a.is_pinned ? 'pinned' : ''}" id="archive_card_${a.id}"
-            draggable="${STATE.can_edit ? 'true' : 'false'}"
-            ondragstart="event.dataTransfer.setData('text/archive-id', '${a.id}')"
-            ondragover="if(STATE.can_edit){event.preventDefault();this.style.outline='2px dashed var(--teal)';}"
-            ondragleave="this.style.outline='none';"
-            ondrop="this.style.outline='none';if(STATE.can_edit && event.dataTransfer.files && event.dataTransfer.files.length>0){event.preventDefault();uploadAppendArchiveFiles(${a.id}, event.dataTransfer.files);}">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;">
-              <div>
-                <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-                  <span class="badge badge-teal">📅 ${escapeHtml(a.archive_date)}</span>
-                  <span class="badge badge-routine">📁 ${escapeHtml(a.category)}</span>
-                  ${a.is_pinned ? '<span class="badge badge-warning">📌 置顶</span>' : ''}
-                  <strong style="font-size:16px;color:var(--text);cursor:pointer;" onclick="openEditArchiveModal(${a.id})">${escapeHtml(a.title)}</strong>
-                  ${(a.tags || []).map(tg => `<span class="badge badge-routine">#${escapeHtml(tg)}</span>`).join('')}
-                </div>
-                <div style="font-size:11.5px;color:var(--text-muted);margin-top:3px;">
-                  本地目录：<code>${escapeHtml(a.folder_rel_path)}</code> · 共 ${(a.files || []).length} 份文件
-                </div>
-              </div>
-
-              <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
-                ${STATE.can_edit ? `
-                  <label class="btn btn-xs btn-teal" style="cursor:pointer;" title="向本归档包继续追加录音、照片、PPT或文档">
-                    + 追加文件
-                    <input type="file" multiple style="display:none;" onchange="uploadAppendArchiveFiles(${a.id}, this.files)" />
-                  </label>
-                  <button class="btn btn-xs" onclick="openEditArchiveModal(${a.id})">✏️ 编辑纪要/标题</button>
-                  <button class="btn btn-xs" onclick="toggleArchivePin(${a.id}, ${!a.is_pinned})">${a.is_pinned ? '取消置顶' : '📌置顶'}</button>
-                ` : ''}
-                ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('folder', null, '${escapeHtml(a.folder_rel_path)}')">📂 打开目录</button>` : ''}
-                <a class="btn btn-xs" href="/api/archives/${a.id}/zip">📦 打包下载(.zip)</a>
-                ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteArchiveBundle(${a.id})">🗑️</button>` : ''}
-              </div>
+          <div class="arch-group-head ${isCol ? 'collapsed' : ''}" onclick="toggleArchiveGroup('${escapeHtml(k)}')" title="点击折叠/展开本组">
+            <span class="g-caret">▼</span>
+            <span class="g-label">${escapeHtml(label)}</span>
+            <span class="g-count">${items.length} 包</span>
+            <span class="g-line"></span>
+          </div>
+          <div class="arch-group-body ${isCol ? 'collapsed' : ''}">
+            <div class="arch-grid ${STATE.archMode === 'dense' ? 'dense' : ''}">
+              ${items.map(a => archTileHtml(a, kw)).join('')}
             </div>
-
-            ${a.notes_md ? `
-              <div class="preview-rendered-box" style="margin-top:10px;padding:10px 14px;font-size:13.5px;">
-                ${renderSimpleMarkdown(a.notes_md, kw ? [kw] : [])}
-              </div>
-            ` : ''}
-
-            ${audioHtml}
-            ${photoGridHtml}
-            ${docsHtml}
-          </article>
+          </div>
         `;
       }).join('');
+    }
+
+    // 单个归档包卡片：只放"扫读"信息，全文与全部附件收进详情抽屉
+    function archTileHtml(a, kw) {
+      const imgs = a.images || [];
+      const auds = a.audios || [];
+      const vids = a.videos || [];
+      const docs = a.other_docs || [];
+      const total = (a.files || []).length;
+      const notes = String(a.notes_md || '').replace(/^<!--[\s\S]*?-->/g, '').replace(/[#>*`]/g, ' ').replace(/\s+/g, ' ').trim();
+
+      const cover = imgs.length
+        ? `<img src="${escapeHtml(imgs[0].media_url)}" alt="" loading="lazy" />`
+        : (auds.length ? '🎙️' : (vids.length ? '🎬' : (docs.length ? '📄' : '📦')));
+
+      const chips = [];
+      if (total) chips.push(`<span class="arch-chip t-teal">📎 ${total} 份</span>`);
+      if (imgs.length) chips.push(`<span class="arch-chip">📸 ${imgs.length}</span>`);
+      if (auds.length) chips.push(`<span class="arch-chip">🎙️ ${auds.length}</span>`);
+      if (vids.length) chips.push(`<span class="arch-chip">🎬 ${vids.length}</span>`);
+      if (docs.length) chips.push(`<span class="arch-chip">📄 ${docs.length}</span>`);
+      if (notes) chips.push(`<span class="arch-chip">📝 ${notes.length} 字</span>`);
+      if (total === 0) chips.push(`<span class="arch-chip" style="color:var(--warning);">空包</span>`);
+
+      const isActive = STATE.archDetailId === a.id;
+      return `
+        <article class="arch-tile ${a.is_pinned ? 'pinned' : ''} ${isActive ? 'is-active' : ''}" id="archive_card_${a.id}"
+          tabindex="0" role="button"
+          title="${escapeHtml(a.title)}&#10;（回车打开详情；可拖动到左侧分类改用分类）"
+          onclick="openArchiveDetail(${a.id})"
+          onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openArchiveDetail(${a.id});}"
+          draggable="${STATE.can_edit ? 'true' : 'false'}"
+          ondragstart="event.dataTransfer.setData('text/archive-id', '${a.id}')"
+          ondragover="if(STATE.can_edit){event.preventDefault();this.style.outline='2px dashed var(--teal)';}"
+          ondragleave="this.style.outline='none';"
+          ondrop="this.style.outline='none';if(STATE.can_edit && event.dataTransfer.files && event.dataTransfer.files.length>0){event.preventDefault();uploadAppendArchiveFiles(${a.id}, event.dataTransfer.files);}">
+          <div class="arch-tile-top">
+            <div class="arch-cover">${cover}</div>
+            <div class="arch-tile-main">
+              <div class="arch-tile-title">${a.is_pinned ? '📌 ' : ''}${escapeHtml(a.title)}</div>
+              <div class="arch-tile-meta">
+                <span>📅 ${escapeHtml(a.archive_date)}</span>
+                <span>· ${escapeHtml((a.category || '').replace(/^\d+_/, ''))}</span>
+              </div>
+            </div>
+          </div>
+          ${notes ? `<div class="arch-tile-notes">${highlightKeywordsHtml(notes, kw ? [kw] : [])}</div>` : ''}
+          <div class="arch-chips">${chips.join('')}</div>
+        </article>
+      `;
+    }
+
+    // 抽屉有两种排版：文档模式（双栏改稿/预览）与归档包详情模式（v3.0.1）
+    function setDrawerMode(mode) {
+      const isArch = mode === 'archive';
+      const split = document.getElementById('drawerSplitContainer');
+      const archBody = document.getElementById('archDetailBody');
+      const toolbar = document.querySelector('#previewDrawer .drawer-toolbar');
+      const pathBar = document.getElementById('drawerPathBar');
+      const copyBtn = document.querySelector('#previewDrawer .drawer-header button.btn-primary');
+      if (split) split.style.display = isArch ? 'none' : '';
+      if (archBody) archBody.style.display = isArch ? 'block' : 'none';
+      if (toolbar) toolbar.style.display = isArch ? 'none' : '';
+      if (pathBar && isArch) pathBar.style.display = 'none';
+      if (copyBtn) copyBtn.style.display = isArch ? 'none' : '';
+      const splitToggle = document.getElementById('btnToggleSplit');
+      if (splitToggle) splitToggle.style.display = isArch ? 'none' : '';
+      STATE.drawerIsArchive = isArch;
+      if (!isArch) {
+        if (pathBar) pathBar.style.display = '';
+        STATE.archDetailId = null;
+      }
+    }
+
+    // 打开单包详情：完整纪要 + 音频 + 照片九宫格 + 文档清单，全部操作按钮集中在这里
+    function openArchiveDetail(archiveId) {
+      const a = (STATE.archives || []).find(x => x.id === archiveId);
+      if (!a) return;
+      STATE.archDetailId = archiveId;
+      STATE.drawerDoc = null;
+      STATE.drawerTaskId = null;
+
+      const imgs = a.images || [];
+      const auds = a.audios || [];
+      const vids = a.videos || [];
+      const docs = a.other_docs || [];
+
+      const audioHtml = auds.map(aud => `
+        <div class="archive-audio-row">
+          <span style="font-size:12.5px;font-weight:600;color:var(--text-secondary);">🎙️ ${escapeHtml(aud.filename)}</span>
+          <audio controls preload="metadata" src="${escapeHtml(aud.media_url)}"></audio>
+          <a class="btn btn-xs" href="/api/docs/${aud.id}/download">⬇️ 下载</a>
+          ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteDocQuick(${aud.id})">×</button>` : ''}
+        </div>
+      `).join('');
+
+      const photoHtml = imgs.length ? `
+        <div class="arch-sec-title">📸 现场照片与截图 <span style="font-weight:400;color:var(--text-muted);">（${imgs.length} 张，点击放大翻看）</span></div>
+        <div class="archive-photo-grid">
+          ${imgs.map((img, iIdx) => `
+            <div class="archive-photo-thumb" onclick="openArchiveGalleryLightbox(${a.id}, ${iIdx})">
+              <img src="${escapeHtml(img.media_url)}" alt="${escapeHtml(img.filename)}" loading="lazy" />
+              <div class="archive-photo-caption" title="${escapeHtml(img.filename)}">${escapeHtml(img.filename)}</div>
+            </div>
+          `).join('')}
+        </div>` : '';
+
+      const docHtml = docs.length ? `
+        <div class="arch-sec-title">📄 课件、纪要与文档附件 <span style="font-weight:400;color:var(--text-muted);">（${docs.length} 份）</span></div>
+        ${docs.map(d => `
+          <div class="arch-doc-row">
+            <span class="file-name-link nm" style="font-weight:600;" onclick="openDocPreview(${d.id})">📎 ${escapeHtml(d.filename)}</span>
+            <span style="font-size:11px;color:var(--text-muted);flex-shrink:0;">${escapeHtml(d.file_type || '')}</span>
+            <button class="btn btn-xs" onclick="openDocPreview(${d.id})">📖 预览</button>
+            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${d.id})">WPS</button>` : ''}
+            <a class="btn btn-xs" href="/api/docs/${d.id}/download">下</a>
+          </div>
+        `).join('')}` : '';
+
+      const videoHtml = vids.length ? `
+        <div class="arch-sec-title">🎬 视频 <span style="font-weight:400;color:var(--text-muted);">（${vids.length} 段）</span></div>
+        ${vids.map(v => `
+          <div class="arch-doc-row">
+            <span class="nm file-name-link" onclick="openDocPreview(${v.id})">🎬 ${escapeHtml(v.filename)}</span>
+            <a class="btn btn-xs" href="/api/docs/${v.id}/download">下</a>
+          </div>
+        `).join('')}` : '';
+
+      const body = document.getElementById('archDetailBody');
+      if (body) {
+        body.innerHTML = `
+          <div class="arch-detail-head">
+            <div style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:5px;">
+                <span class="badge badge-teal">📅 ${escapeHtml(a.archive_date)}</span>
+                <span class="badge badge-routine">📁 ${escapeHtml(a.category)}</span>
+                ${a.is_pinned ? '<span class="badge badge-warning">📌 置顶</span>' : ''}
+                ${(a.tags || []).map(tg => `<span class="badge badge-routine">#${escapeHtml(tg)}</span>`).join('')}
+              </div>
+              <div class="arch-detail-title">${escapeHtml(a.title)}</div>
+              <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;word-break:break-all;">
+                本地目录：<code>${escapeHtml(a.folder_rel_path)}</code> · 共 ${(a.files || []).length} 份文件
+              </div>
+            </div>
+          </div>
+
+          <div class="arch-detail-acts">
+            ${STATE.can_edit ? `
+              <label class="btn btn-xs btn-teal" style="cursor:pointer;" title="向本归档包继续追加录音、照片、PPT或文档">
+                + 追加文件
+                <input type="file" multiple style="display:none;" onchange="uploadAppendArchiveFiles(${a.id}, this.files)" />
+              </label>
+              <button class="btn btn-xs" onclick="openEditArchiveModal(${a.id})">✏️ 编辑纪要/标题</button>
+              <button class="btn btn-xs" onclick="toggleArchivePin(${a.id}, ${!a.is_pinned})">${a.is_pinned ? '取消置顶' : '📌 置顶'}</button>
+            ` : ''}
+            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('folder', null, '${escapeHtml(a.folder_rel_path)}')">📂 打开目录</button>` : ''}
+            <a class="btn btn-xs" href="/api/archives/${a.id}/zip">📦 打包下载(.zip)</a>
+            ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteArchiveBundle(${a.id})">🗑️ 删除本包</button>` : ''}
+          </div>
+
+          ${a.notes_md ? `<div class="arch-sec-title">📝 会议纪要 / 说明</div>
+            <div class="preview-rendered-box" style="padding:12px 16px;font-size:13.5px;">${renderSimpleMarkdown(a.notes_md, [])}</div>` : ''}
+          ${audioHtml}
+          ${photoHtml}
+          ${docHtml}
+          ${videoHtml}
+          ${(!a.notes_md && !auds.length && !imgs.length && !docs.length && !vids.length) ? '<div style="color:var(--text-muted);font-size:13px;">本包还没有内容，点上方【+ 追加文件】或直接把文件拖到卡片上。</div>' : ''}
+        `;
+      }
+
+      const titleEl = document.getElementById('drawerTitle');
+      if (titleEl) titleEl.textContent = `📦 ${a.title}`;
+      const subEl = document.getElementById('drawerSubMeta');
+      if (subEl) subEl.textContent = `资料存档 · ${a.archive_date} · ${a.category} · ${(a.files || []).length} 份文件`;
+
+      // 详情抽屉里不显示文档专属的按钮
+      ['btnDrawerFormatGw', 'btnDrawerFormatRedhead', 'btnDrawerOpenWps', 'btnDrawerDelete', 'btnDrawerOpenDir', 'drawerTabEditBtn'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.style.display = 'none';
+      });
+      const dl = document.getElementById('drawerDownloadLink');
+      if (dl) { dl.href = `/api/archives/${a.id}/zip`; dl.textContent = '📦 打包下载'; dl.style.display = 'inline-flex'; }
+      toggleSplitDraftingStudio(false);
+      switchDrawerMode('read');
+      setDrawerMode('archive');
+      document.getElementById('drawerBackdrop').style.display = 'block';
+      document.getElementById('previewDrawer').style.display = 'flex';
+      renderArchives();
     }
 
     async function uploadAppendArchiveFiles(archiveId, fileList) {
@@ -3722,6 +4158,7 @@
       });
       if (!dlg || !dlg.confirmed) return;
       await apiFetch(`/api/archives/${archiveId}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
+      if (STATE.archDetailId === archiveId) { STATE.archDetailId = null; closePreviewDrawer(); }
       await loadBootstrap();
       showToast('已删除该资料存档包');
     }
@@ -4834,6 +5271,15 @@
       STATE.archCategoryFilter = '';
       const sInp = document.getElementById('archSearchInput');
       if (sInp) sInp.value = '';
+      // v3.0.1：分组模式下目标可能落在折叠的月份里，先把它所在的组展开
+      const target = (STATE.archives || []).find(x => x.id === archiveId);
+      if (target && STATE.archView === 'group') {
+        const key = String(target.archive_date || '').slice(0, 7) || '未标日期';
+        if (STATE.archCollapsedGroups && STATE.archCollapsedGroups[key]) {
+          STATE.archCollapsedGroups[key] = false;
+        }
+      }
+      STATE.archDetailId = archiveId;
       renderArchives();
       setTimeout(() => {
         const el = document.getElementById(`archive_card_${archiveId}`);
@@ -5023,6 +5469,7 @@
 
       toggleSplitDraftingStudio(false);
       switchDrawerMode('read');
+      setDrawerMode('doc');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
     }
@@ -5060,6 +5507,7 @@
 
       switchDrawerMode('edit');
       toggleSplitDraftingStudio(enableSplit);
+      setDrawerMode('doc');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
     }
@@ -5080,6 +5528,7 @@
       document.getElementById('btnDrawerDelete').style.display = 'none';
       document.getElementById('drawerTabEditBtn').style.display = 'inline-block';
 
+      setDrawerMode('doc');
       document.getElementById('drawerEditorFilename').value = `新建综合汇报材料_${new Date().toISOString().slice(0,10)}.md`;
       document.getElementById('drawerEditorTextarea').value = `# 综合工作汇报材料\n\n一、基本情况\n\n二、存在问题\n\n三、下一步打算\n`;
       updateEditorWordCount();
@@ -5184,6 +5633,7 @@
       document.getElementById('drawerDownloadLink').style.display = 'none';
       document.getElementById('btnDrawerFormatGw').style.display = 'none';
       document.getElementById('btnDrawerFormatRedhead').style.display = 'none';
+      setDrawerMode('doc');
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
       document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerDelete').style.display = 'none';
@@ -5210,6 +5660,12 @@
       clearEditorDirty();
       document.getElementById('drawerBackdrop').style.display = 'none';
       document.getElementById('previewDrawer').style.display = 'none';
+      if (STATE.drawerIsArchive) {
+        setDrawerMode('doc');
+        const body = document.getElementById('archDetailBody');
+        if (body) body.innerHTML = '';
+        renderArchives();
+      }
     }
 
     function copyDrawerText() {
@@ -5363,6 +5819,58 @@
       copyText(box.dataset.rawMd || box.textContent, '📋 已复制工作总结全文！');
     }
 
+    // ---------------- 示例数据清理 ----------------
+    async function loadDemoStatus() {
+      const el = document.getElementById('demoStatusText');
+      if (!el) return;
+      try {
+        const res = await apiFetch('/api/demo/status');
+        const r = res.remain || {};
+        const total = res.total || 0;
+        const detail = [];
+        if (r.recurring) detail.push(`周期规则 ${r.recurring}`);
+        if (r.records) detail.push(`重要事项 ${r.records}`);
+        if (r.archives) detail.push(`资料存档 ${r.archives}`);
+        if (r.tasks) detail.push(`事项 ${r.tasks}`);
+        if (total === 0) {
+          el.innerHTML = '<span style="color:#0f766e;">✅ 未检测到示例数据</span>';
+          document.getElementById('btnPurgeDemo').style.display = 'none';
+        } else {
+          el.innerHTML = `<span style="color:#b45309;">⚠️ 检测到示例数据：${escapeHtml(detail.join('、'))}</span>`;
+          document.getElementById('btnPurgeDemo').style.display = '';
+        }
+      } catch (err) {
+        el.textContent = '无法读取示例数据状态';
+      }
+    }
+
+    async function purgeDemoData() {
+      const dlg = await showCustomDialog({
+        title: '🧹 清除示例数据',
+        message: '将删除由系统预置的示例周期规则、示例重要事项记录、示例归档包与示例事项，并同时删除其本地文件夹。你后来自己新建的内容不受影响。确定清除？',
+        checkLabel: '同时删除本地硬盘上的对应文件夹',
+        checkDefault: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      try {
+        const res = await apiFetch('/api/demo/purge', {
+          method: 'POST',
+          body: JSON.stringify({ delete_disk: !!dlg.checked })
+        });
+        const p = res.purged || {};
+        const parts = [];
+        if (p.recurring) parts.push(`周期规则 ${p.recurring} 条`);
+        if (p.records) parts.push(`重要事项 ${p.records} 条`);
+        if (p.archives) parts.push(`资料存档 ${p.archives} 个`);
+        if (p.tasks) parts.push(`事项 ${p.tasks} 个`);
+        showToast(parts.length ? `✅ 已清除：${parts.join('、')}` : '✅ 未发现需要清除的示例数据');
+        await loadBootstrap();
+        loadDemoStatus();
+      } catch (err) {
+        showToast('❌ ' + err.message);
+      }
+    }
+
     function openSettingsModal() {
       document.getElementById('cfgWorkspaceRoot').value = STATE.workspace_root || '';
       document.getElementById('cfgDefaultOrg').value = STATE.default_org_name || '县应急管理局';
@@ -5374,10 +5882,61 @@
       document.getElementById('cfgAiBase').value = STATE.ai_api_base || '';
       document.getElementById('cfgAiModel').value = STATE.ai_model || 'deepseek-chat';
       document.getElementById('cfgPrefixArchived').checked = !!STATE.prefix_archived_folder;
+      const wl = document.getElementById('cfgIpWhitelist');
+      wl.value = STATE.ip_whitelist || '';
+      updateIpWlWarn();
+      wl.oninput = updateIpWlWarn;
       document.getElementById('settingsModalBackdrop').style.display = 'flex';
+      ACCESS_LOG_FILTER = 'all';
+      setAccessLogFilter('all');
+      loadAccessLog();
+      loadDemoStatus();
+    }
+
+    function updateIpWlWarn() {
+      const box = document.getElementById('ipWlWarn');
+      const val = (document.getElementById('cfgIpWhitelist').value || '').trim();
+      box.style.display = val ? 'none' : 'block';
+    }
+
+    // 判断某条白名单规则是否覆盖给定 IPv4 地址（前端只做保存前提醒，最终判定以后端为准）
+    function ipCoversRule(ip, rule) {
+      const parts = String(ip).trim().split('.').map(Number);
+      if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return false;
+      const r = String(rule).trim();
+      if (!r || r.startsWith('#')) return false;
+      if (r.includes('/')) {
+        const [base, prefixStr] = r.split('/');
+        const prefix = parseInt(prefixStr, 10);
+        if (isNaN(prefix) || prefix < 0 || prefix > 32) return false;
+        const b = base.split('.').map(Number);
+        if (b.length !== 4 || b.some(p => isNaN(p))) return false;
+        const toInt = a => ((a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]) >>> 0;
+        const mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+        return (toInt(parts) & mask) === (toInt(b) & mask);
+      }
+      if (r.includes('*')) {
+        const ro = r.split('.');
+        if (ro.length !== 4) return false;
+        return ro.every((o, i) => o === '*' || Number(o) === parts[i]);
+      }
+      return r === String(ip).trim();
     }
 
     async function saveSettings() {
+      const wlVal = document.getElementById('cfgIpWhitelist').value.trim();
+      // 白名单不为空且不含本机局域网 IP 时，提醒确认（防止把自己锁在门外）
+      if (wlVal && STATE.my_lan_ip) {
+        const rules = wlVal.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean);
+        const covered = rules.some(r => ipCoversRule(STATE.my_lan_ip, r));
+        if (!covered) {
+          const dlg = await showCustomDialog({
+            title: '⚠️ 白名单不含本机 IP',
+            message: `当前白名单不包含本机局域网地址 ${STATE.my_lan_ip}，保存后同事与本机都将无法通过局域网址访问，仅 127.0.0.1 可用。确定保存？`
+          });
+          if (!dlg || !dlg.confirmed) return;
+        }
+      }
       const payload = {
         workspace_root: document.getElementById('cfgWorkspaceRoot').value.trim(),
         default_org_name: document.getElementById('cfgDefaultOrg').value.trim() || '县应急管理局',
@@ -5388,12 +5947,71 @@
         ai_api_base: document.getElementById('cfgAiBase').value.trim(),
         ai_api_key: document.getElementById('cfgAiKey').value.trim(),
         ai_model: document.getElementById('cfgAiModel').value.trim(),
+        ip_whitelist: wlVal,
         prefix_archived_folder: document.getElementById('cfgPrefixArchived').checked
       };
       await apiFetch('/api/settings', { method: 'POST', body: JSON.stringify(payload) });
       document.getElementById('settingsModalBackdrop').style.display = 'none';
       await loadBootstrap();
-      showToast('✅ 设置已保存生效！');
+      showToast('✅ 设置已保存生效（IP 白名单即时生效）');
+    }
+
+    // ---------------- 访问记录面板 ----------------
+    let ACCESS_LOG_CACHE = [];
+    let ACCESS_LOG_FILTER = 'all';
+
+    async function loadAccessLog() {
+      const body = document.getElementById('accessLogBody');
+      const sumBox = document.getElementById('accessLogSummary');
+      if (!body) return;
+      try {
+        const res = await apiFetch('/api/access-log?limit=100');
+        ACCESS_LOG_CACHE = res.items || [];
+        const s = res.summary || {};
+        sumBox.innerHTML = `放行 <b style="color:#0f766e;">${s.allow || 0}</b> · 白名单拦截 <b style="color:#b91c1c;">${s.block || 0}</b> · 密码错误 <b style="color:#b45309;">${s.badpwd || 0}</b>` +
+          `　|　本机地址 <code>${escapeHtml(res.my_ip || '')}</code>　当前白名单 <code>${escapeHtml(res.whitelist_effective || '（空，未限制）')}</code>`;
+        renderAccessLog();
+      } catch (err) {
+        body.innerHTML = `<tr><td colspan="4" style="padding:10px 8px;color:#b91c1c;">${escapeHtml(err.message || '读取失败')}（访问记录仅本机可查看）</td></tr>`;
+        sumBox.textContent = '';
+      }
+    }
+
+    function setAccessLogFilter(f) {
+      ACCESS_LOG_FILTER = f;
+      ['all', 'block', 'badpwd'].forEach(k => {
+        const el = document.getElementById('logTab' + (k === 'all' ? 'All' : k === 'block' ? 'Block' : 'Badpwd'));
+        if (el) el.classList.toggle('btn-primary', k === f);
+      });
+      renderAccessLog();
+    }
+
+    function renderAccessLog() {
+      const body = document.getElementById('accessLogBody');
+      if (!body) return;
+      const list = ACCESS_LOG_CACHE.filter(r =>
+        ACCESS_LOG_FILTER === 'all' ? true :
+        ACCESS_LOG_FILTER === 'block' ? r.result === 'block' : r.result === 'badpwd');
+      if (!list.length) {
+        body.innerHTML = `<tr><td colspan="4" style="padding:10px 8px;color:var(--text-muted);">暂无记录</td></tr>`;
+        return;
+      }
+      const badge = r => {
+        if (r === 'allow') return '<span style="color:#0f766e;">✅ 放行</span>';
+        if (r === 'block') return '<span style="color:#b91c1c;font-weight:600;">⛔ 拦截</span>';
+        if (r === 'badpwd') return '<span style="color:#b45309;">🔑 密码错误</span>';
+        return '<span style="color:#b91c1c;">拒绝</span>';
+      };
+      body.innerHTML = list.map(r => `
+        <tr style="border-top:1px solid var(--border);">
+          <td style="padding:5px 8px;color:var(--text-muted);white-space:nowrap;">${escapeHtml((r.ts || '').slice(5))}</td>
+          <td style="padding:5px 8px;font-family:ui-monospace,monospace;">${escapeHtml(r.ip)}</td>
+          <td style="padding:5px 8px;color:var(--text-secondary);word-break:break-all;">${escapeHtml((r.method || '') + ' ' + (r.path || ''))}</td>
+          <td style="padding:5px 8px;white-space:nowrap;">${badge(r.result)}</td>
+        </tr>
+        <tr style="border:none;">
+          <td colspan="4" style="padding:0 8px 5px 8px;font-size:10.5px;color:var(--text-muted);">${escapeHtml(r.reason || '')}</td>
+        </tr>`).join('');
     }
 
     async function triggerDiskSync() {
