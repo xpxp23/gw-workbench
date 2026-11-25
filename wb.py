@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench v3.0.1) 本地 Agent 专用命令行工具 & 原生 MCP Server
+公文与材料智能工作台 (GW-Workbench v3.1.0) 本地 Agent 专用命令行工具 & 原生 MCP Server
 支持：
 1. 命令行直接操作 (list / add / progress / attach / draft / format-gw / archive / record / recurring / search / sync)
 2. 原生 Model Context Protocol (MCP) Server 协议 (`python3 wb.py mcp`)，基于标准 stdio JSON-RPC 2.0，
@@ -11,10 +11,13 @@
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import urllib.request
 import urllib.parse
+import urllib.error
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -50,10 +53,11 @@ from gw_formatter import build_gb9704_docx
 from parser import extract_document_text, extract_structured_preview
 
 
-def api_call(method: str, path: str, payload: dict = None) -> Optional[dict]:
+def api_call(method: str, path: str, payload: dict = None, timeout: int = 60) -> Optional[dict]:
     """
-    修复 BUG-06：所有 CLI / MCP 命令优先调用正在运行的本地 HTTP 服务，
-    保证进程内锁与文件快照缓存 100% 同步；若服务未启动则无缝退回本地直连数据库执行！
+    所有 CLI / MCP 命令优先调用正在运行的本地 HTTP 服务：
+    - 仅当本地端口明确拒绝连接（服务未启动）时返回 None 允许退回离线直连；
+    - 若服务正在运行但发生超时或 HTTP 错误，直接返回错误对象，严禁本地并发双写！
     """
     cfg = load_config()
     port = cfg.get("port", 8090)
@@ -62,11 +66,28 @@ def api_call(method: str, path: str, payload: dict = None) -> Optional[dict]:
         "Content-Type": "application/json",
         "X-Agent-Token": cfg.get("agent_token", "gw-local-agent-token"),
     }
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = json.loads(e.read().decode("utf-8", errors="ignore"))
+            if isinstance(err_body, dict):
+                return err_body
+        except Exception:
+            pass
+        return {"ok": False, "error": f"本地服务返回 HTTP {e.code}"}
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", None)
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return {"ok": False, "error": f"本地服务响应超时（>{timeout}s），已取消离线重试以防双写"}
+        if isinstance(reason, ConnectionRefusedError) or (hasattr(reason, "errno") and reason.errno in (61, 111, 10061)):
+            return None
+        return None
+    except (TimeoutError, socket.timeout):
+        return {"ok": False, "error": f"本地服务响应超时（>{timeout}s），已取消离线重试以防双写"}
     except Exception:
         return None
 
@@ -186,12 +207,10 @@ def _do_write_draft(
                 return {"ok": False, "error": f"事项 #{task_id} 不存在"}
             task_folder = ws_root / t_row["folder_rel_path"]
             task_folder.mkdir(parents=True, exist_ok=True)
-            if not fname.startswith(("[材料]", "【材料】")):
-                fname = "[材料]_" + fname
             dest_path = resolve_unique_dest_path(task_folder, fname, content.encode("utf-8"))
             cat_use = t_row["category"]
         else:
-            cat_use = sanitize_filename(category or "03_综合汇报与总结")
+            cat_use = sanitize_filename(category or "90_历史资料")
             cat_dir = ws_root / cat_use
             cat_dir.mkdir(parents=True, exist_ok=True)
             dest_path = resolve_unique_dest_path(cat_dir, fname, content.encode("utf-8"))
@@ -240,8 +259,8 @@ def _do_format_gw(doc_id: int, mode: str = "report", doc_number: str = "", org: 
             return {"ok": False, "error": f"文档 #{doc_id} 不存在"}
         t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (d_row["task_id"],)).fetchone() if d_row["task_id"] else None
         src_abs = ws_root / d_row["rel_path"]
-        stem = Path(d_row["filename"]).stem.replace("[材料]_", "").replace("[来文]_", "")
-        out_abs = src_abs.parent / sanitize_filename(f"[材料]_{stem}_国标排版.docx")
+        stem = re.sub(r"^(\[材料\]_|\[来文\]_|【材料】_|【来文】_)+", "", Path(d_row["filename"]).stem)
+        out_abs = resolve_unique_dest_path(src_abs.parent, sanitize_filename(f"{stem}_国标排版.docx"), b"")
         effective_doc_num = doc_number if mode == "redhead" else ""
         if mode == "redhead" and not effective_doc_num and t_row:
             effective_doc_num = t_row["doc_number"] or ""
@@ -941,7 +960,10 @@ def run_mcp_stdio_server() -> None:
         use_content_length = False
         if line_str.lower().startswith("content-length:"):
             use_content_length = True
-            length = int(line_str.split(":", 1)[1].strip())
+            try:
+                length = int(line_str.split(":", 1)[1].strip())
+            except ValueError:
+                continue
             while True:
                 hdr = sys.stdin.buffer.readline().decode("utf-8", errors="ignore").strip()
                 if not hdr:
@@ -1032,8 +1054,7 @@ def cmd_attach(args) -> None:
         ws_root = get_workspace_root()
         task_dir = ws_root / t_row["folder_rel_path"]
         task_dir.mkdir(parents=True, exist_ok=True)
-        prefix = "[来文]_" if args.role == "incoming" else "[材料]_"
-        dest = resolve_unique_dest_path(task_dir, prefix + sanitize_filename(p.name), p.read_bytes())
+        dest = resolve_unique_dest_path(task_dir, sanitize_filename(p.name), p.read_bytes())
         shutil.copy2(p, dest)
         conn.close()
         sync_filesystem(force=True)

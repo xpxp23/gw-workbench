@@ -1,4 +1,4 @@
-# 🤖 公文与材料智能工作台 (GW-Workbench v3.0.0) — 本地 Agent 与 MCP 操控指南 (`AGENT_GUIDE.md`)
+# 🤖 公文与材料智能工作台 (GW-Workbench v3.1.0) — 本地 Agent 与 MCP 操控指南 (`AGENT_GUIDE.md`)
 
 > **给本地 AI Agent（Claude Code / Cline / Roo Code / Cursor / OpenCode / 自定义 Agent）的系统指令**：
 > 当用户要求你“把公文/通知填入工作台”、“存入会议记录/培训课件/下沉照片”、“查看或更新重要事项记录（如高密汛情基本情况、地震应急预案）”、“更新工作进展”或“起草材料并排版成国标公文存进工作台”时，你可以直接使用 **原生 MCP Server (`python3 wb.py mcp`)**、**`wb.py` 命令行工具** 或 **本机免密 HTTP JSON API (`http://127.0.0.1:8090`)**。

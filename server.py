@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench v3.0.1) 核心服务端
+公文与材料智能工作台 (GW-Workbench v3.1.0) 核心服务端
 专为银河麒麟 Kylin V10 (海光 3350) 与局域网跨平台协同设计
 v3.0.0 架构升级与全量缺陷清零特性：
 1. 四维政务知识资产模型：
@@ -20,7 +20,10 @@ v3.0.0 架构升级与全量缺陷清零特性：
 import base64
 import csv
 import hashlib
+import hmac
 import io
+import logging
+from collections import defaultdict
 import ipaddress
 import json
 import mimetypes
@@ -55,10 +58,11 @@ from ai_engine import (
     call_openai_compatible_api,
     infer_doc_role,
     match_best_category,
+    extract_reference_terms,
 )
 from gw_formatter import build_gb9704_docx
 
-VERSION = "3.0.3"
+VERSION = "3.1.0"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "workbench.db"
@@ -127,9 +131,14 @@ DEFAULT_CONFIG = {
     "seed_demo_done": True,
 }
 
+logger = logging.getLogger("gw_workbench.server")
 DB_LOCK = threading.RLock()
+_CONFIG_LOCK = threading.Lock()
+_CONFIG_CACHE: Tuple[float, Optional[Dict[str, Any]]] = (0.0, None)
 _LAST_SYNC_TIME: float = 0.0
 _FILE_STAT_SNAPSHOT: Dict[str, Tuple[float, int]] = {}
+_LOGIN_FAIL_MAP: Dict[str, List[float]] = {}
+MAX_JSON_BODY_BYTES = 64 * 1024 * 1024  # 64 MB
 
 DOC_LIGHT_COLS = """
     id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, file_type,
@@ -150,29 +159,62 @@ def _is_safe_subpath(target_path: Path, base_root: Path) -> bool:
         return False
 
 
+def _cookie_sign_token(role: str, secret_pwd: str, cfg: Dict[str, Any]) -> str:
+    salt = str(cfg.get("agent_token") or "gw-workbench-salt")
+    msg = f"{role}:{secret_pwd}".encode("utf-8")
+    return hmac.new(salt.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def _verify_cookie_token(cookie_val: str, role: str, secret_pwd: str, cfg: Dict[str, Any]) -> bool:
+    if not cookie_val or not secret_pwd:
+        return False
+    expected = _cookie_sign_token(role, secret_pwd, cfg)
+    return hmac.compare_digest(cookie_val, expected) or hmac.compare_digest(cookie_val, secret_pwd)
+
+
 def load_config() -> Dict[str, Any]:
+    global _CONFIG_CACHE
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if CONFIG_PATH.exists():
-        try:
-            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            merged = {**DEFAULT_CONFIG, **cfg}
-            return merged
-        except Exception:
-            pass
-    save_config(DEFAULT_CONFIG)
-    return dict(DEFAULT_CONFIG)
+    with _CONFIG_LOCK:
+        if CONFIG_PATH.exists():
+            try:
+                mtime = CONFIG_PATH.stat().st_mtime
+                if _CONFIG_CACHE[1] is not None and _CONFIG_CACHE[0] == mtime:
+                    return dict(_CONFIG_CACHE[1])
+                cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                if isinstance(cfg, dict):
+                    merged = {**DEFAULT_CONFIG, **cfg}
+                    _CONFIG_CACHE = (mtime, merged)
+                    return dict(merged)
+            except Exception as e:
+                logger.error("Failed to parse config.json (preserving file): %s", e)
+                if _CONFIG_CACHE[1] is not None:
+                    return dict(_CONFIG_CACHE[1])
+                return dict(DEFAULT_CONFIG)
+        save_config(dict(DEFAULT_CONFIG))
+        return dict(DEFAULT_CONFIG)
 
 
 def save_config(cfg: Dict[str, Any]) -> None:
+    global _CONFIG_CACHE
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    ws_raw = str(cfg.get("workspace_root") or "workspace_files").strip()
+    cfg_copy = dict(cfg)
+    ws_raw = str(cfg_copy.get("workspace_root") or "workspace_files").strip()
     try:
         ws_abs = Path(ws_raw).expanduser().resolve()
         if ws_abs == (BASE_DIR / "workspace_files").resolve():
-            cfg["workspace_root"] = "workspace_files"
+            cfg_copy["workspace_root"] = "workspace_files"
     except Exception:
         pass
-    CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    payload = json.dumps(cfg_copy, ensure_ascii=False, indent=2) + "\n"
+    with _CONFIG_LOCK:
+        tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(str(tmp_path), str(CONFIG_PATH))
+        try:
+            _CONFIG_CACHE = (CONFIG_PATH.stat().st_mtime, {**DEFAULT_CONFIG, **cfg_copy})
+        except Exception:
+            _CONFIG_CACHE = (0.0, None)
 
 
 def parse_whitelist_rules(raw: Any) -> List[Tuple[str, Any]]:
@@ -338,7 +380,13 @@ def sanitize_filename(name: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip(". ")
     if cleaned in ("", ".", ".."):
         return "未命名"
-    return cleaned[:85]
+    if len(cleaned) <= 85:
+        return cleaned
+    p_obj = Path(cleaned)
+    suffix = p_obj.suffix if (p_obj.suffix and len(p_obj.suffix) <= 15) else ""
+    stem = cleaned[:-len(suffix)] if suffix else cleaned
+    max_stem = max(12, 85 - len(suffix))
+    return (stem[:max_stem].rstrip(". ") or "未命名") + suffix
 
 
 def resolve_unique_dest_path(dest_dir: Path, filename: str, incoming_bytes: Optional[bytes] = None) -> Path:
@@ -379,6 +427,7 @@ def get_db() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 
@@ -598,6 +647,7 @@ def init_db() -> None:
             cur.execute("ALTER TABLE documents ADD COLUMN record_id INTEGER DEFAULT NULL")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_archive_id ON documents(archive_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_record_id ON documents(record_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_starred_id ON documents(is_starred DESC, id DESC)")
 
         try:
             cur.execute(
@@ -1165,8 +1215,12 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
     ws_root = get_workspace_root()
     now_ts = time.time()
 
+    if not force and _LAST_SYNC_TIME > 0 and (now_ts - _LAST_SYNC_TIME) < 6.0:
+        stats["skipped"] = 1
+        return stats
     current_snap = _collect_fast_file_snapshot(ws_root)
-    if not force and (now_ts - _LAST_SYNC_TIME) < 6.0 and _FILE_STAT_SNAPSHOT and current_snap == _FILE_STAT_SNAPSHOT:
+    if not force and _FILE_STAT_SNAPSHOT and current_snap == _FILE_STAT_SNAPSHOT:
+        _LAST_SYNC_TIME = now_ts
         stats["skipped"] = 1
         return stats
 
@@ -1199,10 +1253,30 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
                     if anchored_tid and anchored_tid in tasks:
                         t_obj = tasks[anchored_tid]
                         if t_obj["folder_rel_path"] != rel_dir or t_obj["category"] != cat_name:
+                            old_rel_prefix = (t_obj["folder_rel_path"] or "").rstrip("/") + "/"
+                            new_rel_prefix = rel_dir.rstrip("/") + "/"
                             conn.execute(
                                 "UPDATE tasks SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
                                 (rel_dir, cat_name, now_str, anchored_tid),
                             )
+                            if old_rel_prefix != "/":
+                                moved_docs = conn.execute(
+                                    "SELECT id, rel_path FROM documents WHERE task_id = ?",
+                                    (anchored_tid,),
+                                ).fetchall()
+                                for md in moved_docs:
+                                    old_rp = md["rel_path"] or ""
+                                    if old_rp.startswith(old_rel_prefix):
+                                        new_rp = new_rel_prefix + old_rp[len(old_rel_prefix):]
+                                        conn.execute(
+                                            "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                            (new_rp, cat_name, now_str, md["id"]),
+                                        )
+                                        if old_rp in existing_docs:
+                                            rec_m = existing_docs.pop(old_rp)
+                                            rec_m["rel_path"] = new_rp
+                                            rec_m["category"] = cat_name
+                                            existing_docs[new_rp] = rec_m
                             t_obj["folder_rel_path"] = rel_dir
                             t_obj["category"] = cat_name
                             stats["moved_tasks"] += 1
@@ -1390,7 +1464,7 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
                         if not rm_path.exists():
                             write_record_readme_file(conn, rid)
 
-        # 清理磁盘上已移除的文件索引
+        # 清理磁盘上已移除的文件索引及孤儿目录记录
         for rel_p, doc_rec in existing_docs.items():
             if rel_p not in seen_rel_paths:
                 abs_p = ws_root / rel_p
@@ -1398,6 +1472,12 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
                     conn.execute("DELETE FROM documents WHERE id = ?", (doc_rec["id"],))
                     conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_rec["id"],))
                     stats["removed"] += 1
+
+        for tid, t_obj in tasks.items():
+            frel = t_obj.get("folder_rel_path") or ""
+            if frel and not (ws_root / frel).exists():
+                conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
+                stats["removed"] += 1
 
         conn.commit()
         conn.close()
@@ -1491,37 +1571,101 @@ def find_similar_library_docs_fast(
     summary: str,
     exclude_task_id: Optional[int] = None,
     limit: int = 4,
+    category: str = "",
+    conn: Optional[sqlite3.Connection] = None,
 ) -> List[Dict[str, Any]]:
-    kws = extract_search_keywords(f"{title} {summary}")
-    if not kws:
+    term_weights = extract_reference_terms(title, summary)
+    if not term_weights:
         return []
+
+    eligible_roles = {"draft", "template", "historical", "record"}
+    skip_media = {"image", "audio", "video"}
+    candidates = [
+        d for d in light_docs
+        if (exclude_task_id is None or d.get("task_id") != exclude_task_id)
+        and d.get("doc_role") in eligible_roles
+        and d.get("media_kind") not in skip_media
+    ]
+    if not candidates:
+        return []
+
+    fts_bonus: Dict[int, float] = {}
+    if conn is not None:
+        top_terms = [t for t, _ in sorted(term_weights.items(), key=lambda x: -x[1])[:8]]
+        fts_parts = []
+        for t in top_terms:
+            seg = _cjk_segment_for_fts(t).strip()
+            if seg:
+                fts_parts.append(f'"{seg.replace(chr(34), "")}"')
+        if fts_parts:
+            fts_q = " OR ".join(fts_parts)
+            try:
+                rows_fts = conn.execute(
+                    "SELECT doc_id, bm25(documents_fts, 0, 5.0, 1.5, 2.5, 1.0) AS rank "
+                    "FROM documents_fts WHERE documents_fts MATCH ? ORDER BY rank LIMIT 25",
+                    (fts_q,),
+                ).fetchall()
+                for idx_r, rf in enumerate(rows_fts):
+                    fts_bonus[int(rf["doc_id"])] = max(1.0, 6.0 - idx_r * 0.25)
+            except Exception:
+                pass
+
+    n_docs = max(1, len(candidates))
+    doc_freq: Dict[str, int] = {}
+    if n_docs >= 5:
+        for t in term_weights:
+            cnt = sum(
+                1 for d in candidates
+                if t in (d.get("filename") or "") or t in (d.get("content_preview") or "")
+            )
+            doc_freq[t] = cnt
+
     scored = []
-    for d in light_docs:
-        if exclude_task_id is not None and d.get("task_id") == exclude_task_id:
+    for d in candidates:
+        hay_title = (d.get("filename") or "")
+        hay_body = (d.get("content_preview") or "")
+        base_score = 0.0
+        matched_terms = 0
+        strong_phrase_hit = False
+
+        for term, w in term_weights.items():
+            if n_docs >= 5 and doc_freq.get(term, 0) > n_docs * 0.45 and len(term) <= 2:
+                continue
+            hit_t = term in hay_title
+            hit_b = term in hay_body
+            if hit_t or hit_b:
+                matched_terms += 1
+                if len(term) >= 4 and hit_t:
+                    strong_phrase_hit = True
+                base_score += (w * 2.5 if hit_t else 0.0) + (w * 0.9 if hit_b else 0.0)
+
+        fts_sc = fts_bonus.get(int(d["id"]), 0.0)
+        if fts_sc > 0:
+            base_score += fts_sc
+            if matched_terms == 0 and fts_sc >= 3.5:
+                matched_terms = 2
+
+        if base_score < 4.5 or (matched_terms < 2 and not strong_phrase_hit):
             continue
-        score = 0
-        hay_title = (d.get("filename") or "").lower()
-        hay_body = (d.get("content_preview") or "").lower()
-        for kw in kws:
-            kl = kw.lower()
-            if kl in hay_title:
-                score += 6
-            if kl in hay_body:
-                score += 2
-        if d.get("doc_role") in ("draft", "template", "record"):
-            score += 2 if score > 0 else 0
+
+        final_score = base_score
+        if category and d.get("category") == category:
+            final_score *= 1.2
+        if d.get("doc_role") in ("draft", "template"):
+            final_score += 1.5
         if d.get("is_starred"):
-            score += 3 if score > 0 else 1
-        if score > 0:
-            scored.append((score, {
-                "id": d["id"],
-                "task_id": d.get("task_id"),
-                "filename": d["filename"],
-                "rel_path": d["rel_path"],
-                "category": d["category"],
-                "doc_role": d["doc_role"],
-                "is_starred": d["is_starred"],
-            }))
+            final_score += 2.0
+
+        scored.append((final_score, {
+            "id": d["id"],
+            "task_id": d.get("task_id"),
+            "filename": d["filename"],
+            "rel_path": d["rel_path"],
+            "category": d["category"],
+            "doc_role": d["doc_role"],
+            "is_starred": d["is_starred"],
+            "match_score": round(final_score, 1),
+        }))
 
     scored.sort(key=lambda x: (-x[0], -x[1]["id"]))
     return [item[1] for item in scored[:limit]]
@@ -1573,6 +1717,7 @@ def serialize_task(
     include_refs: bool = True,
     preloaded_docs: Optional[List[Dict[str, Any]]] = None,
     ws_root: Optional[Path] = None,
+    docs_by_task: Optional[Dict[int, List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     t = dict(row)
     t.pop("readme_mtime", None)
@@ -1583,7 +1728,10 @@ def serialize_task(
     t["deadline_info"] = compute_deadline_badge(t.get("deadline", ""), t.get("status", "in_progress"))
     root = ws_root or get_workspace_root()
 
-    if preloaded_docs is not None:
+    if docs_by_task is not None:
+        task_docs = docs_by_task.get(t["id"], [])
+        all_light_docs = preloaded_docs or []
+    elif preloaded_docs is not None:
         task_docs = [d for d in preloaded_docs if d.get("task_id") == t["id"]]
         all_light_docs = preloaded_docs
     else:
@@ -1607,7 +1755,7 @@ def serialize_task(
     # 性能优化：仅对非归档事项计算相似旧稿，避免历史事项拖慢 Bootstrap
     if include_refs and t.get("status") != "archived":
         t["reference_docs"] = find_similar_library_docs_fast(
-            all_light_docs, t["title"], t.get("summary", ""), exclude_task_id=t["id"], limit=4
+            all_light_docs, t["title"], t.get("summary", ""), exclude_task_id=t["id"], limit=4, category=t.get("category", ""), conn=conn
         )
     else:
         t["reference_docs"] = []
@@ -1619,13 +1767,16 @@ def serialize_archive(
     row: sqlite3.Row,
     preloaded_docs: Optional[List[Dict[str, Any]]] = None,
     ws_root: Optional[Path] = None,
+    docs_by_archive: Optional[Dict[int, List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     a = dict(row)
     a.pop("readme_mtime", None)
     a["tags"] = json.loads(a.pop("tags_json", "[]") or "[]")
     a["is_pinned"] = bool(a.get("is_pinned", 0))
     root = ws_root or get_workspace_root()
-    if preloaded_docs is not None:
+    if docs_by_archive is not None:
+        files = docs_by_archive.get(a["id"], [])
+    elif preloaded_docs is not None:
         files = [d for d in preloaded_docs if d.get("archive_id") == a["id"]]
     else:
         d_rows = conn.execute(
@@ -1648,13 +1799,16 @@ def serialize_record(
     preloaded_docs: Optional[List[Dict[str, Any]]] = None,
     ws_root: Optional[Path] = None,
     include_structured_preview: bool = False,
+    docs_by_record: Optional[Dict[int, List[Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     rec = dict(row)
     rec.pop("readme_mtime", None)
     rec["tags"] = json.loads(rec.pop("tags_json", "[]") or "[]")
     rec["is_pinned"] = bool(rec.get("is_pinned", 0))
     root = ws_root or get_workspace_root()
-    if preloaded_docs is not None:
+    if docs_by_record is not None:
+        files = docs_by_record.get(rec["id"], [])
+    elif preloaded_docs is not None:
         files = [d for d in preloaded_docs if d.get("record_id") == rec["id"]]
     else:
         d_rows = conn.execute(
@@ -1792,10 +1946,17 @@ def execute_search(
                     "FROM documents WHERE 1=1"
                 )
                 params_fb: List[Any] = []
+                if category:
+                    sql_fb += " AND category = ?"
+                    params_fb.append(category)
+                if doc_role:
+                    sql_fb += " AND doc_role = ?"
+                    params_fb.append(doc_role)
                 for kw in keywords:
                     sql_fb += " AND (filename LIKE ? OR tags_json LIKE ? OR category LIKE ? OR extracted_text LIKE ?)"
                     lp = f"%{kw}%"
                     params_fb.extend([lp, lp, lp, lp])
+                sql_fb += " ORDER BY is_starred DESC, id DESC"
                 rows_found = conn.execute(sql_fb, params_fb).fetchall()
 
             for r in rows_found:
@@ -1847,7 +2008,7 @@ def execute_search(
     return matched_tasks, matched_docs, matched_archives, matched_records
 
 
-def _decode_file_item_bytes(fitem: Dict[str, Any]) -> Tuple[str, bytes, str]:
+def _decode_file_item_bytes(fitem: Dict[str, Any], allow_local_path: bool = False) -> Tuple[str, bytes, str]:
     fname = sanitize_filename(fitem.get("filename") or "附件.txt")
     b64_data = fitem.get("content_base64") or ""
     raw_bytes = b""
@@ -1855,8 +2016,8 @@ def _decode_file_item_bytes(fitem: Dict[str, Any]) -> Tuple[str, bytes, str]:
         if "," in b64_data and b64_data.startswith("data:"):
             b64_data = b64_data.split(",", 1)[1]
         raw_bytes = base64.b64decode(b64_data)
-    elif fitem.get("local_source_path"):
-        src_p = Path(fitem["local_source_path"]).expanduser()
+    elif fitem.get("local_source_path") and allow_local_path:
+        src_p = Path(fitem["local_source_path"]).expanduser().resolve()
         if src_p.exists() and src_p.is_file():
             raw_bytes = src_p.read_bytes()
             fname = sanitize_filename(src_p.name)
@@ -1880,23 +2041,26 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
     if raw_text:
         combined_text_parts.append(raw_text)
 
+    allow_local = bool(payload.get("_allow_local_path", False))
     first_filename = ""
     extracted_file_blobs = []
-    for fitem in uploaded_files:
-        fname, raw_bytes, role = _decode_file_item_bytes(fitem)
+    pre_extracted_cache: Dict[int, Tuple[str, str]] = {}
+    for idx_f, fitem in enumerate(uploaded_files):
+        fname, raw_bytes, role = _decode_file_item_bytes(fitem, allow_local_path=allow_local)
         if not first_filename:
             first_filename = fname
         extracted_file_blobs.append((fname, raw_bytes, role))
 
     if extracted_file_blobs and auto_ai:
-        for fname, raw_bytes, role in extracted_file_blobs:
+        for idx_f, (fname, raw_bytes, role) in enumerate(extracted_file_blobs):
             if raw_bytes and role == "incoming":
                 suffix = Path(fname).suffix
                 with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
                     tf.write(raw_bytes)
                     tmp_p = Path(tf.name)
                 try:
-                    ext_txt, _ = extract_document_text(tmp_p)
+                    ext_txt, ftype = extract_document_text(tmp_p)
+                    pre_extracted_cache[idx_f] = (ext_txt, ftype)
                     if ext_txt and not ext_txt.startswith("【影像图片文件："):
                         combined_text_parts.append(ext_txt)
                 finally:
@@ -1927,9 +2091,7 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     checklist = payload.get("checklist")
     if checklist is None:
-        checklist = ai_parsed.get("checklist") or [
-            {"id": "chk_1", "text": "核对报送要求：材料名称、份数、报送方式与截止时间", "done": False}
-        ]
+        checklist = ai_parsed.get("checklist") if isinstance(ai_parsed.get("checklist"), list) else []
     elif isinstance(checklist, list):
         norm_chk = []
         for idx, item in enumerate(checklist):
@@ -2001,8 +2163,7 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
             if old_doc:
                 old_abs = ws_root / old_doc["rel_path"]
                 fname = old_doc["filename"]
-                save_name = fname if fname.startswith(("[来文]", "【来文】")) else f"[来文]_{fname}"
-                dest_path = resolve_unique_dest_path(task_folder, save_name)
+                dest_path = resolve_unique_dest_path(task_folder, fname)
                 if old_abs.is_file():
                     shutil.move(str(old_abs), str(dest_path))
                     st = dest_path.stat()
@@ -2018,16 +2179,14 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
                     _sync_fts_doc(conn, int(reuse_doc_id))
                     extracted_file_blobs = []
 
-        for fname, raw_bytes, role in extracted_file_blobs:
-            prefix = "[来文]_" if role == "incoming" else "[材料]_"
-            if not fname.startswith(("[来文]", "[材料]", "【来文】", "【材料】")):
-                save_name = prefix + fname
-            else:
-                save_name = fname
-            dest_path = resolve_unique_dest_path(task_folder, save_name, raw_bytes)
+        for idx_f, (fname, raw_bytes, role) in enumerate(extracted_file_blobs):
+            dest_path = resolve_unique_dest_path(task_folder, fname, raw_bytes)
             dest_path.write_bytes(raw_bytes)
             st = dest_path.stat()
-            ext_text, ftype = extract_document_text(dest_path)
+            if idx_f in pre_extracted_cache:
+                ext_text, ftype = pre_extracted_cache[idx_f]
+            else:
+                ext_text, ftype = extract_document_text(dest_path)
             rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
             d_cur = cur.execute(
                 """
@@ -3003,8 +3162,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         header_view = self.headers.get("X-View-Password", "")
         header_edit = self.headers.get("X-Edit-Password", "")
 
-        can_view = (not view_pwd) or (ck.get("wb_view_pwd") == view_pwd) or (header_view == view_pwd)
-        can_edit = (ck.get("wb_edit_pwd") == edit_pwd) or (header_edit == edit_pwd)
+        can_view = (not view_pwd) or _verify_cookie_token(ck.get("wb_view_pwd", ""), "view", view_pwd, cfg) or (header_view == view_pwd)
+        can_edit = _verify_cookie_token(ck.get("wb_edit_pwd", ""), "edit", edit_pwd, cfg) or (header_edit == edit_pwd)
         if can_edit:
             can_view = True
         return can_view, can_edit
@@ -3027,7 +3186,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             for k, v in set_cookies.items():
                 self.send_header(
                     "Set-Cookie",
-                    f"{k}={urllib.parse.quote(v)}; Path=/; Max-Age=31536000; SameSite=Lax",
+                    f"{k}={urllib.parse.quote(v)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax",
                 )
         if clear_cookies:
             for k in clear_cookies:
@@ -3040,7 +3199,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _read_json_body(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or "0")
-        if length <= 0:
+        if length <= 0 or length > MAX_JSON_BODY_BYTES:
             return {}
         raw = self.rfile.read(length)
         try:
@@ -3117,16 +3276,20 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         cfg = load_config()
 
         if path == "/api/auth/status":
+            _lan_ip = get_lan_ip()
             self._send_json({
                 "version": VERSION,
                 "can_view": can_view,
                 "can_edit": can_edit,
                 "is_localhost": self._is_localhost(),
-                "lan_url": f"http://{get_lan_ip()}:{cfg.get('port', 8090)}",
+                "lan_url": f"http://{_lan_ip}:{cfg.get('port', 8090)}",
             })
             return
 
         if path == "/api/demo/status":
+            if not can_view:
+                self._send_json({"error": "需要登录"}, status=401)
+                return
             sig = _demo_signatures()
             with DB_LOCK:
                 conn = get_db()
@@ -3196,10 +3359,20 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 conn = get_db()
                 doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
                 docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+                docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                docs_by_archive: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                docs_by_record: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                for _d in docs:
+                    if _d.get("task_id"):
+                        docs_by_task[int(_d["task_id"])].append(_d)
+                    if _d.get("archive_id"):
+                        docs_by_archive[int(_d["archive_id"])].append(_d)
+                    if _d.get("record_id"):
+                        docs_by_record[int(_d["record_id"])].append(_d)
 
                 rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
                 tasks = [
-                    serialize_task(conn, r, include_refs=True, preloaded_docs=docs, ws_root=ws_root)
+                    serialize_task(conn, r, include_refs=True, preloaded_docs=docs, ws_root=ws_root, docs_by_task=docs_by_task)
                     for r in rows
                 ]
 
@@ -3216,10 +3389,10 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 tasks.sort(key=task_sort_key)
 
                 arch_rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
-                archives = [serialize_archive(conn, ar, preloaded_docs=docs, ws_root=ws_root) for ar in arch_rows]
+                archives = [serialize_archive(conn, ar, preloaded_docs=docs, ws_root=ws_root, docs_by_archive=docs_by_archive) for ar in arch_rows]
 
                 imp_rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
-                important_records = [serialize_record(conn, ir, preloaded_docs=docs, ws_root=ws_root, include_structured_preview=False) for ir in imp_rows]
+                important_records = [serialize_record(conn, ir, preloaded_docs=docs, ws_root=ws_root, include_structured_preview=False, docs_by_record=docs_by_record) for ir in imp_rows]
 
                 rec_rows = conn.execute("SELECT * FROM recurring_rules ORDER BY id ASC").fetchall()
                 recurring_rules = []
@@ -3249,7 +3422,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 "xkl_gw_cli": cfg.get("xkl_gw_cli", ""),
                 "prefix_archived_folder": bool(cfg.get("prefix_archived_folder", False)),
                 "ip_whitelist": cfg.get("ip_whitelist", ""),
-                "my_lan_ip": get_lan_ip(),
+                "my_lan_ip": _lan_ip,
                 "categories": categories,
                 "archive_categories": archive_categories,
                 "record_categories": record_categories,
@@ -3407,8 +3580,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             if not row:
                 self.send_error(404, "Media Not Found")
                 return
-            file_path = get_workspace_root(cfg) / row["rel_path"]
-            if not file_path.is_file():
+            ws_root = get_workspace_root(cfg)
+            file_path = ws_root / row["rel_path"]
+            if not _is_safe_subpath(file_path, ws_root) or not file_path.is_file():
                 self.send_error(404, "Physical File Not Found")
                 return
 
@@ -3441,10 +3615,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     end = int(end_s) if end_s else (file_size - 1)
                     end = min(end, file_size - 1)
                     if 0 <= start <= end < file_size:
+                        end = min(end, start + 4 * 1024 * 1024 - 1)
                         chunk_len = end - start + 1
-                        with open(file_path, "rb") as f:
-                            f.seek(start)
-                            chunk = f.read(chunk_len)
                         self.send_response(206)
                         self.send_header("Content-Type", ctype)
                         self.send_header("Accept-Ranges", "bytes")
@@ -3452,19 +3624,31 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         self.send_header("Content-Length", str(chunk_len))
                         self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{encoded_name}")
                         self.end_headers()
-                        self.wfile.write(chunk)
+                        with open(file_path, "rb") as f:
+                            f.seek(start)
+                            remaining = chunk_len
+                            while remaining > 0:
+                                buf_blk = f.read(min(65536, remaining))
+                                if not buf_blk:
+                                    break
+                                self.wfile.write(buf_blk)
+                                remaining -= len(buf_blk)
                         return
                 except Exception:
                     pass
 
-            data = file_path.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Length", str(file_size))
             self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{encoded_name}")
             self.end_headers()
-            self.wfile.write(data)
+            with open(file_path, "rb") as f:
+                while True:
+                    buf_blk = f.read(65536)
+                    if not buf_blk:
+                        break
+                    self.wfile.write(buf_blk)
             return
 
         m_dl = re.match(r"^/api/docs/(\d+)/download$", path)
@@ -3477,47 +3661,63 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             if not row:
                 self.send_error(404, "File Not Found")
                 return
-            file_path = get_workspace_root(cfg) / row["rel_path"]
-            if not file_path.exists():
+            ws_root = get_workspace_root(cfg)
+            file_path = ws_root / row["rel_path"]
+            if not _is_safe_subpath(file_path, ws_root) or not file_path.is_file():
                 self.send_error(404, "Physical File Not Found")
                 return
-            data = file_path.read_bytes()
+            fsize = file_path.stat().st_size
             ctype, _ = mimetypes.guess_type(str(file_path))
             encoded_name = urllib.parse.quote(row["filename"])
             self.send_response(200)
             self.send_header("Content-Type", ctype or "application/octet-stream")
-            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Length", str(fsize))
             self.send_header(
                 "Content-Disposition",
                 f"attachment; filename=\"{encoded_name}\"; filename*=UTF-8''{encoded_name}",
             )
             self.end_headers()
-            self.wfile.write(data)
+            with open(file_path, "rb") as f:
+                while True:
+                    buf_blk = f.read(65536)
+                    if not buf_blk:
+                        break
+                    self.wfile.write(buf_blk)
             return
 
         if path == "/api/docs/batch-zip":
             ids_raw = (qs.get("ids") or [""])[0]
             doc_ids = [int(x) for x in ids_raw.split(",") if x.strip().isdigit()]
             ws_root = get_workspace_root(cfg)
-            buf = io.BytesIO()
+            zip_entries: List[Tuple[Path, str]] = []
             with DB_LOCK:
                 conn = get_db()
-                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                try:
                     for did in doc_ids:
                         r = conn.execute("SELECT filename, rel_path, category FROM documents WHERE id = ?", (did,)).fetchone()
                         if r:
                             fp = ws_root / r["rel_path"]
-                            if fp.is_file():
-                                zf.write(fp, arcname=f"{r['category']}/{r['filename']}")
-                conn.close()
-            zip_bytes = buf.getvalue()
-            zip_name = urllib.parse.quote(f"公文与材料批量打包_{datetime.now().strftime('%Y%m%d_%H%M')}.zip")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Length", str(len(zip_bytes)))
-            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{zip_name}")
-            self.end_headers()
-            self.wfile.write(zip_bytes)
+                            if _is_safe_subpath(fp, ws_root) and fp.is_file():
+                                zip_entries.append((fp, f"{r['category']}/{r['filename']}"))
+                finally:
+                    conn.close()
+            with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024) as spooled:
+                with zipfile.ZipFile(spooled, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for fp, arc in zip_entries:
+                        zf.write(fp, arcname=arc)
+                zsize = spooled.tell()
+                spooled.seek(0)
+                zip_name = urllib.parse.quote(f"公文与材料批量打包_{datetime.now().strftime('%Y%m%d_%H%M')}.zip")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(zsize))
+                self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{zip_name}")
+                self.end_headers()
+                while True:
+                    blk = spooled.read(65536)
+                    if not blk:
+                        break
+                    self.wfile.write(blk)
             return
 
         m_tzip = re.match(r"^/api/tasks/(\d+)/zip$", path)
@@ -3526,6 +3726,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             with DB_LOCK:
                 conn = get_db()
                 write_task_readme_file(conn, task_id)
+                conn.commit()
                 row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
                 conn.close()
             if not row:
@@ -3557,6 +3758,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             with DB_LOCK:
                 conn = get_db()
                 write_archive_readme_file(conn, aid)
+                conn.commit()
                 row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
                 conn.close()
             if not row:
@@ -3698,19 +3900,30 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/auth/login":
             pwd = str(body.get("password") or "").strip()
             cookies_to_set = {}
+            client_ip = self.client_address[0]
+            now_t = time.time()
+            fails = [ts for ts in _LOGIN_FAIL_MAP.get(client_ip, []) if now_t - ts < 300]
+            _LOGIN_FAIL_MAP[client_ip] = fails
+            if len(fails) >= 10 and not self._is_localhost():
+                self._send_json({"ok": False, "error": "密码错误次数过多，请 5 分钟后再试"}, status=429)
+                return
             if pwd == str(cfg.get("edit_password")):
-                cookies_to_set["wb_view_pwd"] = str(cfg.get("view_password"))
-                cookies_to_set["wb_edit_pwd"] = str(cfg.get("edit_password"))
-                record_access(self.client_address[0], path, "POST", "allow", "编辑口令登录成功")
+                _LOGIN_FAIL_MAP.pop(client_ip, None)
+                cookies_to_set["wb_view_pwd"] = _cookie_sign_token("view", str(cfg.get("view_password")), cfg)
+                cookies_to_set["wb_edit_pwd"] = _cookie_sign_token("edit", str(cfg.get("edit_password")), cfg)
+                record_access(client_ip, path, "POST", "allow", "编辑口令登录成功")
                 self._send_json({"ok": True, "can_view": True, "can_edit": True}, set_cookies=cookies_to_set)
                 return
             elif pwd == str(cfg.get("view_password")):
-                cookies_to_set["wb_view_pwd"] = pwd
-                record_access(self.client_address[0], path, "POST", "allow", "访问密码登录成功")
+                _LOGIN_FAIL_MAP.pop(client_ip, None)
+                cookies_to_set["wb_view_pwd"] = _cookie_sign_token("view", pwd, cfg)
+                record_access(client_ip, path, "POST", "allow", "访问密码登录成功")
                 self._send_json({"ok": True, "can_view": True, "can_edit": False}, set_cookies=cookies_to_set)
                 return
             else:
-                record_access(self.client_address[0], path, "POST", "badpwd", "访问密码不正确")
+                fails.append(now_t)
+                _LOGIN_FAIL_MAP[client_ip] = fails
+                record_access(client_ip, path, "POST", "badpwd", "访问密码不正确")
                 self._send_json({"ok": False, "error": "访问密码不正确"}, status=403)
                 return
 
@@ -3719,7 +3932,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             if pwd == str(cfg.get("edit_password")) or self._is_localhost():
                 self._send_json(
                     {"ok": True, "can_edit": True},
-                    set_cookies={"wb_edit_pwd": str(cfg.get("edit_password"))},
+                    set_cookies={"wb_edit_pwd": _cookie_sign_token("edit", str(cfg.get("edit_password")), cfg)},
                 )
             else:
                 record_access(self.client_address[0], path, "POST", "badpwd", "主理人编辑口令不正确")
@@ -3916,6 +4129,10 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         self._send_json({"error": "文档不存在"}, status=404)
                         return
                     dest_path = ws_root / d_row["rel_path"]
+                    if not _is_safe_subpath(dest_path, ws_root):
+                        conn.close()
+                        self._send_json({"error": "非法路径"}, status=403)
+                        return
                     dest_path.write_text(content, encoding="utf-8")
                     st = dest_path.stat()
                     conn.execute(
@@ -3942,8 +4159,6 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         return
                     task_folder = ws_root / t_row["folder_rel_path"]
                     task_folder.mkdir(parents=True, exist_ok=True)
-                    if not filename.startswith(("[材料]", "【材料】")):
-                        filename = "[材料]_" + filename
                     dest_path = resolve_unique_dest_path(task_folder, filename, content.encode("utf-8"))
                     dest_path.write_text(content, encoding="utf-8")
                     st = dest_path.stat()
@@ -4006,41 +4221,44 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
             with DB_LOCK:
                 conn = get_db()
-                d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                if not d_row:
+                try:
+                    d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    if not d_row:
+                        self._send_json({"error": "原文档不存在"}, status=404)
+                        return
+                    d_dict = dict(d_row)
+                    t_row = conn.execute("SELECT doc_number FROM tasks WHERE id = ?", (d_dict["task_id"],)).fetchone() if d_dict["task_id"] else None
+                    t_doc_num = (t_row["doc_number"] or "") if t_row else ""
+                finally:
                     conn.close()
-                    self._send_json({"error": "原文档不存在"}, status=404)
-                    return
 
-                t_row = None
-                if d_row["task_id"]:
-                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (d_row["task_id"],)).fetchone()
+            src_abs = ws_root / d_dict["rel_path"]
+            stem = re.sub(r"^(\[材料\]_|\[来文\]_|【材料】_|【来文】_)+", "", Path(d_dict["filename"]).stem)
+            out_name = sanitize_filename(f"{stem}_国标排版.docx")
+            out_abs = resolve_unique_dest_path(src_abs.parent, out_name, b"")
 
-                src_abs = ws_root / d_row["rel_path"]
-                stem = re.sub(r"^(\[材料\]_|\[来文\]_)+", "", Path(d_row["filename"]).stem)
-                out_name = f"[材料]_{stem}_国标排版.docx"
-                out_abs = src_abs.parent / sanitize_filename(out_name)
+            doc_num = custom_doc_num if mode == "redhead" else ""
+            if mode == "redhead" and not doc_num:
+                doc_num = t_doc_num
+            org_name = custom_org or default_org
+            raw_text = d_dict["extracted_text"] or ""
 
-                # 修复 BUG-02：report 汇报模式不自动继承上级来文的 doc_number，且署名优先使用本单位默认名称
-                doc_num = custom_doc_num if mode == "redhead" else ""
-                if mode == "redhead" and not doc_num and t_row:
-                    doc_num = t_row["doc_number"] or ""
-                org_name = custom_org or default_org
-                raw_text = d_row["extracted_text"] or ""
+            build_gb9704_docx(
+                output_path=out_abs,
+                raw_text=raw_text,
+                title=stem,
+                doc_number=doc_num,
+                issuing_org=org_name,
+                mode=mode,
+                xkl_gw_cli=cfg.get("xkl_gw_cli", ""),
+            )
+            st = out_abs.stat()
+            ext_text, ftype = extract_document_text(out_abs)
+            rel_file = str(out_abs.relative_to(ws_root)).replace("\\", "/")
 
-                build_gb9704_docx(
-                    output_path=out_abs,
-                    raw_text=raw_text,
-                    title=stem,
-                    doc_number=doc_num,
-                    issuing_org=org_name,
-                    mode=mode,
-                    xkl_gw_cli=cfg.get("xkl_gw_cli", ""),
-                )
-
-                st = out_abs.stat()
-                ext_text, ftype = extract_document_text(out_abs)
-                rel_file = str(out_abs.relative_to(ws_root)).replace("\\", "/")
+            with DB_LOCK:
+                conn = get_db()
+                d_row = d_dict
                 conn.execute(
                     """
                     INSERT INTO documents (
@@ -4117,6 +4335,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/tasks":
+            body["_allow_local_path"] = self._is_localhost()
             created = create_task_record(body)
             self._send_json({"ok": True, "task": created})
             return
@@ -4168,15 +4387,11 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     return
                 task_folder = ws_root / t_row["folder_rel_path"]
                 task_folder.mkdir(parents=True, exist_ok=True)
+                allow_loc = self._is_localhost()
                 for fitem in files_list:
-                    fname, raw_bytes, f_role = _decode_file_item_bytes(fitem)
+                    fname, raw_bytes, f_role = _decode_file_item_bytes(fitem, allow_local_path=allow_loc)
                     role = fitem.get("doc_role") or doc_role or f_role
-                    prefix = "[来文]_" if role == "incoming" else "[材料]_"
-                    if not fname.startswith(("[来文]", "[材料]", "【来文】", "【材料】")):
-                        save_name = prefix + fname
-                    else:
-                        save_name = fname
-                    dest = resolve_unique_dest_path(task_folder, save_name, raw_bytes)
+                    dest = resolve_unique_dest_path(task_folder, fname, raw_bytes)
                     dest.write_bytes(raw_bytes)
                     st = dest.stat()
                     ext_txt, ftype = extract_document_text(dest)
@@ -4275,6 +4490,63 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "documents": added_docs})
             return
 
+        if path == "/api/tasks/batch":
+            task_ids = [int(x) for x in (body.get("task_ids") or []) if str(x).isdigit()]
+            action = str(body.get("action") or "").strip()
+            if not task_ids:
+                self._send_json({"error": "请选择至少一条待办事项"}, status=400)
+                return
+            ws_root = get_workspace_root(cfg)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            updated = 0
+            with DB_LOCK:
+                conn = get_db()
+                try:
+                    for tid in task_ids:
+                        t = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
+                        if not t:
+                            continue
+                        if action == "archive":
+                            new_cat, new_rel = _move_task_folder_to_category(
+                                conn, ws_root, tid, t["category"], new_status="archived",
+                                prefix_archived=bool(cfg.get("prefix_archived_folder")),
+                            )
+                            conn.execute(
+                                "UPDATE tasks SET status='archived', completed_at=?, folder_rel_path=?, updated_at=? WHERE id=?",
+                                (now_str, new_rel, now_str, tid),
+                            )
+                            write_task_readme_file(conn, tid)
+                            updated += 1
+                        elif action == "reopen":
+                            new_cat, new_rel = _move_task_folder_to_category(
+                                conn, ws_root, tid, t["category"], new_status="in_progress",
+                                prefix_archived=bool(cfg.get("prefix_archived_folder")),
+                            )
+                            conn.execute(
+                                "UPDATE tasks SET status='in_progress', completed_at='', folder_rel_path=?, updated_at=? WHERE id=?",
+                                (new_rel, now_str, tid),
+                            )
+                            write_task_readme_file(conn, tid)
+                            updated += 1
+                        elif action == "move_category":
+                            target_cat = sanitize_filename(str(body.get("category") or "").strip())
+                            if target_cat and target_cat not in RESERVED_TOP_DIRS:
+                                new_cat, new_rel = _move_task_folder_to_category(
+                                    conn, ws_root, tid, target_cat,
+                                    prefix_archived=bool(cfg.get("prefix_archived_folder")),
+                                )
+                                conn.execute(
+                                    "UPDATE tasks SET category=?, folder_rel_path=?, updated_at=? WHERE id=?",
+                                    (new_cat, new_rel, now_str, tid),
+                                )
+                                write_task_readme_file(conn, tid)
+                                updated += 1
+                    conn.commit()
+                finally:
+                    conn.close()
+            self._send_json({"ok": True, "updated_count": updated})
+            return
+
         if path == "/api/docs/batch":
             doc_ids = [int(x) for x in (body.get("doc_ids") or []) if str(x).isdigit()]
             action = str(body.get("action") or "").strip()
@@ -4351,6 +4623,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/docs/scan-local-dir":
+            if not self._is_localhost():
+                self._send_json({"error": "安全限制：仅允许本机操作本地目录扫描"}, status=403)
+                return
             src_dir_str = str(body.get("source_dir") or "").strip()
             target_cat = sanitize_filename(body.get("category") or DEFAULT_LIBRARY_CATEGORY)
             smart_auto_cat = bool(body.get("smart_auto_category", False))
@@ -4687,6 +4962,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             else:
                 base_dir = ws_root
 
+            if scope == "task" and (old_name in RESERVED_TOP_DIRS or new_name in RESERVED_TOP_DIRS):
+                self._send_json({"error": "系统保留目录不可重命名或覆盖"}, status=400)
+                return
             old_dir = base_dir / old_name
             new_dir = base_dir / new_name
             if not old_dir.exists():
@@ -4698,13 +4976,21 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 if not new_dir.exists():
                     shutil.move(str(old_dir), str(new_dir))
                 else:
-                    for item in old_dir.iterdir():
+                    for item in list(old_dir.iterdir()):
                         if item.name == ".gitkeep":
                             continue
-                        dest_item = new_dir / item.name
-                        if not dest_item.exists():
-                            shutil.move(str(item), str(dest_item))
-                    shutil.rmtree(old_dir, ignore_errors=True)
+                        if item.is_file():
+                            dest_item = resolve_unique_dest_path(new_dir, item.name, item.read_bytes())
+                        else:
+                            dest_item = new_dir / item.name
+                            c_idx = 2
+                            while dest_item.exists():
+                                dest_item = new_dir / f"{item.name}_{c_idx}"
+                                c_idx += 1
+                        shutil.move(str(item), str(dest_item))
+                    remaining = [x for x in old_dir.iterdir() if x.name != ".gitkeep"]
+                    if not remaining:
+                        shutil.rmtree(old_dir, ignore_errors=True)
                 ensure_category_dir(ws_root, new_name, scope=scope)
 
                 if scope == "archive":
@@ -4940,8 +5226,27 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         "text": str(body["append_check_text"]).strip(),
                         "done": False,
                     })
+                elif body.get("clear_checklist"):
+                    checklist = []
+                elif body.get("clear_done_checklist"):
+                    checklist = [item for item in checklist if not item.get("done")]
+                elif isinstance(body.get("batch_delete_check_ids"), list):
+                    del_set = set(str(x) for x in body["batch_delete_check_ids"])
+                    checklist = [item for item in checklist if str(item.get("id")) not in del_set]
                 elif body.get("checklist") is not None:
-                    checklist = body["checklist"]
+                    raw_chk = body["checklist"]
+                    if isinstance(raw_chk, list):
+                        norm_chk = []
+                        for idx_c, c_it in enumerate(raw_chk):
+                            if isinstance(c_it, dict) and str(c_it.get("text") or "").strip():
+                                norm_chk.append({
+                                    "id": str(c_it.get("id") or f"chk_{idx_c+1}"),
+                                    "text": str(c_it["text"]).strip(),
+                                    "done": bool(c_it.get("done", False)),
+                                })
+                            elif isinstance(c_it, str) and c_it.strip():
+                                norm_chk.append({"id": f"chk_{idx_c+1}", "text": c_it.strip(), "done": False})
+                        checklist = norm_chk
 
                 new_cat, new_rel_folder = _move_task_folder_to_category(
                     conn,
@@ -5024,12 +5329,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 new_starred = 1 if body.get("is_starred", bool(d["is_starred"])) else 0
                 new_pinned = 1 if body.get("is_pinned", bool(d["is_pinned"])) else 0
 
-                if d["task_id"] is not None and new_role != d["doc_role"] and "filename" not in body:
-                    stripped_name = re.sub(r"^(\[来文\]_|\[材料\]_|【来文】|【材料】)+", "", new_filename)
-                    if new_role == "incoming":
-                        new_filename = "[来文]_" + stripped_name
-                    elif new_role == "draft":
-                        new_filename = "[材料]_" + stripped_name
+                # v3.1.0: 切换文件角色仅更新元数据与事项说明清单，不再自动添加 [来文]_/[材料]_ 物理前缀
 
                 if d["task_id"] is not None and new_cat != d["category"]:
                     moved_cat, moved_rel_folder = _move_task_folder_to_category(

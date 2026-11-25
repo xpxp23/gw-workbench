@@ -1,33 +1,50 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-多格式公文、多媒体资料与常备知识库提取器 (parser.py v3.0.0 - 适配银河麒麟 Kylin V10 + 海光 3350)
-支持格式与增强特性：
-- .ofd (党政机关电子公文标准格式：纯 Python 解析 ZIP 内 OFD.xml 与 Content.xml 的 TextCode 节点)
-- .docx (纯 Python 顺序解析 word/document.xml 段落与内嵌表格 <w:tbl>，支持仿真公文直读预览)
-- .pptx (纯 Python 零依赖解析 ppt/slides/slide*.xml 幻灯片标题、正文与备注，解决培训课件无法检索痛点)
-- .xlsx / .csv (内置纯 Python 标准库零依赖解析 xl/sharedStrings.xml 与 sheet*.xml，支持前端交互式表格直读)
-- .pdf (自适应 pypdf / pdfplumber / 系统 pdftotext)
-- .doc / .wps / .et / .dps (自适应系统工具或纯 Python 二进制流文本抽提)
-- .png / .jpg / .jpeg / .webp / .bmp (自适应系统 tesseract 中文 OCR 提取微信截图文字 + 图像尺寸解析)
-- .mp3 / .m4a / .wav / .ogg / .aac / .flac / .mp4 / .webm (音视频媒体识别与元数据提取)
+多格式公文、多媒体资料与常备知识库提取器 (parser.py v3.1.0 - 适配银河麒麟 Kylin V10 + Windows + macOS)
+修复与增强：
+- .ofd: 按 OFD.xml -> DocRoot -> Document.xml -> Pages/Page/@BaseLoc 标准链路定位页序，按 Y/X 坐标分行，保留 14:30 等冒号格式
+- .docx: 递归解析 <w:sdt> 内容控件与 <w:txbxContent> 文本框，跳过 <w:del> 修订删除块与 <mc:Fallback>
+- .pptx: 同步提取幻灯片正文与 ppt/notesSlides/notesSlide*.xml 演讲者备注
+- .xlsx: 解析 xl/styles.xml 还原 Excel 日期序列号与布尔值，超限截断附加提示
+- .pdf: 限制同步提取最大 50 页；前 3 页无文本时跳过 pdfplumber 避免扫描件双倍卡顿
+- .doc/.wps: 限制最大二进制读取体积 10MB，优先探测 soffice/libreoffice 无头转换，Windows 加 CREATE_NO_WINDOW
+- 图片 OCR: 仅读前 64KB 头部解析尺寸，修复 JPEG 标记遍历；启动缓存 tesseract --list-langs，杜绝 3x8s 重试与中文误降级为英文乱码
 """
 
 import csv
 import io
+import logging
 import os
 import re
+import shutil
 import struct
-import zipfile
 import subprocess
+import tempfile
+import zipfile
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Tuple, Dict, Any, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+logger = logging.getLogger("gw_workbench.parser")
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg"}
 AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".aac", ".flac", ".wma", ".amr"}
 VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".mov", ".avi"}
+
+MAX_PDF_SYNC_PAGES = 50
+MAX_LEGACY_BIN_BYTES = 10 * 1024 * 1024  # 10 MB
+
+_TESSERACT_LANGS_CACHE: Optional[Set[str]] = None
+_SOFFICE_BIN_CACHE: Optional[str] = None
+
+
+def _subprocess_kwargs(timeout: int = 15) -> Dict[str, Any]:
+    kw: Dict[str, Any] = {"capture_output": True, "timeout": timeout}
+    if os.name == "nt":
+        kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return kw
 
 
 def read_text_with_fallback_encodings(raw_bytes: bytes) -> str:
@@ -47,23 +64,84 @@ def _local_tag(tag_str: str) -> str:
 
 
 def _extract_w_p_text(p_elem: ET.Element) -> str:
+    """提取 Word 段落文本，跳过 <w:del> 删除修订与 <mc:Fallback> 冗余回退节点"""
     p_texts: List[str] = []
-    for sub in p_elem.iter():
-        sub_tag = _local_tag(sub.tag)
-        if sub_tag == "t" and sub.text:
-            p_texts.append(sub.text)
-        elif sub_tag in ("br", "cr"):
+
+    def _walk(node: ET.Element) -> None:
+        tag = _local_tag(node.tag)
+        if tag in ("del", "delText", "Fallback", "instrText", "fldData"):
+            return
+        if tag == "t" and node.text:
+            p_texts.append(node.text)
+            return
+        if tag in ("br", "cr"):
             p_texts.append("\n")
-        elif sub_tag == "tab":
+            return
+        if tag == "tab":
             p_texts.append("\t")
+            return
+        for ch in node:
+            _walk(ch)
+
+    _walk(p_elem)
     return "".join(p_texts).strip()
 
 
+def _walk_docx_container(
+    container: ET.Element,
+    is_main_doc: bool,
+    text_chunks: List[str],
+    blocks: List[Dict[str, Any]],
+) -> None:
+    """递归遍历 body / sdtContent / txbxContent，完整提取段落、表格与文本框"""
+    for child in container:
+        ctag = _local_tag(child.tag)
+        if ctag in ("del", "Fallback"):
+            continue
+        if ctag == "p":
+            line = _extract_w_p_text(child)
+            if line:
+                text_chunks.append(line)
+                if is_main_doc:
+                    btype = "p"
+                    if re.match(r"^[一二三四五六七八九十]+、", line):
+                        btype = "h1"
+                    elif re.match(r"^[（\(][一二三四五六七八九十]+[）\)]", line):
+                        btype = "h2"
+                    elif re.match(r"^\d+[、\.]\s*", line) and len(line) < 60:
+                        btype = "h3"
+                    blocks.append({"type": btype, "text": line})
+            # 检查段落内嵌文本框 <w:txbxContent>
+            for sub in child.iter():
+                if _local_tag(sub.tag) == "txbxContent":
+                    _walk_docx_container(sub, is_main_doc, text_chunks, blocks)
+        elif ctag == "tbl":
+            rows_data: List[List[str]] = []
+            for tr in child:
+                if _local_tag(tr.tag) != "tr":
+                    continue
+                row_cells: List[str] = []
+                for tc in tr:
+                    if _local_tag(tc.tag) != "tc":
+                        continue
+                    cell_lines: List[str] = []
+                    for sub_p in tc.iter():
+                        if _local_tag(sub_p.tag) == "p":
+                            pt = _extract_w_p_text(sub_p)
+                            if pt:
+                                cell_lines.append(pt)
+                    row_cells.append("\n".join(cell_lines))
+                if any(c.strip() for c in row_cells):
+                    rows_data.append(row_cells)
+                    text_chunks.append(" | ".join(c.replace("\n", " ") for c in row_cells if c.strip()))
+            if rows_data and is_main_doc:
+                blocks.append({"type": "table", "rows": rows_data})
+        elif ctag in ("sdt", "sdtContent", "txbxContent", "customXml", "ins"):
+            _walk_docx_container(child, is_main_doc, text_chunks, blocks)
+
+
 def extract_docx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]:
-    """
-    顺序提取 .docx 中的段落与内嵌表格（纯 Python 标准库实现，零依赖）
-    返回 (plain_text, blocks) 供 FTS5 索引与【重要事项记录】直读画布使用
-    """
+    """顺序提取 .docx 中的段落、内容控件、文本框与内嵌表格（纯 Python 标准库实现）"""
     blocks: List[Dict[str, Any]] = []
     text_chunks: List[str] = []
     try:
@@ -85,63 +163,25 @@ def extract_docx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                             body_node = ch
                             break
                 container = body_node if body_node is not None else root
-                for child in container:
-                    ctag = _local_tag(child.tag)
-                    if ctag == "p":
-                        line = _extract_w_p_text(child)
-                        if line:
-                            text_chunks.append(line)
-                            if is_main_doc:
-                                btype = "p"
-                                if re.match(r"^[一二三四五六七八九十]+、", line):
-                                    btype = "h1"
-                                elif re.match(r"^[（\(][一二三四五六七八九十]+[）\)]", line):
-                                    btype = "h2"
-                                elif re.match(r"^\d+[、\.]\s*", line) and len(line) < 60:
-                                    btype = "h3"
-                                blocks.append({"type": btype, "text": line})
-                    elif ctag == "tbl":
-                        rows_data: List[List[str]] = []
-                        for tr in child:
-                            if _local_tag(tr.tag) != "tr":
-                                continue
-                            row_cells: List[str] = []
-                            for tc in tr:
-                                if _local_tag(tc.tag) != "tc":
-                                    continue
-                                cell_lines = []
-                                for sub_p in tc.iter():
-                                    if _local_tag(sub_p.tag) == "p":
-                                        pt = _extract_w_p_text(sub_p)
-                                        if pt:
-                                            cell_lines.append(pt)
-                                row_cells.append("\n".join(cell_lines))
-                            if any(c.strip() for c in row_cells):
-                                rows_data.append(row_cells)
-                                text_chunks.append(" | ".join(c.replace("\n", " ") for c in row_cells if c.strip()))
-                        if rows_data and is_main_doc:
-                            blocks.append({"type": "table", "rows": rows_data})
+                _walk_docx_container(container, is_main_doc, text_chunks, blocks)
             return "\n".join(text_chunks).strip(), blocks
     except Exception as e:
-        return f"[DOCX解析提示: {e}]", []
+        logger.warning("DOCX parse failed for %s: %s", file_path.name, e)
+        return "", []
 
 
 def extract_docx(file_path: Path) -> str:
-    """提取 .docx 正文与表格内容"""
     txt, _ = extract_docx_structured(file_path)
     return txt
 
 
 def extract_pptx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]:
-    """
-    纯 Python 标准库零依赖提取 .pptx 培训课件/汇报演示文稿正文与每页结构
-    解析 ppt/slides/slide*.xml 与 ppt/notesSlides/notesSlide*.xml
-    """
+    """提取 .pptx 幻灯片正文与演讲者备注 notesSlides"""
     slides_data: List[Dict[str, Any]] = []
     text_chunks: List[str] = []
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
-            names = zf.namelist()
+            names = set(zf.namelist())
             slide_files = [
                 n for n in names
                 if re.match(r"^ppt/slides/slide\d+\.xml$", n, flags=re.IGNORECASE)
@@ -149,29 +189,44 @@ def extract_pptx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
             slide_files.sort(key=lambda x: int(re.findall(r"\d+", x)[-1]))
 
             for idx, sf in enumerate(slide_files, 1):
+                slide_num = re.findall(r"\d+", sf)[-1]
                 root = ET.fromstring(zf.read(sf))
                 slide_lines: List[str] = []
                 for elem in root.iter():
                     if _local_tag(elem.tag) == "p":
-                        runs = [
-                            sub.text
-                            for sub in elem.iter()
-                            if _local_tag(sub.tag) == "t" and sub.text
-                        ]
+                        runs = [sub.text for sub in elem.iter() if _local_tag(sub.tag) == "t" and sub.text]
                         line = "".join(runs).strip()
                         if line and (not slide_lines or slide_lines[-1] != line):
                             slide_lines.append(line)
-                if slide_lines:
+
+                # 补全演讲者备注读取
+                notes_path = f"ppt/notesSlides/notesSlide{slide_num}.xml"
+                notes_lines: List[str] = []
+                if notes_path in names:
+                    try:
+                        n_root = ET.fromstring(zf.read(notes_path))
+                        for elem in n_root.iter():
+                            if _local_tag(elem.tag) == "p":
+                                runs = [sub.text for sub in elem.iter() if _local_tag(sub.tag) == "t" and sub.text]
+                                line = "".join(runs).strip()
+                                if line and not line.isdigit() and line not in slide_lines:
+                                    notes_lines.append(line)
+                    except Exception:
+                        pass
+
+                combined_lines = slide_lines + ([f"[备注] {' '.join(notes_lines)}"] if notes_lines else [])
+                if combined_lines:
                     slides_data.append({
                         "slide_no": idx,
-                        "title": slide_lines[0],
-                        "lines": slide_lines,
+                        "title": combined_lines[0],
+                        "lines": combined_lines,
                     })
-                    text_chunks.append(f"【第{idx}页】" + " / ".join(slide_lines))
+                    text_chunks.append(f"【第{idx}页】" + " / ".join(combined_lines))
         joined = "\n".join(text_chunks).strip()
-        return (joined if joined else "[PPTX演示文稿，无内嵌文字层]"), slides_data
+        return joined, slides_data
     except Exception as e:
-        return f"[PPTX解析提示: {e}]", []
+        logger.warning("PPTX parse failed for %s: %s", file_path.name, e)
+        return "", []
 
 
 def _col_letters_to_index(col_str: str) -> int:
@@ -182,19 +237,60 @@ def _col_letters_to_index(col_str: str) -> int:
     return max(0, idx - 1)
 
 
+def _load_xlsx_date_style_indices(zf: zipfile.ZipFile, names: Set[str]) -> Set[int]:
+    """从 xl/styles.xml 识别属于日期/时间格式的 cellXfs 样式索引"""
+    date_xfs: Set[int] = set()
+    builtin_date_ids = set(range(14, 23)) | set(range(45, 48)) | {27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 50, 51, 52, 53, 54, 55, 56, 57, 58}
+    if "xl/styles.xml" not in names:
+        return date_xfs
+    try:
+        s_root = ET.fromstring(zf.read("xl/styles.xml"))
+        custom_date_ids: Set[int] = set()
+        for el in s_root.iter():
+            if _local_tag(el.tag) == "numFmt":
+                nid = int(el.attrib.get("numFmtId", "-1"))
+                code = (el.attrib.get("formatCode") or "").lower()
+                if any(tok in code for tok in ("yy", "mm", "dd", "年", "月", "日")) and "#" not in code:
+                    custom_date_ids.add(nid)
+        for el in s_root.iter():
+            if _local_tag(el.tag) == "cellXfs":
+                idx = 0
+                for xf in el:
+                    if _local_tag(xf.tag) == "xf":
+                        nfid = int(xf.attrib.get("numFmtId", "0"))
+                        if nfid in builtin_date_ids or nfid in custom_date_ids:
+                            date_xfs.add(idx)
+                        idx += 1
+                break
+    except Exception:
+        pass
+    return date_xfs
+
+
+def _excel_serial_to_date_str(val: str) -> str:
+    try:
+        num = float(val)
+        if 20000 <= num <= 70000:
+            base = datetime(1899, 12, 30)
+            dt = base + timedelta(days=num)
+            if abs(num - int(num)) < 1e-6:
+                return dt.strftime("%Y-%m-%d")
+            return dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        pass
+    return val
+
+
 def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]:
-    """
-    提取 .xlsx 电子表格结构与全文（内置纯 Python 标准库 XML 解析，不强制依赖 openpyxl）
-    返回 (plain_text, sheets_list) 供 FTS5 索引与【重要事项记录】交互式网格直读使用
-    """
+    """提取 .xlsx 电子表格结构与全文（支持日期序列号还原、布尔值格式化与截断提示）"""
     sheets_out: List[Dict[str, Any]] = []
     lines_out: List[str] = []
 
-    # 1. 优先使用纯 Python 标准库解析 OpenXML，速度快且零外部依赖
     if zipfile.is_zipfile(file_path):
         try:
             with zipfile.ZipFile(file_path, "r") as zf:
                 names = set(zf.namelist())
+                date_xfs = _load_xlsx_date_style_indices(zf, names)
                 shared_strings: List[str] = []
                 if "xl/sharedStrings.xml" in names:
                     ss_root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
@@ -203,7 +299,6 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                             parts = [t.text for t in si.iter() if _local_tag(t.tag) == "t" and t.text]
                             shared_strings.append("".join(parts))
 
-                # 解析工作表名称映射
                 sheet_entries: List[Tuple[str, str]] = []
                 if "xl/workbook.xml" in names:
                     wb_root = ET.fromstring(zf.read("xl/workbook.xml"))
@@ -254,6 +349,7 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                             c_idx = _col_letters_to_index(m_col.group(1)) if m_col else col_cursor
                             col_cursor = c_idx + 1
                             ctype = c_el.attrib.get("t", "")
+                            style_idx = int(c_el.attrib.get("s", "-1")) if c_el.attrib.get("s", "").isdigit() else -1
                             val_str = ""
                             if ctype == "inlineStr":
                                 t_parts = [t.text for t in c_el.iter() if _local_tag(t.tag) == "t" and t.text]
@@ -266,6 +362,10 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                                         s_idx = int(raw_v)
                                         if 0 <= s_idx < len(shared_strings):
                                             val_str = shared_strings[s_idx].strip()
+                                    elif ctype == "b":
+                                        val_str = "是" if raw_v == "1" else "否"
+                                    elif style_idx in date_xfs:
+                                        val_str = _excel_serial_to_date_str(raw_v)
                                     else:
                                         val_str = raw_v
                             if val_str:
@@ -276,6 +376,7 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                             parsed_rows_dict.append(row_map)
 
                     if parsed_rows_dict and max_col > 0:
+                        truncated = len(parsed_rows_dict) > 600 or max_col > 30
                         capped_cols = min(max_col, 30)
                         lines_out.append(f"【工作表：{sname}】")
                         for rmap in parsed_rows_dict[:600]:
@@ -284,14 +385,15 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                                 rows_matrix.append(row_list)
                                 non_empty = [x for x in row_list if x]
                                 lines_out.append(" | ".join(non_empty))
-                        sheets_out.append({"name": sname, "rows": rows_matrix})
+                        if truncated:
+                            lines_out.append(f"[已截断：原表共 {len(parsed_rows_dict)} 行 × {max_col} 列，仅展示前 600 行 × 30 列]")
+                        sheets_out.append({"name": sname, "rows": rows_matrix, "truncated": truncated})
 
                 if sheets_out:
                     return "\n".join(lines_out).strip(), sheets_out
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("XLSX XML parse failed for %s: %s", file_path.name, e)
 
-    # 2. 备选 openpyxl
     try:
         import openpyxl
         wb = openpyxl.load_workbook(str(file_path), data_only=True, read_only=True)
@@ -304,63 +406,132 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                 if any(row_vals):
                     s_rows.append(row_vals)
                     lines_out.append(" | ".join([x for x in row_vals if x]))
+                if len(s_rows) >= 600:
+                    break
             if s_rows:
-                sheets_out.append({"name": sheet, "rows": s_rows[:600]})
+                sheets_out.append({"name": sheet, "rows": s_rows})
         return "\n".join(lines_out).strip(), sheets_out
     except Exception:
-        return "[Excel表格文件，可下载原件或用 WPS 查看]", []
+        return "", []
+
+
+def _resolve_ofd_page_paths(zf: zipfile.ZipFile, names: List[str]) -> List[str]:
+    """按 OFD.xml -> DocRoot -> Document.xml -> Pages/Page/@BaseLoc 标准链路解析页面 XML 列表"""
+    name_set = set(names)
+    ordered_pages: List[str] = []
+
+    if "OFD.xml" in name_set:
+        try:
+            ofd_root = ET.fromstring(zf.read("OFD.xml"))
+            doc_roots = [
+                el.text.strip().lstrip("/")
+                for el in ofd_root.iter()
+                if _local_tag(el.tag) == "DocRoot" and el.text and el.text.strip()
+            ]
+            for dr in doc_roots:
+                if dr not in name_set:
+                    continue
+                doc_dir = str(Path(dr).parent).replace("\\", "/")
+                if doc_dir == ".":
+                    doc_dir = ""
+                doc_root = ET.fromstring(zf.read(dr))
+                for el in doc_root.iter():
+                    if _local_tag(el.tag) == "Page":
+                        base_loc = (el.attrib.get("BaseLoc") or "").strip().lstrip("/")
+                        if not base_loc:
+                            continue
+                        full_path = f"{doc_dir}/{base_loc}" if doc_dir and not base_loc.startswith(doc_dir + "/") else base_loc
+                        if full_path in name_set and full_path not in ordered_pages:
+                            ordered_pages.append(full_path)
+        except Exception:
+            pass
+
+    if ordered_pages:
+        return ordered_pages
+
+    # 回退：仅匹配 Content.xml，排除 Pages.xml / Template / Annotation
+    fallback = [
+        n for n in names
+        if n.lower().endswith("content.xml")
+        and "template" not in n.lower()
+        and "annot" not in n.lower()
+    ]
+    fallback.sort(key=lambda p: [int(x) for x in re.findall(r"\d+", p)] or [9999])
+    return fallback
 
 
 def extract_ofd(file_path: Path) -> str:
     """
     提取党政机关 .ofd 电子公文正文（纯 Python 解析 ZIP + XML）
-    兼容 OFD 1.0/1.1 标准中的 <ofd:TextCode> / <TextCode> 节点及公文元数据 CustomDatas
+    按标准 OFD 链路定位页序，按 TextCode 坐标 Y 聚类分行、X 排序，避免冒号强制断行破坏时间/比例。
     """
     try:
         with zipfile.ZipFile(file_path, "r") as zf:
             names = zf.namelist()
-            meta_lines = []
+            meta_lines: List[str] = []
             if "OFD.xml" in names:
                 try:
                     ofd_root = ET.fromstring(zf.read("OFD.xml"))
                     for elem in ofd_root.iter():
-                        tag = _local_tag(elem.tag)
-                        if tag == "CustomData" and elem.text and elem.text.strip():
+                        if _local_tag(elem.tag) == "CustomData" and elem.text and elem.text.strip():
                             field_name = elem.attrib.get("Name", "")
                             val = elem.text.strip()
-                            if field_name:
-                                meta_lines.append(f"【{field_name}】{val}")
-                            else:
-                                meta_lines.append(val)
+                            meta_lines.append(f"【{field_name}】{val}" if field_name else val)
                 except Exception:
                     pass
 
-            content_files = [
-                n for n in names
-                if n.lower().endswith(".xml") and ("content" in n.lower() or "page" in n.lower())
-            ]
-
-            def page_sort_key(path_str: str):
-                nums = [int(x) for x in re.findall(r"\d+", path_str)]
-                return nums if nums else [9999]
-
-            content_files.sort(key=page_sort_key)
-
-            page_texts = []
-            for cf in content_files:
+            page_files = _resolve_ofd_page_paths(zf, names)
+            page_texts: List[str] = []
+            for pf in page_files:
                 try:
-                    root = ET.fromstring(zf.read(cf))
-                    codes = []
-                    for elem in root.iter():
-                        tag = _local_tag(elem.tag)
-                        if tag in ("TextCode", "TextObject") and elem.text:
-                            t = elem.text.strip()
-                            if t:
-                                codes.append(t)
-                    if codes:
-                        joined = "".join(codes)
-                        joined = re.sub(r"([。；！？：])\s*", r"\1\n", joined)
-                        page_texts.append(joined.strip())
+                    root = ET.fromstring(zf.read(pf))
+                    items: List[Tuple[float, float, str]] = []
+                    for obj in root.iter():
+                        if _local_tag(obj.tag) == "TextObject":
+                            b_str = obj.attrib.get("Boundary", "")
+                            b_nums = [float(v) for v in b_str.split()[:2]] if b_str else [0.0, 0.0]
+                            ox, oy = (b_nums[0], b_nums[1]) if len(b_nums) >= 2 else (0.0, 0.0)
+                            for tc in obj:
+                                if _local_tag(tc.tag) == "TextCode" and tc.text:
+                                    t = tc.text.strip()
+                                    if not t:
+                                        continue
+                                    try:
+                                        tx = float(tc.attrib.get("X", "0"))
+                                        ty = float(tc.attrib.get("Y", "0"))
+                                    except ValueError:
+                                        tx, ty = 0.0, 0.0
+                                    items.append((oy + ty, ox + tx, t))
+                    if not items:
+                        # 兼容扁平 TextCode 结构
+                        codes = [
+                            el.text.strip()
+                            for el in root.iter()
+                            if _local_tag(el.tag) == "TextCode" and el.text and el.text.strip()
+                        ]
+                        if codes:
+                            joined = "".join(codes)
+                            joined = re.sub(r"([。；！？])\s*", r"\1\n", joined)
+                            page_texts.append(joined.strip())
+                        continue
+
+                    # 按 Y 坐标容差 2.5mm 聚类成行，行内按 X 排序
+                    items.sort(key=lambda it: (round(it[0] / 2.5), it[1]))
+                    grouped_lines: List[str] = []
+                    cur_y: Optional[float] = None
+                    cur_buf: List[str] = []
+                    for y, _x, txt in items:
+                        if cur_y is None or abs(y - cur_y) <= 2.5:
+                            cur_buf.append(txt)
+                            if cur_y is None:
+                                cur_y = y
+                        else:
+                            grouped_lines.append("".join(cur_buf))
+                            cur_buf = [txt]
+                            cur_y = y
+                    if cur_buf:
+                        grouped_lines.append("".join(cur_buf))
+                    page_texts.append("\n".join(grouped_lines).strip())
                 except Exception:
                     continue
 
@@ -369,45 +540,58 @@ def extract_ofd(file_path: Path) -> str:
                 parts.append("\n".join(meta_lines))
             if page_texts:
                 parts.append("\n\n".join(page_texts))
-            result = "\n\n".join(parts).strip()
-            return result if result else "[OFD文件未检测到内嵌文字层，可能为纯图像签章扫描件]"
+            return "\n\n".join(parts).strip()
     except Exception as e:
-        return f"[OFD解析提示: {e}]"
+        logger.warning("OFD parse failed for %s: %s", file_path.name, e)
+        return ""
 
 
 def extract_pdf(file_path: Path) -> str:
-    """提取 PDF 文本（优先 pypdf/pdfplumber，次选系统 pdftotext）"""
+    """提取 PDF 文本（限 50 页；前 3 页无文本时跳过 pdfplumber 防扫描件卡顿）"""
+    pypdf_scanned_hint = False
     try:
         import pypdf
         reader = pypdf.PdfReader(str(file_path))
-        pages = []
-        for page in reader.pages:
-            txt = page.extract_text() or ""
-            if txt.strip():
-                pages.append(txt.strip())
+        total_pages = len(reader.pages)
+        pages: List[str] = []
+        sample_limit = min(total_pages, 3)
+        sample_has_text = False
+        for i, page in enumerate(reader.pages[:MAX_PDF_SYNC_PAGES]):
+            txt = (page.extract_text() or "").strip()
+            if txt:
+                pages.append(txt)
+                if i < sample_limit:
+                    sample_has_text = True
+            elif i == sample_limit - 1 and not sample_has_text and total_pages > 3:
+                # 抽检前 3 页完全无文字，大概率为红头扫描件，提前终止避免白耗 CPU
+                pypdf_scanned_hint = True
+                break
         if pages:
-            return "\n\n".join(pages)
+            out = "\n\n".join(pages)
+            if total_pages > MAX_PDF_SYNC_PAGES:
+                out += f"\n\n[已截断：该 PDF 共 {total_pages} 页，已提取前 {MAX_PDF_SYNC_PAGES} 页用于检索]"
+            return out
     except Exception:
         pass
 
-    try:
-        import pdfplumber
-        pages = []
-        with pdfplumber.open(str(file_path)) as pdf:
-            for page in pdf.pages:
-                txt = page.extract_text() or ""
-                if txt.strip():
-                    pages.append(txt.strip())
-        if pages:
-            return "\n\n".join(pages)
-    except Exception:
-        pass
+    if not pypdf_scanned_hint:
+        try:
+            import pdfplumber
+            pages = []
+            with pdfplumber.open(str(file_path)) as pdf:
+                for page in pdf.pages[:MAX_PDF_SYNC_PAGES]:
+                    txt = (page.extract_text() or "").strip()
+                    if txt:
+                        pages.append(txt)
+            if pages:
+                return "\n\n".join(pages)
+        except Exception:
+            pass
 
     try:
         res = subprocess.run(
-            ["pdftotext", "-enc", "UTF-8", str(file_path), "-"],
-            capture_output=True,
-            timeout=15,
+            ["pdftotext", "-l", str(MAX_PDF_SYNC_PAGES), "-enc", "UTF-8", str(file_path), "-"],
+            **_subprocess_kwargs(timeout=12),
         )
         if res.returncode == 0 and res.stdout:
             txt = res.stdout.decode("utf-8", errors="ignore").strip()
@@ -416,16 +600,29 @@ def extract_pdf(file_path: Path) -> str:
     except Exception:
         pass
 
-    return "[该 PDF 未提取到可复制文字层，可能是扫描件/图片版公文，可在预览区直接查看原版页面]"
+    return ""
+
+
+def _find_soffice_bin() -> str:
+    global _SOFFICE_BIN_CACHE
+    if _SOFFICE_BIN_CACHE is not None:
+        return _SOFFICE_BIN_CACHE
+    for cand in ("soffice", "libreoffice"):
+        found = shutil.which(cand)
+        if found:
+            _SOFFICE_BIN_CACHE = found
+            return found
+    _SOFFICE_BIN_CACHE = ""
+    return ""
 
 
 def extract_legacy_doc_or_wps(file_path: Path) -> str:
-    """提取老版本二进制 .doc 或 .wps/.et/.dps 文档正文"""
+    """提取老版本二进制 .doc 或 .wps/.et/.dps 文档正文（支持无头 LibreOffice 与体积保护）"""
     ext = file_path.suffix.lower()
     if zipfile.is_zipfile(file_path):
         if ext == ".dps":
             txt, _ = extract_pptx_structured(file_path)
-            if txt and not txt.startswith("[PPTX解析提示"):
+            if txt:
                 return txt
         elif ext == ".et":
             txt, _ = extract_xlsx_structured(file_path)
@@ -433,12 +630,30 @@ def extract_legacy_doc_or_wps(file_path: Path) -> str:
                 return txt
         else:
             txt = extract_docx(file_path)
-            if txt and not txt.startswith("[DOCX解析提示"):
+            if txt:
                 return txt
+
+    # 优先尝试本机 LibreOffice/soffice 无头转换
+    soffice = _find_soffice_bin()
+    if soffice:
+        try:
+            with tempfile.TemporaryDirectory(prefix="gw_soffice_") as tmpdir:
+                res = subprocess.run(
+                    [soffice, "--headless", "--convert-to", "txt:Text (encoded):UTF8", "--outdir", tmpdir, str(file_path)],
+                    **_subprocess_kwargs(timeout=15),
+                )
+                if res.returncode == 0:
+                    out_txt = Path(tmpdir) / f"{file_path.stem}.txt"
+                    if out_txt.exists():
+                        content = read_text_with_fallback_encodings(out_txt.read_bytes()).strip()
+                        if len(content) > 10:
+                            return content
+        except Exception:
+            pass
 
     for cmd in (["antiword", "-m", "UTF-8.txt", str(file_path)], ["catdoc", "-d", "utf-8", str(file_path)]):
         try:
-            res = subprocess.run(cmd, capture_output=True, timeout=10)
+            res = subprocess.run(cmd, **_subprocess_kwargs(timeout=10))
             if res.returncode == 0 and res.stdout:
                 out = res.stdout.decode("utf-8", errors="ignore").strip()
                 if len(out) > 20:
@@ -446,18 +661,23 @@ def extract_legacy_doc_or_wps(file_path: Path) -> str:
         except Exception:
             pass
 
+    # 体积保护：最多读取 10MB 防止大文件内存飙升
     try:
-        raw = file_path.read_bytes()
-        candidates = []
-        u16_text = raw.decode("utf-16le", errors="ignore")
-        u16_matches = re.findall(
-            r"[\u4e00-\u9fa5A-Za-z0-9，。、；：？！“”‘’（）《》【】—…·\-\s]{8,}",
-            u16_text,
-        )
-        for m in u16_matches:
-            clean = m.strip()
-            if len(re.findall(r"[\u4e00-\u9fa5]", clean)) >= 4:
-                candidates.append(clean)
+        with open(file_path, "rb") as f:
+            raw = f.read(MAX_LEGACY_BIN_BYTES)
+        candidates: List[str] = []
+        for offset in (0, 1):
+            u16_text = raw[offset:].decode("utf-16le", errors="ignore")
+            u16_matches = re.findall(
+                r"[\u4e00-\u9fa5A-Za-z0-9，。、；：？！“”‘’（）《》【】—…·\-\s]{8,}",
+                u16_text,
+            )
+            for m in u16_matches:
+                clean = m.strip()
+                if len(re.findall(r"[\u4e00-\u9fa5]", clean)) >= 4 and clean not in candidates:
+                    candidates.append(clean)
+            if len(candidates) >= 5:
+                break
         if candidates:
             return "\n".join(candidates)
 
@@ -470,65 +690,106 @@ def extract_legacy_doc_or_wps(file_path: Path) -> str:
         if valid_gb:
             return "\n".join(valid_gb)
     except Exception as e:
-        return f"[DOC/WPS解析提示: {e}]"
+        logger.warning("Legacy DOC/WPS parse failed for %s: %s", file_path.name, e)
 
-    return "[未能直接解析该二进制文档正文，可直接下载原件或用 WPS 查看]"
+    return ""
 
 
 def _get_image_dimensions(raw: bytes) -> Tuple[int, int]:
-    """零依赖读取 PNG / JPEG 基础分辨率"""
+    """零依赖读取 PNG / JPEG / GIF 基础分辨率（补全 JPEG 0xFF 填充与独立标记防护）"""
     try:
         if raw[:8] == b"\x89PNG\r\n\x1a\n" and len(raw) >= 24:
             w, h = struct.unpack(">II", raw[16:24])
             return int(w), int(h)
+        if raw[:6] in (b"GIF87a", b"GIF89a") and len(raw) >= 10:
+            w, h = struct.unpack("<HH", raw[6:10])
+            return int(w), int(h)
         if raw[:2] == b"\xff\xd8":
             idx = 2
             n = len(raw)
-            while idx < n - 9:
+            standalone_markers = {0x01, 0xD8, 0xD9} | set(range(0xD0, 0xD8))
+            while idx < n - 1:
                 if raw[idx] != 0xFF:
                     idx += 1
                     continue
-                marker = raw[idx + 1]
-                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
-                    h, w = struct.unpack(">HH", raw[idx + 5 : idx + 9])
+                while idx < n and raw[idx] == 0xFF:
+                    idx += 1
+                if idx >= n:
+                    break
+                marker = raw[idx]
+                idx += 1
+                if marker in standalone_markers:
+                    continue
+                if idx + 2 > n:
+                    break
+                seg_len = struct.unpack(">H", raw[idx : idx + 2])[0]
+                if seg_len < 2:
+                    break
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3) and idx + 7 <= n:
+                    h, w = struct.unpack(">HH", raw[idx + 3 : idx + 7])
                     return int(w), int(h)
-                seg_len = struct.unpack(">H", raw[idx + 2 : idx + 4])[0]
-                idx += 2 + seg_len
+                idx += seg_len
     except Exception:
         pass
     return 0, 0
 
 
+def _get_available_tesseract_langs() -> Set[str]:
+    """启动时缓存一次 tesseract 可用语言包，杜绝每次图片同步重复超时试错"""
+    global _TESSERACT_LANGS_CACHE
+    if _TESSERACT_LANGS_CACHE is not None:
+        return _TESSERACT_LANGS_CACHE
+    langs: Set[str] = set()
+    if shutil.which("tesseract"):
+        try:
+            res = subprocess.run(["tesseract", "--list-langs"], **_subprocess_kwargs(timeout=4))
+            if res.returncode == 0 and res.stdout:
+                for ln in res.stdout.decode("utf-8", errors="ignore").splitlines():
+                    ln = ln.strip()
+                    if ln and not ln.lower().startswith("list of"):
+                        langs.add(ln)
+        except Exception:
+            pass
+    _TESSERACT_LANGS_CACHE = langs
+    return langs
+
+
 def extract_image_ocr_and_meta(file_path: Path) -> str:
     """
-    提取图片（微信通知截图、下沉现场照片等）文字与元数据：
-    1. 若系统安装了 tesseract (如银河麒麟预装 tesseract-ocr-chi-sim)，自动执行 OCR 文字提取
-    2. 附加图片分辨率与文件名描述，保障可检索性
+    提取图片文字与元数据：
+    1. 仅读取前 64KB 头部获取分辨率，避免 10MB 照片整张读入内存
+    2. 仅当系统确实安装了 chi_sim 语言包时执行中文 OCR，彻底避免无中文包时 3x8s 阻塞及英文乱码污染
     """
-    raw = b""
+    head_bytes = b""
     try:
-        raw = file_path.read_bytes()
+        with open(file_path, "rb") as f:
+            head_bytes = f.read(65536)
     except Exception:
         pass
-    w, h = _get_image_dimensions(raw)
+    w, h = _get_image_dimensions(head_bytes)
     dim_str = f" ({w}x{h}px)" if (w and h) else ""
 
     ocr_text = ""
-    for lang in ("chi_sim+eng", "chi_sim", "eng"):
+    avail_langs = _get_available_tesseract_langs()
+    target_lang = ""
+    if "chi_sim" in avail_langs and "eng" in avail_langs:
+        target_lang = "chi_sim+eng"
+    elif "chi_sim" in avail_langs:
+        target_lang = "chi_sim"
+
+    if target_lang:
         try:
             res = subprocess.run(
-                ["tesseract", str(file_path), "stdout", "-l", lang, "--psm", "6"],
-                capture_output=True,
-                timeout=8,
+                ["tesseract", str(file_path), "stdout", "-l", target_lang, "--psm", "6"],
+                **_subprocess_kwargs(timeout=8),
             )
             if res.returncode == 0 and res.stdout:
                 txt = res.stdout.decode("utf-8", errors="ignore").strip()
                 txt = re.sub(r"(?<=[\u4e00-\u9fa5])\s+(?=[\u4e00-\u9fa5])", "", txt)
                 if len(txt) >= 4:
                     ocr_text = txt
-                    break
         except Exception:
-            break
+            pass
 
     if ocr_text:
         return f"【图片OCR提取文字{dim_str}】\n{ocr_text}"
@@ -536,9 +797,7 @@ def extract_image_ocr_and_meta(file_path: Path) -> str:
 
 
 def extract_document_text(file_path: Path) -> Tuple[str, str]:
-    """
-    统一入口：输入文件路径，返回 (extracted_text, file_type_label)
-    """
+    """统一入口：输入文件路径，返回 (extracted_text, file_type_label)"""
     if not file_path.exists() or not file_path.is_file():
         return "", "未知"
 
@@ -584,14 +843,7 @@ def extract_document_text(file_path: Path) -> Tuple[str, str]:
 
 
 def extract_structured_preview(file_path: Path, doc_id: int = 0) -> Dict[str, Any]:
-    """
-    为【📌 重要事项记录】直读画布与【预览抽屉】生成结构化多格式直读数据：
-    - Word (.docx): 返回段落与内嵌表格块列表
-    - Excel (.xlsx / .csv): 返回多工作表二维数组，前端直接渲染可搜索数据网格
-    - PPT (.pptx): 返回幻灯片分页卡片列表
-    - PDF (.pdf): 返回原生内嵌 URL + 提取文本
-    - Image / Audio / Video: 返回媒体直读标识
-    """
+    """为【重要事项记录】直读画布与【预览抽屉】生成结构化多格式直读数据"""
     if not file_path.exists() or not file_path.is_file():
         return {"render_mode": "text", "blocks": [], "sheets": [], "slides": []}
 
