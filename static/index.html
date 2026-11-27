@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>公文与材料智能工作台 (GW-Workbench v3.0.0)</title>
+  <title>公文与材料智能工作台 (GW-Workbench v3.2.2)</title>
   <style>
     :root {
       --bg: #f1f5f9;
@@ -874,20 +874,19 @@
        现在列表只给"一屏扫读"所需的信息，全文和全部附件都收进单包详情抽屉。 */
     .arch-grid {
       display: grid;
-      /* auto-fill + 固定列数：包的数量多少都不改变单块宽度，避免 1~2 个包被拉成超宽横条 */
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      /* v3.1.0：列宽改为“按容器自适应”而不是按视口锁死列数。
+         新版把左侧分类栏并入同一行后，网格可用宽度（约 1060px）远小于视口（1600px），
+         若仍按视口锁 5 列，单块会被压到 200px 左右、标题全被截断。
+         auto-fill + minmax(250px,1fr)：容器多宽排多少列，单块稳定在 250~320px，
+         包少时右侧留白（宽度不跳版），包多时自动换行。 */
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
       gap: 11px;
       align-items: stretch;
     }
-    /* 大屏按层级锁定每行块数，块宽稳定在 280~330px 这个最舒服的阅读区间 */
-    @media (min-width: 1360px) { .arch-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-    @media (min-width: 1080px) and (max-width: 1359px) { .arch-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
     .arch-grid.dense {
-      grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: 7px;
     }
-    @media (min-width: 1360px) { .arch-grid.dense { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
-    @media (min-width: 1080px) and (max-width: 1359px) { .arch-grid.dense { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 
     /* 同一行内的磁贴等高：标题行数少的用 flex 撑开，底部资源徽标永远贴底对齐 */
     .arch-grid > .arch-tile { height: 100%; }
@@ -1456,20 +1455,29 @@
     body.sidebar-collapsed .app-sidebar .sb-ver,
     body.sidebar-collapsed .app-sidebar .sb-foot-label { display: none; }
     body.sidebar-collapsed .app-sidebar .sb-nav-btn { justify-content: center; padding: 10px 0; }
+    body.sidebar-collapsed .sb-brand {
+      flex-direction: column; justify-content: center; gap: 2px; padding: 6px 0;
+    }
+    body.sidebar-collapsed .sb-brand-left { gap: 0; }
 
     .sb-brand {
-      height: 54px; padding: 0 14px;
+      min-height: 56px; padding: 6px 14px;
       display: flex; align-items: center; justify-content: space-between;
       border-bottom: 1px solid rgba(255,255,255,0.08); gap: 8px;
     }
     .sb-brand-left {
       display: flex; align-items: center; gap: 9px;
       font-size: 14.5px; font-weight: 700; color: #fff;
-      white-space: nowrap; overflow: hidden;
+      white-space: nowrap; overflow: hidden; min-width: 0;
+    }
+    .sb-brand-titles {
+      display: flex; flex-direction: column; gap: 1px;
+      line-height: 1.2; min-width: 0;
     }
     .sb-ver {
-      font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 999px;
-      background: rgba(59,130,246,0.28); color: #bfdbfe;
+      font-size: 10px; font-weight: 600; line-height: 1.1;
+      letter-spacing: 0.2px; color: #93b4e6;
+      padding: 0; background: transparent; border-radius: 0;
     }
     .sb-collapse-btn {
       background: transparent; border: none; color: #94a3b8;
@@ -1645,6 +1653,252 @@
       .form-grid { grid-template-columns: 1fr !important; }
       .drawer-split-container { flex-direction: column !important; }
     }
+
+    /* ==================== v3.2 极简浏览模式（供领导/同事快速找文件） ==================== */
+    /* 极简模式下隐藏建档台、同步、卡片/台账切换、折叠按钮等一切非找文件元素 */
+    body.browse-minimal #omniboxPanel,
+    body.browse-minimal #omniPendingFiles,
+    body.browse-minimal #btnToggleOmnibox,
+    body.browse-minimal #btnDiskSync,
+    body.browse-minimal .wb-full-only { display: none !important; }
+    body:not(.browse-minimal) .wb-min-only { display: none !important; }
+    body.browse-minimal .container { max-width: 1560px !important; }
+
+    .browse-mode-switch {
+      display: inline-flex;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .browse-mode-switch button {
+      border: none;
+      background: transparent;
+      padding: 6px 13px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .browse-mode-switch button:hover { background: var(--surface-hover); }
+    .browse-mode-switch button.active { background: var(--primary); color: #fff; }
+
+    .min-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 2px 2px 12px;
+      font-size: 14px;
+      color: var(--text-secondary);
+    }
+    .min-bar b { color: var(--primary); font-size: 17px; font-weight: 800; }
+    .min-bar .min-bar-hint { font-size: 12.5px; color: var(--text-muted); }
+
+    /* 两列用「两根独立竖列 + 奇偶分配」：卡片紧贴不留行内空白，
+       且折叠/展开只改变自身高度，卡片不会在两列之间跳来跳去（排序稳定） */
+    .minimal-cols {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+    .min-col {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .minimal-cols.is-one { flex-direction: column; }
+    .minimal-cols.is-one .min-col { flex: none; width: 100%; }
+    @media (max-width: 1180px) {
+      .minimal-cols { flex-direction: column; }
+      .min-col { width: 100%; }
+    }
+
+    .min-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 6px solid var(--primary);
+      border-radius: 12px;
+      padding: 16px 18px 14px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: box-shadow 0.15s, border-color 0.15s;
+    }
+    .min-card:hover { box-shadow: var(--shadow-hover); border-color: var(--border-strong); }
+    .min-card.lv-danger { border-left-color: var(--danger); }
+    .min-card.lv-warning { border-left-color: var(--warning); }
+    .min-card.lv-normal { border-left-color: var(--primary); }
+    .min-card.lv-routine { border-left-color: #64748b; }
+    .min-card.lv-archived { border-left-color: var(--success); }
+    .min-card.is-folded { padding: 11px 14px; gap: 4px; }
+
+    .min-card-head { display: flex; align-items: flex-start; gap: 9px; flex-wrap: wrap; }
+    .min-card-title {
+      flex: 1;
+      min-width: 200px;
+      font-size: 17px;
+      font-weight: 800;
+      line-height: 1.5;
+      color: var(--text);
+      letter-spacing: 0.2px;
+    }
+    .min-card.is-folded .min-card-title {
+      font-size: 15.5px;
+      line-height: 1.45;
+      min-width: 120px;
+    }
+    .min-card-meta {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-items: center;
+      margin-top: -4px;
+    }
+    .min-fold-sum {
+      flex-shrink: 0;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 2px 10px;
+      margin-top: 4px;
+      white-space: nowrap;
+    }
+    .min-fold-btn {
+      flex-shrink: 0;
+      margin-top: 2px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+    }
+    .min-fold-btn:hover { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
+
+    .min-file-block {
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 8px 10px 5px;
+    }
+    .min-file-block-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--text-secondary);
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 3px;
+    }
+    .min-file-block-title.blk-incoming { color: var(--primary); }
+    .min-file-block-title.blk-draft { color: var(--success); }
+    .min-file-block-title .min-count {
+      margin-left: auto;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      color: var(--text-muted);
+      border-radius: 99px;
+      font-size: 11.5px;
+      padding: 0 8px;
+      font-weight: 700;
+    }
+
+    .mf-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 9px 8px 9px 6px;
+      border-radius: 7px;
+      cursor: pointer;
+      border-bottom: 1px dashed var(--border);
+    }
+    .mf-row:last-child { border-bottom: none; }
+    .mf-row:hover { background: var(--surface-hover); }
+    .mf-kind {
+      flex-shrink: 0;
+      width: 46px;
+      text-align: center;
+      font-size: 10.5px;
+      font-weight: 800;
+      letter-spacing: 0.4px;
+      padding: 3px 0;
+      border-radius: 5px;
+      background: #e2e8f0;
+      color: #475569;
+    }
+    .mf-kind.k-pdf { background: #fee2e2; color: #b91c1c; }
+    .mf-kind.k-doc { background: #dbeafe; color: #1d4ed8; }
+    .mf-kind.k-ofd { background: #ede9fe; color: #6d28d9; }
+    .mf-kind.k-xls { background: #dcfce7; color: #15803d; }
+    .mf-kind.k-ppt { background: #ffedd5; color: #c2410c; }
+    .mf-kind.k-img { background: #fce7f3; color: #be185d; }
+    .mf-kind.k-zip { background: #f1f5f9; color: #475569; }
+    body.dark-mode .mf-kind { background: #334155; color: #cbd5e1; }
+    body.dark-mode .mf-kind.k-pdf { background: rgba(220,38,38,0.22); color: #fca5a5; }
+    body.dark-mode .mf-kind.k-doc { background: rgba(59,130,246,0.22); color: #93c5fd; }
+    body.dark-mode .mf-kind.k-ofd { background: rgba(109,40,217,0.28); color: #c4b5fd; }
+    body.dark-mode .mf-kind.k-xls { background: rgba(5,150,105,0.22); color: #6ee7b7; }
+    body.dark-mode .mf-kind.k-ppt { background: rgba(217,119,6,0.22); color: #fdba74; }
+    body.dark-mode .mf-kind.k-img { background: rgba(219,39,119,0.22); color: #f9a8d4; }
+    body.dark-mode .mf-kind.k-zip { background: #1e293b; color: #94a3b8; }
+
+    .mf-name {
+      flex: 1;
+      font-size: 14.5px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .mf-row:hover .mf-name { color: var(--primary); }
+    .mf-dl {
+      flex-shrink: 0;
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 6px;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .mf-dl:hover { background: var(--primary-soft); color: var(--primary); }
+    .min-empty { font-size: 13px; color: var(--text-muted); padding: 10px 6px; }
+
+    /* 工具条：禁用态与下拉统一宽度 */
+    .btn[disabled], .btn.is-disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      box-shadow: none !important;
+    }
+    .btn[disabled]:hover {
+      background: var(--surface);
+      border-color: var(--border-strong);
+      color: var(--text-secondary);
+    }
+    #wbCatFilter, #wbSortSelect { max-width: 200px; }
   </style>
 </head>
 <body>
@@ -1680,6 +1934,8 @@
     <symbol id="ico-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></symbol>
     <symbol id="ico-cards" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/></symbol>
     <symbol id="ico-chev-ud" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5M7 9l5-5 5 5"/></symbol>
+    <symbol id="ico-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 21h16"/></symbol>
+    <symbol id="ico-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
   </svg>
 
   <div id="globalDropOverlay" class="global-drop-overlay">
@@ -1705,8 +1961,10 @@
       <div class="sb-brand">
         <div class="sb-brand-left">
           <svg class="ico ico-lg" style="color:#60a5fa;"><use href="#ico-gov"/></svg>
-          <span class="sb-text">公文智能工作台</span>
-          <span class="sb-ver" id="verBadge">v3.1.0</span>
+          <div class="sb-brand-titles">
+            <span class="sb-text">公文智能工作台</span>
+            <span class="sb-ver" id="verBadge">v3.2.2</span>
+          </div>
         </div>
         <button class="sb-collapse-btn" onclick="toggleSidebar()" title="收起/展开侧边栏">
           <svg class="ico"><use href="#ico-sidebar"/></svg>
@@ -1847,9 +2105,27 @@
           <select id="wbCatFilter" class="form-control" style="padding:4px 10px;font-size:12.5px;" onchange="renderTasks()">
             <option value="">所有业务分类</option>
           </select>
-          <button class="btn btn-sm" onclick="toggleCollapseAllTasks()" title="一键折叠或展开全部事项卡片（状态自动记忆）"><svg class="ico ico-sm"><use href="#ico-chev-ud"/></svg> 折叠/展开</button>
-          <button class="btn btn-sm" id="viewModeCardBtn" onclick="setTaskViewMode('card')"><svg class="ico ico-sm"><use href="#ico-cards"/></svg> 卡片</button>
-          <button class="btn btn-sm" id="viewModeTableBtn" onclick="setTaskViewMode('table')"><svg class="ico ico-sm"><use href="#ico-table"/></svg> 台账表</button>
+          <select id="wbSortSelect" class="form-control" style="padding:4px 8px;font-size:12.5px;" title="排序方式：极简浏览与完整视图共用，选择会被记住" onchange="setTaskSort(this.value)">
+            <option value="received_desc">排序 · 收文时间 新→旧</option>
+            <option value="received_asc">排序 · 收文时间 旧→新</option>
+            <option value="deadline_asc">排序 · 截止日期 最近优先</option>
+            <option value="updated_desc">排序 · 最近更新</option>
+            <option value="title_asc">排序 · 事项名称</option>
+          </select>
+          <div class="browse-mode-switch" title="极简版只列来文原件与我写的材料，适合领导同事快速找文件">
+            <button id="browseModeMinBtn" onclick="setBrowseMode('minimal')">极简浏览</button>
+            <button id="browseModeFullBtn" onclick="setBrowseMode('full')">完整视图</button>
+          </div>
+          <div class="browse-mode-switch wb-min-only" title="极简浏览的列数：单列看得更宽，两列一屏看更多">
+            <button id="minColsOneBtn" onclick="setMinCols(1)">单列</button>
+            <button id="minColsTwoBtn" onclick="setMinCols(2)">两列</button>
+          </div>
+          <button class="btn btn-sm wb-min-only" id="btnFoldAllMin" onclick="toggleAllMinFold()" title="把所有卡片收成一行标题，先扫标题再展开">
+            <svg class="ico ico-sm"><use href="#ico-chev-ud"/></svg> <span id="btnFoldAllMinLabel">全部收起</span>
+          </button>
+          <button class="btn btn-sm wb-full-only" id="btnCollapseAll" onclick="toggleCollapseAllTasks()" title="一键折叠或展开全部事项卡片（状态自动记忆）"><svg class="ico ico-sm"><use href="#ico-chev-ud"/></svg> 折叠/展开</button>
+          <button class="btn btn-sm wb-full-only" id="viewModeCardBtn" onclick="setTaskViewMode('card')"><svg class="ico ico-sm"><use href="#ico-cards"/></svg> 卡片</button>
+          <button class="btn btn-sm wb-full-only" id="viewModeTableBtn" onclick="setTaskViewMode('table')"><svg class="ico ico-sm"><use href="#ico-table"/></svg> 台账表</button>
         </div>
       </div>
 
@@ -2106,7 +2382,9 @@
   <aside class="drawer" id="previewDrawer">
     <div class="drawer-header">
       <div style="overflow:hidden;">
-        <div id="drawerTitle" style="font-weight:700;font-size:15px;overflow-wrap:anywhere;line-height:1.35;"></div>
+        <div id="drawerTitle" ondblclick="renameCurrentDocPrompt()"
+             title="双击可重命名该文件"
+             style="font-weight:700;font-size:15px;overflow-wrap:anywhere;line-height:1.35;cursor:text;"></div>
         <div id="drawerSubMeta" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
       </div>
       <div style="display:flex;gap:6px;flex-shrink:0;">
@@ -2720,6 +2998,23 @@
       activeMainTab: 'workbench',
       taskStatusFilter: 'active',
       taskViewMode: 'card',
+      // v3.2 浏览模式：minimal=极简版（只列来文原件/我写的材料，默认），full=完整视图
+      browseMode: (function () { try { return localStorage.getItem('gw_browse_mode') === 'full' ? 'full' : 'minimal'; } catch (e) { return 'minimal'; } })(),
+      // v3.2.1 排序：received_desc / received_asc / deadline_asc / updated_desc / title_asc
+      taskSort: (function () {
+        try {
+          const v = localStorage.getItem('gw_task_sort');
+          return ['received_desc', 'received_asc', 'deadline_asc', 'updated_desc', 'title_asc'].includes(v) ? v : 'received_desc';
+        } catch (e) { return 'received_desc'; }
+      })(),
+      // v3.2.2 极简浏览：列数 1/2 与逐卡折叠（纯前端展示，不写数据库）
+      minCols: (function () { try { return localStorage.getItem('gw_min_cols') === '1' ? 1 : 2; } catch (e) { return 2; } })(),
+      minFold: (function () {
+        try {
+          const a = JSON.parse(localStorage.getItem('gw_min_fold') || '[]');
+          return Array.isArray(a) ? a.map(Number).filter(n => !isNaN(n)) : [];
+        } catch (e) { return []; }
+      })(),
       searchScope: 'full',
       searchKeywords: [],
       libCategoryFilter: '',
@@ -2805,8 +3100,91 @@
       closeCustomDialog(res);
     }
 
-    function showToast(msg, duration = 2600) {
-      const el = document.getElementById('toastBox');
+    /* ===== v3.1.1 弹窗：点外部 / Esc 关闭（带未保存改动确认、忙碌保护）===== */
+    // 有未保存改动的弹窗：关闭前先问一句
+    const _MODAL_DIRTY_WATCH = {
+      taskModalBackdrop: 1, docEditModalBackdrop: 1,
+      recordModalBackdrop: 1, archiveModalBackdrop: 1, recurringModalBackdrop: 1
+    };
+    const _modalSnapshots = {};
+
+    function _modalValueSig(backdropId) {
+      const box = document.getElementById(backdropId);
+      if (!box) return '';
+      return Array.from(box.querySelectorAll('input,textarea,select'))
+        .filter(el => el.type !== 'file')
+        .map(el => (el.type === 'checkbox' || el.type === 'radio') ? (el.checked ? '1' : '0') : String(el.value))
+        .join('\u0001');
+    }
+    function markModalClean(backdropId) { _modalSnapshots[backdropId] = _modalValueSig(backdropId); }
+    function isModalDirty(backdropId) {
+      if (!_MODAL_DIRTY_WATCH[backdropId]) return false;
+      if (_modalSnapshots[backdropId] === undefined) return false;
+      return _modalValueSig(backdropId) !== _modalSnapshots[backdropId];
+    }
+    function hideBackdrop(id) { const el = document.getElementById(id); if (el) el.style.display = 'none'; }
+
+    async function _confirmDiscardThen(backdropId, doClose) {
+      const r = await showCustomDialog({
+        title: '放弃修改？',
+        message: '这个窗口里的内容有改动，关闭后不会保存。',
+        isConfirm: true,
+        danger: true
+      });
+      if (r && r.confirmed) doClose();
+    }
+
+    function tryCloseModalByBackdrop(id) {
+      if (!id || id === 'loginModalBackdrop') return;          // 登录框不允许点外部关闭
+      if (id === 'imageLightboxBackdrop') { closeImageLightbox(); return; }
+      if (id === 'customDialogBackdrop') { closeCustomDialog(null); return; }
+
+      // 正在上传/扫描/保存时，点外部不关（避免中途打断）
+      const box = document.getElementById(id);
+      const busyBtn = box ? box.querySelector('.btn-primary:disabled, .btn-danger-ghost:disabled') : null;
+      if (busyBtn) { showToast('正在处理，请稍候…'); return; }
+
+      if (id === 'taskModalBackdrop') {
+        if (isModalDirty(id)) { _confirmDiscardThen(id, closeTaskModal); return; }
+        closeTaskModal();
+        return;
+      }
+      if (isModalDirty(id)) {
+        _confirmDiscardThen(id, () => hideBackdrop(id));
+        return;
+      }
+      hideBackdrop(id);
+    }
+
+    // 按下与抬起都落在遮罩上才算“点外部”，避免从输入框拖选文字滑出去就关掉
+    let _bdDownId = null;
+    document.addEventListener('mousedown', ev => {
+      const t = ev.target;
+      _bdDownId = (t && t.classList && t.classList.contains('modal-backdrop')) ? t.id : null;
+    });
+    document.addEventListener('click', ev => {
+      const t = ev.target;
+      if (!t || !t.classList || !t.classList.contains('modal-backdrop')) { _bdDownId = null; return; }
+      if (_bdDownId !== t.id) { _bdDownId = null; return; }
+      _bdDownId = null;
+      tryCloseModalByBackdrop(t.id);
+    });
+
+    function _topOpenBackdropId() {
+      const order = [
+        'customDialogBackdrop', 'imageLightboxBackdrop', 'taskModalBackdrop',
+        'archiveModalBackdrop', 'recordModalBackdrop', 'docEditModalBackdrop',
+        'recurringModalBackdrop', 'settingsModalBackdrop',
+        'libUploadModalBackdrop', 'scanDirModalBackdrop'
+      ];
+      for (const id of order) {
+        const el = document.getElementById(id);
+        if (el && el.style.display === 'flex') return id;
+      }
+      return null;
+    }
+
+    function showToast(msg, duration = 2600) {      const el = document.getElementById('toastBox');
       el.textContent = msg;
       el.style.display = 'block';
       clearTimeout(window._toastTimer);
@@ -3219,7 +3597,15 @@
 
       const cardEl = document.getElementById(`task_card_${updatedTask.id}`);
       const stillMatches = doesTaskMatchCurrentFilter(updatedTask);
-      if (cardEl && STATE.taskViewMode === 'card' && stillMatches) {
+      // 排序后位置可能变化：只有在原位置没变时才原地替换，否则整表重绘
+      let samePosition = false;
+      if (cardEl && cardEl.parentNode) {
+        const ordered = sortTaskList((STATE.tasks || []).filter(doesTaskMatchCurrentFilter));
+        const targetIdx = ordered.findIndex(x => x.id === updatedTask.id);
+        const domIdx = Array.prototype.indexOf.call(cardEl.parentNode.children, cardEl);
+        samePosition = (targetIdx !== -1 && targetIdx === domIdx);
+      }
+      if (cardEl && STATE.browseMode !== 'minimal' && STATE.taskViewMode === 'card' && stillMatches && samePosition) {
         const temp = document.createElement('div');
         temp.innerHTML = buildSingleTaskCardHtml(updatedTask);
         cardEl.replaceWith(temp.firstElementChild);
@@ -3256,7 +3642,7 @@
     }
 
     function renderHeaderAndAuth() {
-      document.getElementById('verBadge').textContent = `v${STATE.version || '3.1.0'}`;
+      document.getElementById('verBadge').textContent = `v${STATE.version || '3.2.2'}`;
       const lanEl = document.getElementById('lanUrlBadge');
       if (lanEl) lanEl.innerHTML = `${ico('globe')}<span class="sb-foot-label">${escapeHtml(STATE.lan_url || '')}</span>`;
       const dirEl = document.getElementById('localDirBadge');
@@ -3525,9 +3911,307 @@
       renderTasks();
     }
 
-    function renderTasks() {
-      const filtered = (STATE.tasks || []).filter(doesTaskMatchCurrentFilter);
+    // ==================== v3.2 极简浏览模式（领导/同事找文件专用） ====================
+    function setBrowseMode(mode) {
+      STATE.browseMode = (mode === 'full') ? 'full' : 'minimal';
+      try { localStorage.setItem('gw_browse_mode', STATE.browseMode); } catch (e) {}
+      applyBrowseModeChrome();
+      DIRTY_TABS.workbench = true;
+      renderTasks();
+      showToast(STATE.browseMode === 'minimal'
+        ? '已切到【极简浏览】：只显示来文原件与我写的材料'
+        : '已切到【完整视图】：可查看要求、细项与进展');
+    }
+
+    function applyBrowseModeChrome() {
+      const minimal = STATE.browseMode === 'minimal';
+      document.body.classList.toggle('browse-minimal', minimal);
+      const minBtn = document.getElementById('browseModeMinBtn');
+      const fullBtn = document.getElementById('browseModeFullBtn');
+      if (minBtn) minBtn.classList.toggle('active', minimal);
+      if (fullBtn) fullBtn.classList.toggle('active', !minimal);
+      if (minimal) {
+        const box = document.getElementById('omniboxPanel');
+        if (box) { box.classList.remove('is-open', 'expanded'); }
+      }
+    }
+
+    // ==================== v3.2.1 排序（极简浏览 / 卡片 / 台账表 共用） ====================
+    const SORT_LABELS = {
+      received_desc: '收文时间 新→旧',
+      received_asc: '收文时间 旧→新',
+      deadline_asc: '截止日期 最近优先',
+      updated_desc: '最近更新',
+      title_asc: '事项名称'
+    };
+
+    // 收文日期：优先取事项文件夹的日期前缀（来文当天），否则退回建档时间
+    function taskReceivedDate(t) {
+      const m = String(t.folder_rel_path || '').match(/(\d{4}-\d{2}-\d{2})/);
+      if (m) return m[1];
+      return String(t.created_at || '').slice(0, 10);
+    }
+
+    function taskDeadlineKey(t) {
+      const d = String(t.deadline || '').slice(0, 10);
+      return d || '9999-99-99';   // 无截止日期的沉底
+    }
+
+    function sortTaskList(list) {
+      const mode = STATE.taskSort || 'received_desc';
+      const arr = (list || []).slice();
+      const byReceivedAsc = (a, b) =>
+        taskReceivedDate(a).localeCompare(taskReceivedDate(b)) ||
+        String(a.created_at || '').localeCompare(String(b.created_at || '')) ||
+        a.id - b.id;
+      const byReceivedDesc = (a, b) =>
+        taskReceivedDate(b).localeCompare(taskReceivedDate(a)) ||
+        String(b.created_at || '').localeCompare(String(a.created_at || '')) ||
+        b.id - a.id;
+
+      arr.sort((a, b) => {
+        if (!!a.is_pinned !== !!b.is_pinned) return a.is_pinned ? -1 : 1;   // 置顶永远在前
+        switch (mode) {
+          case 'received_asc': return byReceivedAsc(a, b);
+          case 'deadline_asc': return taskDeadlineKey(a).localeCompare(taskDeadlineKey(b)) || byReceivedDesc(a, b);
+          case 'updated_desc': return String(b.updated_at || '').localeCompare(String(a.updated_at || '')) || byReceivedDesc(a, b);
+          case 'title_asc': return String(a.title || '').localeCompare(String(b.title || ''), 'zh-Hans-CN');
+          case 'received_desc':
+          default: return byReceivedDesc(a, b);
+        }
+      });
+      return arr;
+    }
+
+    function setTaskSort(mode) {
+      STATE.taskSort = mode;
+      try { localStorage.setItem('gw_task_sort', mode); } catch (e) {}
+      renderTasks();
+    }
+
+    // 工具条状态：卡片/台账表当前高亮；折叠/展开只在卡片模式可用
+    function applyTaskToolbarState() {
+      const isTable = STATE.taskViewMode === 'table';
+      const cardBtn = document.getElementById('viewModeCardBtn');
+      const tableBtn = document.getElementById('viewModeTableBtn');
+      if (cardBtn) cardBtn.classList.toggle('btn-primary', !isTable);
+      if (tableBtn) tableBtn.classList.toggle('btn-primary', isTable);
+
+      const collapseBtn = document.getElementById('btnCollapseAll');
+      if (collapseBtn) {
+        collapseBtn.disabled = isTable;
+        collapseBtn.classList.toggle('is-disabled', isTable);
+        collapseBtn.title = isTable
+          ? '折叠/展开只对「卡片」模式有效，当前是台账表模式'
+          : '一键折叠或展开全部事项卡片（状态自动记忆）';
+      }
+      const sortSel = document.getElementById('wbSortSelect');
+      if (sortSel && sortSel.value !== (STATE.taskSort || 'received_desc')) {
+        sortSel.value = STATE.taskSort || 'received_desc';
+      }
+
+      // 极简浏览：列数高亮 + 「全部收起 / 全部展开」文案
+      const oneBtn = document.getElementById('minColsOneBtn');
+      const twoBtn = document.getElementById('minColsTwoBtn');
+      if (oneBtn) oneBtn.classList.toggle('active', STATE.minCols === 1);
+      if (twoBtn) twoBtn.classList.toggle('active', STATE.minCols !== 1);
+
+      const foldLabel = document.getElementById('btnFoldAllMinLabel');
+      if (foldLabel) {
+        const visible = (STATE.tasks || []).filter(doesTaskMatchCurrentFilter);
+        const allFolded = visible.length > 0 && visible.every(t => isMinFolded(t.id));
+        foldLabel.textContent = allFolded ? '全部展开' : '全部收起';
+      }
+    }
+
+    // ==================== v3.2.2 极简浏览：列数切换 + 逐卡折叠 ====================
+    function isMinFolded(taskId) {
+      return (STATE.minFold || []).includes(taskId);
+    }
+
+    function persistMinFold() {
+      try { localStorage.setItem('gw_min_fold', JSON.stringify(STATE.minFold || [])); } catch (e) {}
+    }
+
+    function toggleMinFold(taskId) {
+      const set = new Set(STATE.minFold || []);
+      if (set.has(taskId)) set.delete(taskId); else set.add(taskId);
+      STATE.minFold = Array.from(set);
+      persistMinFold();
+      renderTasks();
+    }
+
+    function toggleAllMinFold() {
+      const visible = sortTaskList((STATE.tasks || []).filter(doesTaskMatchCurrentFilter));
+      const allFolded = visible.length > 0 && visible.every(t => isMinFolded(t.id));
+      if (allFolded) {
+        // 只展开当前可见的，其它筛选下的折叠状态保留
+        const visIds = new Set(visible.map(t => t.id));
+        STATE.minFold = (STATE.minFold || []).filter(id => !visIds.has(id));
+      } else {
+        STATE.minFold = Array.from(new Set([...(STATE.minFold || []), ...visible.map(t => t.id)]));
+      }
+      persistMinFold();
+      renderTasks();
+      showToast(allFolded ? '已展开全部卡片' : '已收起全部卡片，先扫标题再展开查看文件');
+    }
+
+    function setMinCols(n) {
+      STATE.minCols = (n === 1) ? 1 : 2;
+      try { localStorage.setItem('gw_min_cols', String(STATE.minCols)); } catch (e) {}
+      renderTasks();
+    }
+
+
+    // 按扩展名给文件打类型标签与配色
+    function fileKindTag(filename) {
+      const ext = String(filename || '').split('.').pop().toLowerCase();
+      const map = {
+        pdf: ['PDF', 'k-pdf'],
+        ofd: ['OFD', 'k-ofd'],
+        doc: ['DOC', 'k-doc'], docx: ['DOC', 'k-doc'], wps: ['WPS', 'k-doc'], dot: ['DOC', 'k-doc'],
+        xls: ['XLS', 'k-xls'], xlsx: ['XLS', 'k-xls'], et: ['XLS', 'k-xls'], csv: ['CSV', 'k-xls'],
+        ppt: ['PPT', 'k-ppt'], pptx: ['PPT', 'k-ppt'], dps: ['PPT', 'k-ppt'],
+        jpg: ['图片', 'k-img'], jpeg: ['图片', 'k-img'], png: ['图片', 'k-img'],
+        gif: ['图片', 'k-img'], bmp: ['图片', 'k-img'], webp: ['图片', 'k-img'], tif: ['图片', 'k-img'],
+        zip: ['ZIP', 'k-zip'], rar: ['ZIP', 'k-zip'], '7z': ['ZIP', 'k-zip'],
+        md: ['TXT', 'k-zip'], txt: ['TXT', 'k-zip']
+      };
+      const hit = map[ext] || ['文件', 'k-zip'];
+      return `<span class="mf-kind ${hit[1]}">${hit[0]}</span>`;
+    }
+
+    function buildMinimalFileRows(files, emptyText) {
+      const list = files || [];
+      if (list.length === 0) return `<div class="min-empty">${emptyText}</div>`;
+      return list.map(f => `
+        <div class="mf-row" onclick="openDocPreview(${f.id})" title="点击在线预览全文">
+          ${fileKindTag(f.filename)}
+          <span class="mf-name">${escapeHtml(f.filename)}</span>
+          <a class="mf-dl" href="/api/docs/${f.id}/download" onclick="event.stopPropagation()" title="下载到本地">
+            ${ico('download')}
+          </a>
+        </div>
+      `).join('');
+    }
+
+    function buildMinimalTaskCardHtml(t) {
+      const dl = t.deadline_info || { level: 'routine', label: '常态化' };
+      const badgeClass = {
+        danger: 'badge-danger', warning: 'badge-warning', normal: 'badge-normal',
+        routine: 'badge-routine', archived: 'badge-archived'
+      }[dl.level] || 'badge-routine';
+
+      const metaParts = [
+        t.category,
+        `收文 ${taskReceivedDate(t).slice(5)}`,
+        t.issuing_org ? `来文：${t.issuing_org}` : '',
+        t.doc_number ? `文号：${t.doc_number}` : '',
+        t.source_channel || '',
+        t.status === 'archived' ? '已办结' : ''
+      ].filter(Boolean);
+
+      const inc = t.incoming_files || [];
+      const draft = t.drafted_files || [];
+      const folded = isMinFolded(t.id);
+      const metaHtml = metaParts.length
+        ? `<div class="min-card-meta">${metaParts.map(p => `<span>${escapeHtml(p)}</span>`).join('<span>·</span>')}</div>`
+        : '';
+      const headHtml = `
+          <div class="min-card-head">
+            <span class="badge ${badgeClass}" style="margin-top:3px;">${escapeHtml(dl.label)}</span>
+            <div class="min-card-title">${escapeHtml(t.title)}</div>
+            ${folded ? `<span class="min-fold-sum">来文 ${inc.length} · 材料 ${draft.length}</span>` : ''}
+            <button class="min-fold-btn" onclick="event.stopPropagation();toggleMinFold(${t.id})"
+                    title="${folded ? '展开本事项，查看全部来文与材料' : '收起本事项，只留标题（便于快速扫标题）'}">
+              ${folded ? '▸ 展开' : '▾ 收起'}
+            </button>
+          </div>
+          ${metaHtml}`;
+
+      if (folded) {
+        return `<article class="min-card is-folded lv-${dl.level}" id="task_card_${t.id}">${headHtml}</article>`;
+      }
+
+      return `
+        <article class="min-card lv-${dl.level}" id="task_card_${t.id}">
+          ${headHtml}
+
+          <div class="min-file-block">
+            <div class="min-file-block-title blk-incoming">
+              ${ico('file')} 来文通知原件 <span class="min-count">${inc.length}</span>
+            </div>
+            ${buildMinimalFileRows(inc, '本事项没有上传来文原件（通知为电话/微信文字，请见完整视图）')}
+          </div>
+
+          <div class="min-file-block">
+            <div class="min-file-block-title blk-draft">
+              ${ico('edit')} 我写的材料 <span class="min-count">${draft.length}</span>
+            </div>
+            ${buildMinimalFileRows(draft, '本事项暂未放入我写的材料')}
+          </div>
+        </article>
+      `;
+    }
+
+    function renderMinimalBrowse(filtered) {
       const container = document.getElementById('tasksContainer');
+      const onlyActive = STATE.taskStatusFilter === 'active';
+      const allLink = onlyActive
+        ? ` · 当前只看未办结，找历史材料请点 <a href="javascript:void(0)" onclick="switchTaskFilterToAll()" style="color:var(--primary);font-weight:700;">全部</a>`
+        : '';
+      if (filtered.length === 0) {
+        container.innerHTML = `<div style="background:var(--surface);padding:44px;text-align:center;border-radius:12px;border:1px solid var(--border);color:var(--text-muted);font-size:14px;">
+          当前筛选条件下没有可浏览的事项文件。${allLink}
+        </div>`;
+        return;
+      }
+      let incTotal = 0, draftTotal = 0;
+      filtered.forEach(t => {
+        incTotal += (t.incoming_files || []).length;
+        draftTotal += (t.drafted_files || []).length;
+      });
+
+      // 两列：奇偶分配到两根独立竖列（1左2右3左…），卡片紧贴无行内空白；
+      // 折叠/展开只改变卡片自身高度，不会让卡片在两列之间换位，排序始终稳定
+      const cards = filtered.map(buildMinimalTaskCardHtml);
+      let colsHtml;
+      if (STATE.minCols === 1) {
+        colsHtml = `<div class="minimal-cols is-one"><div class="min-col">${cards.join('')}</div></div>`;
+      } else {
+        const left = [], right = [];
+        cards.forEach((html, i) => (i % 2 === 0 ? left : right).push(html));
+        colsHtml = `<div class="minimal-cols is-two">
+            <div class="min-col">${left.join('')}</div>
+            <div class="min-col">${right.join('')}</div>
+          </div>`;
+      }
+
+      container.innerHTML = `
+        <div class="min-bar">
+          <span>共 <b>${filtered.length}</b> 个事项 · 来文原件 <b>${incTotal}</b> 份 · 我写的材料 <b>${draftTotal}</b> 份
+            <span style="font-size:12.5px;color:var(--text-muted);">（${SORT_LABELS[STATE.taskSort] || SORT_LABELS.received_desc}）</span>
+          </span>
+          <span class="min-bar-hint">点击文件名在线预览，点右侧箭头下载${allLink}</span>
+        </div>
+        ${colsHtml}
+      `;
+    }
+
+    function switchTaskFilterToAll() {
+      const btn = document.querySelector('#wbStatusPills .filter-pill[data-status="all"]');
+      setTaskStatusFilter('all', btn);
+    }
+
+    function renderTasks() {
+      applyBrowseModeChrome();
+      applyTaskToolbarState();
+      const filtered = sortTaskList((STATE.tasks || []).filter(doesTaskMatchCurrentFilter));
+      const container = document.getElementById('tasksContainer');
+      if (STATE.browseMode === 'minimal') {
+        renderMinimalBrowse(filtered);
+        return;
+      }
       if (filtered.length === 0) {
         container.innerHTML = `<div style="background:var(--surface);padding:34px;text-align:center;border-radius:10px;border:1px solid var(--border);color:var(--text-muted);">当前筛选条件下暂无工作事项。</div>`;
         return;
@@ -3794,6 +4478,7 @@
             <thead>
               <tr>
                 <th>状态 / 期限预警</th>
+                <th style="width:96px;">收文日期</th>
                 <th>分类 / 渠道 / 文号</th>
                 <th>事项名称与核心要求</th>
                 <th>最新进展 (回车直填)</th>
@@ -3808,6 +4493,7 @@
                 return `
                   <tr>
                     <td><span class="badge badge-${dl.level}">${escapeHtml(dl.label)}</span></td>
+                    <td style="white-space:nowrap;font-size:12px;color:var(--text-secondary);">${escapeHtml(taskReceivedDate(t))}</td>
                     <td>
                       <div><strong>${escapeHtml(t.category)}</strong></div>
                       <div style="font-size:11.5px;color:var(--text-muted);">${escapeHtml(t.source_channel)} ${escapeHtml(t.doc_number || '')}</div>
@@ -4170,7 +4856,7 @@
       } else {
         await loadBootstrap();
       }
-      showToast(`⇄ 已切换文件角色为【${targetRole === 'incoming' ? '来文原件' : '我写的材料'}】`);
+      showToast(`⇄ 已切换为【${targetRole === 'incoming' ? '来文原件' : '我写的材料'}】，已锁定：以后改名/重扫都不会再变`);
     }
 
     async function deleteDocQuick(docId) {
@@ -4682,6 +5368,7 @@
       document.getElementById('editArchiveNotes').value = a.notes_md || '';
       document.getElementById('editArchivePinned').checked = !!a.is_pinned;
       document.getElementById('archiveModalBackdrop').style.display = 'flex';
+      markModalClean('archiveModalBackdrop');
     }
 
     async function saveArchiveModal() {
@@ -4966,6 +5653,7 @@
       }
       document.getElementById('editRecordFilesInput').value = '';
       document.getElementById('recordModalBackdrop').style.display = 'flex';
+      markModalClean('recordModalBackdrop');
     }
 
     async function saveRecordModal() {
@@ -5500,6 +6188,7 @@
       document.getElementById('editDocStarred').checked = !!d.is_starred;
       document.getElementById('editDocPinned').checked = !!d.is_pinned;
       document.getElementById('docEditModalBackdrop').style.display = 'flex';
+      markModalClean('docEditModalBackdrop');
     }
 
     async function saveDocEditModal() {
@@ -5620,6 +6309,7 @@
         document.getElementById('recChecklist').value = '';
       }
       document.getElementById('recurringModalBackdrop').style.display = 'flex';
+      markModalClean('recurringModalBackdrop');
     }
 
     async function saveRecurringModal() {
@@ -6034,6 +6724,7 @@
       clearEditorDirty();
 
       document.getElementById('drawerTitle').textContent = d.filename;
+      document.getElementById('drawerTitle').title = '双击可重命名该文件';
       document.getElementById('drawerSubMeta').textContent = `所属目录：${d.category} | 类型：${d.file_type || d.doc_role} | 更新：${d.updated_at}`;
       document.getElementById('drawerPathText').textContent = `本机绝对路径：${d.abs_path}`;
 
@@ -6058,6 +6749,69 @@
       document.getElementById('previewDrawer').style.display = 'flex';
     }
 
+    // v3.2.2 双击抽屉标题直接重命名（本地磁盘一起改名，索引/事项清单同步刷新）
+    async function renameCurrentDocPrompt() {
+      const d = STATE.drawerDoc;
+      if (!d || !d.id || STATE.drawerIsArchive) return;
+      if (!STATE.can_edit) {
+        showToast('当前是浏览模式，切到【编辑模式】后才能重命名文件');
+        return;
+      }
+      const dot = d.filename.lastIndexOf('.');
+      const baseName = dot > 0 ? d.filename.slice(0, dot) : d.filename;
+      const ext = dot > 0 ? d.filename.slice(dot) : '';
+
+      const dlg = await showCustomDialog({
+        title: '重命名文件',
+        message: `改名后本地磁盘同步改名，全库索引与所属事项清单一起刷新${ext ? `（扩展名 ${ext} 自动保留）` : ''}：`,
+        inputDefault: baseName
+      });
+      if (!dlg || !dlg.confirmed) return;
+
+      let newBase = String(dlg.value || '').trim();
+      if (!newBase) { showToast('文件名不能为空'); return; }
+      if (ext && newBase.toLowerCase().endsWith(ext.toLowerCase())) newBase = newBase.slice(0, -ext.length).trim();
+      if (!newBase) { showToast('文件名不能为空'); return; }
+      // 用户自己带了扩展名（如 .docx / .pdf）就按他写的来，避免出现 xxx.pdf.xls
+      const typedExt = (newBase.match(/\.[A-Za-z0-9]{1,5}$/) || [])[0] || '';
+      const finalName = typedExt ? newBase : newBase + ext;
+      if (finalName === d.filename) return;
+
+      try {
+        showToast('正在改名并同步本地文件...');
+        const res = await apiFetch(`/api/docs/${d.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ filename: finalName })
+        });
+        const nd = res.document || {};
+        const newAbs = nd.abs_path || (d.abs_path
+          ? d.abs_path.slice(0, d.abs_path.lastIndexOf('/') + 1) + (nd.filename || finalName)
+          : '');
+
+        STATE.drawerDoc = { ...d, ...nd, abs_path: newAbs };
+        const fname = STATE.drawerDoc.filename;
+        document.getElementById('drawerTitle').textContent = fname;
+        document.getElementById('drawerSubMeta').textContent =
+          `所属目录：${STATE.drawerDoc.category} | 类型：${STATE.drawerDoc.file_type || STATE.drawerDoc.doc_role} | 更新：${STATE.drawerDoc.updated_at}`;
+        const pEl = document.getElementById('drawerPathText');
+        if (pEl && newAbs) pEl.textContent = `本机绝对路径：${newAbs}`;
+        const fnEl = document.getElementById('drawerEditorFilename');
+        if (fnEl) fnEl.value = fname;
+
+        const di = (STATE.documents || []).findIndex(x => x.id === d.id);
+        if (di !== -1) STATE.documents[di] = { ...STATE.documents[di], ...nd, abs_path: newAbs };
+
+        if (res.task) updateSingleTaskInStateAndDOM(res.task);
+        else {
+          renderTasks();
+          if (STATE.activeMainTab === 'library') renderLibrary();
+        }
+        showToast(`已重命名为《${fname}》，本地文件已同步改名`);
+      } catch (err) {
+        showToast('重命名失败：' + (err.message || err));
+      }
+    }
+
     function openOnlineEditorForTask(taskId, enableSplit = true) {
       const t = (STATE.tasks || []).find(x => x.id === taskId);
       if (!t) return;
@@ -6067,6 +6821,7 @@
       const defaultName = `我县${t.title.replace(/^关于/, '').replace(/的通知$/, '')}总结汇报_初稿.md`;
 
       document.getElementById('drawerTitle').textContent = `双栏对照撰稿台 — 关联事项 #${t.id}`;
+      document.getElementById('drawerTitle').removeAttribute('title');
       document.getElementById('drawerSubMeta').textContent = `所属事项：${t.title}`;
       document.getElementById('drawerPathText').textContent = `将直接保存至本地文件夹：${t.folder_abs_path}`;
       document.getElementById('drawerDownloadLink').style.display = 'none';
@@ -6102,6 +6857,7 @@
       clearEditorDirty();
       const cat = STATE.libCategoryFilter || '03_综合汇报与总结';
       document.getElementById('drawerTitle').textContent = `在线新建独立材料 (${cat})`;
+      document.getElementById('drawerTitle').removeAttribute('title');
       document.getElementById('drawerSubMeta').textContent = `保存目录：${cat}`;
       document.getElementById('drawerPathText').textContent = `将保存至本地分类目录：${STATE.workspace_root}/${cat}`;
       document.getElementById('drawerDownloadLink').style.display = 'none';
@@ -6212,6 +6968,7 @@
       STATE.drawerDoc = { extracted_text: t.raw_notice_text || t.summary || '', abs_path: t.folder_abs_path };
       STATE.drawerTaskId = t.id;
       document.getElementById('drawerTitle').textContent = `【原始通知/来文记录】${t.title}`;
+      document.getElementById('drawerTitle').removeAttribute('title');
       document.getElementById('drawerSubMeta').textContent = `来源：${t.source_channel} | 文号：${t.doc_number || '无'} | 截止：${t.deadline || '常态'}`;
       document.getElementById('drawerPathText').textContent = `事项本地专属文件夹：${t.folder_abs_path}`;
       document.getElementById('drawerDownloadLink').style.display = 'none';
@@ -6299,6 +7056,7 @@
       document.getElementById('editTaskRawText').value = parsed.extracted_text || document.getElementById('omniText').value;
       document.getElementById('btnDeleteTask').style.display = 'none';
       document.getElementById('taskModalBackdrop').style.display = 'flex';
+      markModalClean('taskModalBackdrop');
     }
 
     function openEditTaskModal(taskId) {
@@ -6322,6 +7080,7 @@
       document.getElementById('editTaskRawText').value = t.raw_notice_text || '';
       document.getElementById('btnDeleteTask').style.display = 'inline-flex';
       document.getElementById('taskModalBackdrop').style.display = 'flex';
+      markModalClean('taskModalBackdrop');
     }
 
     function closeTaskModal() {
@@ -6689,17 +7448,10 @@
       if (ev.key === 'Escape') {
         const lb = document.getElementById('imageLightboxBackdrop');
         if (lb && lb.style.display === 'flex') { closeImageLightbox(); return; }
-        let closedAny = false;
-        document.querySelectorAll('.modal-backdrop').forEach(mb => {
-          if (mb.id !== 'loginModalBackdrop' && mb.style.display === 'flex') {
-            mb.style.display = 'none';
-            closedAny = true;
-          }
-        });
-        if (!closedAny) {
-          const dr = document.getElementById('previewDrawer');
-          if (dr && dr.classList.contains('open') && typeof closePreviewDrawer === 'function') closePreviewDrawer();
-        }
+        const topId = _topOpenBackdropId();
+        if (topId) { tryCloseModalByBackdrop(topId); return; }
+        const dr = document.getElementById('previewDrawer');
+        if (dr && dr.classList.contains('open') && typeof closePreviewDrawer === 'function') closePreviewDrawer();
       }
       const lb = document.getElementById('imageLightboxBackdrop');
       if (lb && lb.style.display === 'flex') {
@@ -6734,7 +7486,9 @@
       const ov = document.getElementById('globalDropOverlay');
       if (ov) ov.classList.remove('active');
       if (!STATE.can_edit) return;
-      if (ev.target && ev.target.closest && (ev.target.closest('.task-card') || ev.target.closest('#omniboxPanel') || ev.target.closest('#archiveIntakeBox'))) {
+      // 极简浏览模式下不响应拖拽建档（建档台已隐藏）
+      if (STATE.browseMode === 'minimal') return;
+      if (ev.target && ev.target.closest && (ev.target.closest('.task-card') || ev.target.closest('.min-card') || ev.target.closest('#omniboxPanel') || ev.target.closest('#archiveIntakeBox'))) {
         return;
       }
       if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length > 0) {
@@ -6757,6 +7511,7 @@
       const isDark = localStorage.getItem('wb_theme') === 'dark';
       if (isDark) document.body.classList.add('dark-mode');
       updateThemeBtnUI(isDark);
+      applyBrowseModeChrome();
       loadBootstrap();
     });
   </script>

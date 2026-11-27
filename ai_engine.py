@@ -195,14 +195,32 @@ def _extract_json_from_llm(raw_text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# 待办目录内判定为“来文原件”的强特征。用户约定：拿不准就当自己写的材料（v3.1.1）
+_INCOMING_STRONG = (
+    "关于开展", "关于做好", "关于印发", "关于报送", "关于转发", "关于召开", "关于调度",
+    "的通报", "上级", "来文", "明电", "微信通知截图", "紧急通知",
+)
+# 弱特征：仅“公文与材料库”内参与判断；待办目录内一律不认，
+# 否则我自己起草的《关于……的通知》《关于征求……的函》会被误判成来文。
+_INCOMING_WEAK = ("的通知", "的方案", "的函")
+# 正文套话特征（各镇街……现将有关事项通知如下）是我方发文的开头，
+# 只在库内做兜底，绝不能在待办目录内当来文判据。
+_INCOMING_BODY = ("各镇街", "各区县", "各市应急管理局", "各有关单位", "现将有关事项通知如下")
+
+
 def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool = False, cat_name: str = "") -> str:
     """
     智能判别本地新增或扫描文件的性质角色 ('incoming' | 'draft' | 'template' | 'historical' | 'archive' | 'record')
-    保留对历史 [来文]/[材料] 前缀的只读兼容，但不依赖前缀即可准确判别。
+
+    v3.1.1 起：待办目录内只认“强特征”（发文动作词、文号、附件、OFD、[来文] 前缀），
+    其余一律按“我自己写的材料”处理——宁可把新来文放错栏（点 ⇄ 一键纠正并锁定），
+    也不能把我起草的材料悄悄甩进“来文原件”。
     """
     fn = (filename or "").strip()
     preview = (text_preview or "")[:400]
     combined = f"{fn} {preview}"
+    # 待办目录内只看文件名里的文号，避免正文引用上级文号被误判
+    sig_text = fn if in_task_folder else combined
 
     # 只读兼容历史遗留前缀
     if fn.startswith(("[来文]", "【来文】", "来文_")):
@@ -222,19 +240,21 @@ def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool =
         "我县", "我市", "我局", "我科", "我办", "本单位", "初稿", "定稿", "修改稿", "国标排版",
         "汇报", "总结", "小结", "自查报告", "整改报告", "落实情况", "发言", "讲话稿", "心得", "反馈意见",
     )
-    incoming_feature = (
-        "关于开展", "关于做好", "关于印发", "关于报送", "关于转发", "关于召开", "的通知", "的方案",
-        "的函", "的通报", "上级", "来文", "明电", "附件1", "附件2", "附件：", "微信通知截图",
-    )
     if any(k in fn for k in draft_feature):
         return "draft"
-    if fn.lower().endswith(".ofd") or re.search(r"[〔\[\(（]20\d{2}[〕\]\)）]\s*\d+\s*号", combined):
+    if fn.lower().endswith(".ofd") or re.search(r"[〔\[\(（]20\d{2}[〕\]\)）]\s*\d+\s*号", sig_text):
         if not any(k in fn for k in ("初稿", "定稿", "我县", "我局", "汇报", "总结", "国标排版")):
             return "incoming"
-    if any(k in fn for k in incoming_feature):
+    if fn.startswith(("附件", "附表")):
         return "incoming"
-    if any(k in preview for k in ("各镇街", "各区县", "各市应急管理局", "各有关单位", "现将有关事项通知如下")):
+    if any(k in fn for k in _INCOMING_STRONG):
         return "incoming"
+
+    if not in_task_folder:
+        if any(k in fn for k in _INCOMING_WEAK):
+            return "incoming"
+        if any(k in preview for k in _INCOMING_BODY):
+            return "incoming"
 
     return "draft" if in_task_folder else ("historical" if "历史" in cat_name else "draft")
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench v3.1.0) 核心服务端
+公文与材料智能工作台 (GW-Workbench v3.2.2) 核心服务端
 专为银河麒麟 Kylin V10 (海光 3350) 与局域网跨平台协同设计
 v3.0.0 架构升级与全量缺陷清零特性：
 1. 四维政务知识资产模型：
@@ -33,6 +33,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -62,7 +63,7 @@ from ai_engine import (
 )
 from gw_formatter import build_gb9704_docx
 
-VERSION = "3.1.0"
+VERSION = "3.2.2"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "workbench.db"
@@ -645,9 +646,16 @@ def init_db() -> None:
             cur.execute("ALTER TABLE documents ADD COLUMN archive_id INTEGER DEFAULT NULL")
         if "record_id" not in doc_cols:
             cur.execute("ALTER TABLE documents ADD COLUMN record_id INTEGER DEFAULT NULL")
+        # v3.1.1：内容指纹（改名/移动后据此认回原文件，保住“我写的材料”角色）
+        if "content_hash" not in doc_cols:
+            cur.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT DEFAULT ''")
+        # v3.1.1：角色锁定（用户手动 ⇄ 过的文件，重扫/改名不再被启发式覆盖）
+        if "role_locked" not in doc_cols:
+            cur.execute("ALTER TABLE documents ADD COLUMN role_locked INTEGER DEFAULT 0")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_archive_id ON documents(archive_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_record_id ON documents(record_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_starred_id ON documents(is_starred DESC, id DESC)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_content_hash ON documents(content_hash)")
 
         try:
             cur.execute(
@@ -1110,6 +1118,22 @@ def _collect_fast_file_snapshot(ws_root: Path) -> Dict[str, Tuple[float, int]]:
     return snap
 
 
+def _file_content_sig(path: Path) -> str:
+    """
+    v3.1.1 文件内容指纹：`文件大小:前 64KB 的 SHA1`。
+    改名/移动不改变内容，据此把同一份文件认回来，保住原来的 doc id、角色、星标与标签。
+    读取失败返回空串（下游退化为按文件名重新判定）。
+    """
+    try:
+        st = path.stat()
+        h = hashlib.sha1()
+        with open(path, "rb") as fp:
+            h.update(fp.read(65536))
+        return f"{st.st_size}:{h.hexdigest()}"
+    except Exception:
+        return ""
+
+
 def _upsert_synced_doc(
     conn: sqlite3.Connection,
     sub_file: Path,
@@ -1130,6 +1154,8 @@ def _upsert_synced_doc(
     st = sub_file.stat()
     mtime = round(st.st_mtime, 2)
     fsize = st.st_size
+    # 只给待办目录内的文件算指纹：库内四五千份历史件按用户要求不再折腾
+    content_sig = _file_content_sig(sub_file) if task_id is not None else ""
 
     if rel_file in existing_docs:
         doc_rec = existing_docs[rel_file]
@@ -1140,6 +1166,7 @@ def _upsert_synced_doc(
             or (task_id is not None and doc_rec.get("task_id") != task_id)
             or (archive_id is not None and doc_rec.get("archive_id") != archive_id)
             or (record_id is not None and doc_rec.get("record_id") != record_id)
+            or (bool(content_sig) and doc_rec.get("content_hash") != content_sig)
         )
         if need_update:
             extracted, ftype = extract_document_text(sub_file)
@@ -1148,8 +1175,9 @@ def _upsert_synced_doc(
                 UPDATE documents
                 SET category = ?, task_id = ?, archive_id = ?, record_id = ?,
                     file_size = ?, mtime = ?, extracted_text = ?, file_type = ?, updated_at = ?
+                    {sig_set}
                 WHERE id = ?
-                """,
+                """.format(sig_set=", content_hash = ?" if content_sig else ""),
                 (
                     cat_name,
                     task_id if task_id is not None else doc_rec.get("task_id"),
@@ -1160,6 +1188,7 @@ def _upsert_synced_doc(
                     extracted,
                     ftype,
                     now_str,
+                    *((content_sig,) if content_sig else ()),
                     doc_rec["id"],
                 ),
             )
@@ -1168,6 +1197,65 @@ def _upsert_synced_doc(
         return int(doc_rec["id"])
     else:
         fname = sub_file.name
+
+        # ---- v3.1.1 改名/移动认回：同一份内容换了个路径，沿用原来的 doc id 与角色 ----
+        adopted = None
+        if content_sig:
+            cands = conn.execute(
+                "SELECT id, rel_path, task_id, filename, role_locked FROM documents "
+                "WHERE content_hash = ? AND rel_path != ? LIMIT 8",
+                (content_sig, rel_file),
+            ).fetchall()
+            # 只认“原路径已经不在磁盘上”的行，避免把仍在用的同名同内容文件误吞
+            cands = [dict(c) for c in cands if not (ws_root / c["rel_path"]).exists()]
+            if len(cands) > 1:
+                same_task = [c for c in cands if c["task_id"] == task_id]
+                if len(same_task) == 1:
+                    cands = same_task
+            if len(cands) > 1:
+                locked = [c for c in cands if c.get("role_locked")]
+                if len(locked) == 1:
+                    cands = locked
+            if len(cands) == 1:
+                adopted = cands[0]
+
+        # 指纹算不出来（加密件/超大件/读失败）时的兜底：同事项 + 同大小 + 同 mtime 视作改名
+        if adopted is None and task_id is not None:
+            cands2 = [
+                r for r in existing_docs.values()
+                if r.get("task_id") == task_id
+                and r.get("file_size") == fsize
+                and abs(float(r.get("mtime") or 0) - mtime) <= 0.5
+                and r["rel_path"] != rel_file
+                and not (ws_root / r["rel_path"]).exists()
+            ]
+            if len(cands2) == 1:
+                adopted = cands2[0]
+
+        if adopted is not None:
+            extracted, ftype = extract_document_text(sub_file)
+            old_rel = adopted["rel_path"]
+            conn.execute(
+                """
+                UPDATE documents
+                SET filename = ?, rel_path = ?, category = ?, task_id = ?,
+                    file_size = ?, mtime = ?, extracted_text = ?, file_type = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (fname, rel_file, cat_name,
+                 task_id if task_id is not None else adopted["task_id"],
+                 fsize, mtime, extracted, ftype, now_str, adopted["id"]),
+            )
+            _sync_fts_doc(conn, adopted["id"])
+            existing_docs.pop(old_rel, None)
+            existing_docs[rel_file] = {
+                "id": adopted["id"], "rel_path": rel_file, "mtime": mtime, "file_size": fsize,
+                "category": cat_name, "task_id": task_id, "content_hash": content_sig,
+                "archive_id": archive_id, "record_id": record_id, "doc_role": "",
+            }
+            stats["renamed"] = stats.get("renamed", 0) + 1
+            return int(adopted["id"])
+
         extracted, ftype = extract_document_text(sub_file)
         role = forced_role or infer_doc_role(fname, extracted[:300], in_task_folder=bool(task_id), cat_name=cat_name)
         tags_list = auto_tags or []
@@ -1176,8 +1264,8 @@ def _upsert_synced_doc(
             INSERT INTO documents (
                 task_id, archive_id, record_id, filename, rel_path, category, doc_role,
                 file_type, file_size, mtime, extracted_text,
-                tags_json, is_starred, is_pinned, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
             (
                 task_id,
@@ -1195,6 +1283,7 @@ def _upsert_synced_doc(
                 1 if role == "template" else 0,
                 now_str,
                 now_str,
+                content_sig,
             ),
         )
         new_id = int(cur.lastrowid)
@@ -1211,7 +1300,7 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
     3. 同步 `workspace_files/重要事项记录/<分类>/<条目>/` 下的常备知识条目（支持本地直接放入 Word/PDF/Excel 自动建条目！）
     """
     global _LAST_SYNC_TIME, _FILE_STAT_SNAPSHOT
-    stats = {"added": 0, "updated": 0, "removed": 0, "moved_tasks": 0, "reverse_synced_tasks": 0, "skipped": 0}
+    stats = {"added": 0, "updated": 0, "removed": 0, "moved_tasks": 0, "reverse_synced_tasks": 0, "renamed": 0, "skipped": 0}
     ws_root = get_workspace_root()
     now_ts = time.time()
 
@@ -1232,10 +1321,19 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
         existing_docs = {
             r["rel_path"]: dict(r)
             for r in conn.execute(
-                "SELECT id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, file_size, mtime FROM documents"
+                "SELECT id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, "
+                "file_size, mtime, content_hash FROM documents"
             ).fetchall()
         }
         seen_rel_paths = set()
+
+        # v3.1.1 一次性回填：给待办目录里的既有文件补内容指纹，否则第一次改名认不回来
+        _missing = [r for r in existing_docs.values() if r.get("task_id") and not r.get("content_hash")]
+        for _r in _missing:
+            _sig = _file_content_sig(ws_root / _r["rel_path"])
+            if _sig:
+                conn.execute("UPDATE documents SET content_hash = ? WHERE id = ?", (_sig, _r["id"]))
+                _r["content_hash"] = _sig
 
         # ---------- A. 同步【工作台待办】与【公文与材料库】分类目录 ----------
         tasks = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM tasks").fetchall()}
@@ -3422,7 +3520,10 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 "xkl_gw_cli": cfg.get("xkl_gw_cli", ""),
                 "prefix_archived_folder": bool(cfg.get("prefix_archived_folder", False)),
                 "ip_whitelist": cfg.get("ip_whitelist", ""),
-                "my_lan_ip": _lan_ip,
+                # 本机修复（v3.1.0 上游回归）：此处原写作 _lan_ip，但该局部变量只在上面的
+                # /api/auth/status 分支内定义，导致 /api/bootstrap 抛 UnboundLocalError、
+                # 首页加载不出任何数据。恢复为直接调用 get_lan_ip()。
+                "my_lan_ip": get_lan_ip(),
                 "categories": categories,
                 "archive_categories": archive_categories,
                 "record_categories": record_categories,
@@ -4607,7 +4708,11 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         updated_count += 1
                     elif action == "change_role":
                         new_role = body.get("doc_role") or "draft"
-                        conn.execute("UPDATE documents SET doc_role = ?, updated_at = ? WHERE id = ?", (new_role, now_str, did))
+                        # v3.1.1：手动改过的角色一律锁定，之后改名/重扫不再被启发式覆盖
+                        conn.execute(
+                            "UPDATE documents SET doc_role = ?, role_locked = 1, updated_at = ? WHERE id = ?",
+                            (new_role, now_str, did),
+                        )
                         updated_count += 1
                     elif action == "delete":
                         if body.get("delete_disk") and row["rel_path"]:
@@ -5369,6 +5474,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         rel_path = ?,
                         category = ?,
                         doc_role = ?,
+                        role_locked = CASE WHEN ? THEN 1 ELSE role_locked END,
                         tags_json = ?,
                         is_starred = ?,
                         is_pinned = ?,
@@ -5380,6 +5486,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         new_rel_path,
                         new_cat,
                         new_role,
+                        1 if new_role != d["doc_role"] else 0,
                         json.dumps(new_tags, ensure_ascii=False),
                         new_starred,
                         new_pinned,
@@ -5691,6 +5798,12 @@ def purge_demo_data(delete_disk: bool = True) -> Dict[str, int]:
 
 
 def run_server(port: Optional[int] = None) -> None:
+    # 本机补丁：start.sh 用 `nohup … > data/server.log` 启动，stdout 被重定向成块缓冲，
+    # 启动横幅要等缓冲区写满才落盘，导致日志长期为空、出问题无从排查。改为行缓冲。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     cfg = load_config()
     init_db()
     # 示例数据只在首次全新部署时灌一次；正常使用环境（含本机升级后的库）绝不会自动生成
