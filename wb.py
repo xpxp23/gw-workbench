@@ -44,6 +44,7 @@ from server import (
     check_and_spawn_all_recurring,
     create_archive_record,
     create_task_record,
+    DB_LOCK,
     db_conn,
     ensure_category_dir,
     execute_search,
@@ -65,8 +66,18 @@ from server import (
 from ai_engine import extract_search_keywords, synthesize_ai_search_answer
 from gw_formatter import build_gb9704_docx
 from parser import extract_document_text, extract_structured_preview
+from memory_store import (
+    approve_memory,
+    build_memory_brief,
+    delete_memory,
+    list_memories,
+    search_memories,
+    toggle_memory,
+    upsert_memory,
+)
+from digest_service import build_tasks_digest
 
-VERSION = "3.3.0" if SERVER_VERSION == "3.3.0" else "3.3.0"
+VERSION = SERVER_VERSION
 
 _CONN_REFUSED_ERRNOS = {
     errno.ECONNREFUSED,
@@ -285,7 +296,8 @@ def api_call(method: str, path: str, payload: dict = None, timeout: int = 60) ->
       一律返回明确错误对象 {"ok": False, "error": ...}，绝不静默退回离线重复写库！
     """
     cfg = load_config()
-    port = cfg.get("port", 8090)
+    env_port = (os.environ.get("GW_PORT") or os.environ.get("PORT") or "").strip()
+    port = int(env_port) if env_port.isdigit() else cfg.get("port", 8090)
     url = f"http://127.0.0.1:{port}{path}"
     headers = {
         "Content-Type": "application/json",
@@ -363,10 +375,12 @@ def _do_list(status: str = "", category: str = "") -> Dict[str, Any]:
 
 
 def _do_add(payload: Dict[str, Any]) -> Dict[str, Any]:
-    init_db()
     res = api_call("POST", "/api/tasks", payload)
     if res is None:
-        task_obj = create_task_record(payload)
+        init_db()
+        off_payload = dict(payload)
+        off_payload["_allow_local_path"] = True
+        task_obj = create_task_record(off_payload)
         res = {"ok": True, "task": task_obj}
     return res
 
@@ -810,7 +824,6 @@ def _do_add_archive(
     file_paths: Optional[List[str]] = None,
     is_pinned: bool = False,
 ) -> Dict[str, Any]:
-    init_db()
     files, err = _collect_safe_local_files(file_paths)
     if err:
         return {"ok": False, "error": err}
@@ -825,20 +838,23 @@ def _do_add_archive(
     }
     res = api_call("POST", "/api/archives", payload)
     if res is None:
-        arch = create_archive_record(payload)
+        init_db()
+        off_payload = dict(payload)
+        off_payload["_allow_local_path"] = True
+        arch = create_archive_record(off_payload)
         res = {"ok": True, "archive": arch}
     return res
 
 
 def _do_append_archive(archive_id: int, file_paths: Optional[List[str]] = None, notes_append: str = "") -> Dict[str, Any]:
-    init_db()
     files, err = _collect_safe_local_files(file_paths)
     if err:
         return {"ok": False, "error": err}
     payload = {"files": files, "notes_append": notes_append}
     res = api_call("POST", f"/api/archives/{archive_id}/files", payload)
     if res is None:
-        arch = append_files_to_archive(archive_id, files_list=files, notes_append=notes_append)
+        init_db()
+        arch = append_files_to_archive(archive_id, files_list=files, notes_append=notes_append, allow_local_path=True)
         if not arch:
             return {"ok": False, "error": f"资料存档包 #{archive_id} 不存在"}
         res = {"ok": True, "archive": arch}
@@ -908,7 +924,6 @@ def _do_upsert_record(
     is_pinned: bool = False,
     record_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    init_db()
     files, err = _collect_safe_local_files(file_paths)
     if err:
         return {"ok": False, "error": err}
@@ -927,7 +942,10 @@ def _do_upsert_record(
     else:
         res = api_call("POST", "/api/records", payload)
     if res is None:
-        rec = upsert_important_record(payload, record_id=record_id)
+        init_db()
+        off_payload = dict(payload)
+        off_payload["_allow_local_path"] = True
+        rec = upsert_important_record(off_payload, record_id=record_id)
         res = {"ok": True, "record": rec}
     return res
 
@@ -986,6 +1004,145 @@ def _do_search(query: str, scope: str = "full", ai: bool = False, category: str 
 
 
 # ==================== 原生 MCP Server (stdio JSON-RPC 2.0, 15 Tools) ====================
+# ==================== v3.3.5: 透明常驻记忆库 & 移动端待办摘要导出 ====================
+
+def _do_digest(
+    preset: str = "all",
+    ids: str = "",
+    category: str = "",
+    due: str = "",
+    status: str = "active",
+    priority: str = "",
+    query: str = "",
+    template: str = "mobile",
+    limit: int = 15,
+    max_chars: int = 1500,
+    include_done_today: bool = False,
+) -> Dict[str, Any]:
+    params = {
+        "preset": preset,
+        "ids": ids,
+        "category": category,
+        "due": due,
+        "status": status,
+        "priority": priority,
+        "query": query,
+        "template": template,
+        "limit": str(limit),
+        "max_chars": str(max_chars),
+        "include_done_today": "1" if include_done_today else "0",
+    }
+    qs = urllib.parse.urlencode({k: v for k, v in params.items() if v})
+    res = api_call("GET", f"/api/tasks/digest?{qs}")
+    if res is None:
+        init_db()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = build_tasks_digest(
+                    conn,
+                    preset=preset,
+                    ids=ids,
+                    category=category,
+                    due=due,
+                    status=status,
+                    priority=priority,
+                    query=query,
+                    template=template,
+                    limit=limit,
+                    max_chars=max_chars,
+                    include_done_today=include_done_today,
+                )
+    return res
+
+
+def _do_mem_brief(scene: str = "", since_rev: int = 0, max_items: int = 15, max_chars: int = 1200) -> Dict[str, Any]:
+    qs = urllib.parse.urlencode({
+        "scene": scene,
+        "since_rev": str(since_rev or 0),
+        "max_items": str(max_items),
+        "max_chars": str(max_chars),
+    })
+    res = api_call("GET", f"/api/memories/brief?{qs}")
+    if res is None:
+        init_db()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = build_memory_brief(conn, scene=scene, since_rev=since_rev, max_items=max_items, max_chars=max_chars)
+                conn.commit()
+    return res
+
+
+def _do_mem_search(query: str, kind: str = "", scope: str = "", top_k: int = 5) -> Dict[str, Any]:
+    qs = urllib.parse.urlencode({"query": query, "kind": kind, "scope": scope, "top_k": str(top_k)})
+    res = api_call("GET", f"/api/memories/search?{qs}")
+    if res is None:
+        init_db()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = search_memories(conn, query=query, kind=kind, scope=scope, top_k=top_k)
+    return res
+
+
+def _do_mem_list(kind: str = "", scope: str = "", query: str = "") -> Dict[str, Any]:
+    qs = urllib.parse.urlencode({k: v for k, v in {"kind": kind, "scope": scope, "query": query}.items() if v})
+    res = api_call("GET", f"/api/memories?{qs}" if qs else "/api/memories")
+    if res is None:
+        init_db()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = list_memories(conn, kind=kind, scope=scope, query=query)
+    return res
+
+
+def _do_mem_set(payload: Dict[str, Any]) -> Dict[str, Any]:
+    res = api_call("POST", "/api/memories", payload)
+    if res is None:
+        init_db()
+        ws_root = get_workspace_root()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = upsert_memory(conn, payload, ws_root=ws_root)
+                conn.commit()
+    return res
+
+
+def _do_mem_toggle(id_or_key: str, enabled: Optional[bool] = None) -> Dict[str, Any]:
+    body = {} if enabled is None else {"enabled": enabled}
+    res = api_call("POST", f"/api/memories/{urllib.parse.quote(str(id_or_key))}/toggle", body)
+    if res is None:
+        init_db()
+        ws_root = get_workspace_root()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = toggle_memory(conn, id_or_key, enabled=enabled, ws_root=ws_root)
+                conn.commit()
+    return res
+
+
+def _do_mem_approve(id_or_key: str) -> Dict[str, Any]:
+    res = api_call("POST", f"/api/memories/{urllib.parse.quote(str(id_or_key))}/approve", {})
+    if res is None:
+        init_db()
+        ws_root = get_workspace_root()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = approve_memory(conn, id_or_key, ws_root=ws_root)
+                conn.commit()
+    return res
+
+
+def _do_mem_delete(id_or_key: str) -> Dict[str, Any]:
+    res = api_call("DELETE", f"/api/memories/{urllib.parse.quote(str(id_or_key))}")
+    if res is None:
+        init_db()
+        ws_root = get_workspace_root()
+        with DB_LOCK:
+            with db_conn() as conn:
+                res = delete_memory(conn, id_or_key, ws_root=ws_root)
+                conn.commit()
+    return res
+
+
 MCP_TOOLS_SPEC = [
     {
         "name": "wb_list_tasks",
@@ -1233,6 +1390,66 @@ MCP_TOOLS_SPEC = [
         "inputSchema": {
             "type": "object",
             "properties": {},
+        },
+    },
+    {
+        "name": "wb_mem_brief",
+        "description": "【极低成本常驻记忆速读】读取科室透明常驻记忆（邮箱、联系电话、常用红头、发文对象、注意事项）。每次会话首轮操作前调一次；后续传入上次返回的 rev 到 since_rev，若未修改仅返回 10 Token 短路提示。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "scene": {"type": "string", "enum": ["", "global", "draft", "task", "report", "archive", "mobile"], "description": "可选场景过滤（如起草公文传 draft）"},
+                "since_rev": {"type": "integer", "description": "上次读取到的版本号 rev；未变时零成本跳过"},
+            },
+        },
+    },
+    {
+        "name": "wb_mem_search",
+        "description": "按关键词检索透明常驻记忆库中的红头配置、联络名片、发文对象或专项注意事项（返回极简纯文本，最多 5 条）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "检索关键词，如 邮箱 / 安委办红头 / 报送"},
+                "kind": {"type": "string", "enum": ["", "contact", "redhead", "recipient", "rule"], "description": "可选分类过滤"},
+                "top_k": {"type": "integer", "description": "返回条数上限（默认5）"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "wb_mem_set",
+        "description": "实时新增或修改透明常驻业务记忆（如更新科室邮箱、联系电话、红头抬头、主送抄送名单、注意事项），修改立即同步至工作台 UI 供用户审阅。仅在用户明确要求记住/修改时将 explicit_user_request 设为 true，否则进入待审队列防止误污染。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mem_key": {"type": "string", "description": "稳定英文短键，如 contact.office / redhead.anwei（更新已有项时务必传原 key）"},
+                "kind": {"type": "string", "enum": ["contact", "redhead", "recipient", "rule"], "description": "分类：contact(邮箱电话) | redhead(红头配置) | recipient(发文对象) | rule(注意事项)"},
+                "title": {"type": "string", "description": "简短标题（≤24字）"},
+                "rule_text": {"type": "string", "description": "精炼明确的内容或规则（≤160字）"},
+                "scope": {"type": "string", "enum": ["global", "draft", "task", "report", "archive", "mobile"], "description": "生效范围，默认 global"},
+                "priority": {"type": "integer", "description": "优先级 1(核心红线/名片) | 2(常规) | 3(参考)，默认 2"},
+                "triggers": {"type": "array", "items": {"type": "string"}, "description": "可选场景触发词"},
+                "meta": {"type": "object", "description": "可选结构化字段（红头类型可填 display_header/doc_num_prefix/default_recipients/default_cc/issuer_name）"},
+                "explicit_user_request": {"type": "boolean", "description": "用户是否明确要求立即记住/修改（true=立即生效，false=进入UI待审）"},
+            },
+            "required": ["kind", "title", "rule_text"],
+        },
+    },
+    {
+        "name": "wb_task_digest",
+        "description": "【手机端极低成本待办摘要导出】按筛选条件直接输出排版好的纯文本待办摘要（无需生成文件、不消耗大 Token）。返回内容已适配手机竖屏，直接原样发给用户即可，无需再调用 wb_list_tasks！",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "preset": {"type": "string", "enum": ["all", "urgent", "today", "week"], "description": "快捷预设：urgent(逾期/紧急/3日内) | today | week | all(全部在办)"},
+                "ids": {"type": "string", "description": "按事项 ID 精确筛选，逗号分隔如 12,15（配合 template=detail 看单条详情）"},
+                "category": {"type": "string", "description": "按业务分类模糊筛选，如 防灾减灾"},
+                "due": {"type": "string", "description": "截止日期过滤：overdue | today | 3d | 7d | YYYY-MM-DD"},
+                "status": {"type": "string", "enum": ["active", "in_progress", "pending", "archived", "all"], "description": "默认 active（全部未归档）"},
+                "template": {"type": "string", "enum": ["mobile", "checklist", "report", "detail"], "description": "模板：mobile(手机速览,默认) | checklist(极简清单) | report(领导汇报) | detail(单条详情)"},
+                "limit": {"type": "integer", "description": "最多返回条数，默认 15"},
+                "max_chars": {"type": "integer", "description": "总字数上限，默认 1500"},
+            },
         },
     },
 ]
@@ -1607,16 +1824,71 @@ def handle_mcp_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     else:
                         res = dict(api_res)
                         res.setdefault("ok", True)
+                elif t_name == "wb_mem_brief":
+                    s_rev, err = _parse_int_param(t_args, "since_rev", required=False)
+                    if err:
+                        res = {"ok": False, "error": err}
+                    else:
+                        res = _do_mem_brief(scene=str(t_args.get("scene") or ""), since_rev=s_rev or 0)
+                        if res.get("ok") and res.get("text"):
+                            res["_plain_text"] = res["text"]
+                elif t_name == "wb_mem_search":
+                    tk, err = _parse_int_param(t_args, "top_k", required=False)
+                    if err:
+                        res = {"ok": False, "error": err}
+                    else:
+                        res = _do_mem_search(
+                            query=str(t_args.get("query") or ""),
+                            kind=str(t_args.get("kind") or ""),
+                            top_k=tk or 5,
+                        )
+                        if res.get("ok") and res.get("text"):
+                            res["_plain_text"] = res["text"]
+                elif t_name == "wb_mem_set":
+                    explicit = bool(t_args.get("explicit_user_request", True))
+                    mem_payload = {
+                        "mem_key": str(t_args.get("mem_key") or ""),
+                        "kind": str(t_args.get("kind") or "rule"),
+                        "title": str(t_args.get("title") or ""),
+                        "rule_text": str(t_args.get("rule_text") or ""),
+                        "scope": str(t_args.get("scope") or "global"),
+                        "priority": t_args.get("priority", 2),
+                        "triggers": t_args.get("triggers") or [],
+                        "meta": t_args.get("meta") or {},
+                        "source": "agent",
+                        "review_status": "approved" if explicit else "pending_review",
+                    }
+                    res = _do_mem_set(mem_payload)
+                elif t_name == "wb_task_digest":
+                    lim_v, err1 = _parse_int_param(t_args, "limit", required=False)
+                    mc_v, err2 = _parse_int_param(t_args, "max_chars", required=False)
+                    if err1 or err2:
+                        res = {"ok": False, "error": err1 or err2}
+                    else:
+                        res = _do_digest(
+                            preset=str(t_args.get("preset") or "all"),
+                            ids=str(t_args.get("ids") or ""),
+                            category=str(t_args.get("category") or ""),
+                            due=str(t_args.get("due") or ""),
+                            status=str(t_args.get("status") or "active"),
+                            template=str(t_args.get("template") or "mobile"),
+                            limit=lim_v or 15,
+                            max_chars=mc_v or 1500,
+                        )
+                        if res.get("ok") and res.get("text"):
+                            res["_plain_text"] = res["text"]
                 else:
                     res = {"ok": False, "error": f"未知的 MCP 工具: {t_name}"}
 
             is_err = (not res.get("ok", True)) or bool(res.get("error"))
+            plain_out = res.pop("_plain_text", None) if isinstance(res, dict) else None
+            out_text = plain_out if (plain_out and not is_err) else json.dumps(res, ensure_ascii=False, separators=(",", ":"))
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
                 "result": {
                     "content": [
-                        {"type": "text", "text": json.dumps(res, ensure_ascii=False, indent=2)}
+                        {"type": "text", "text": out_text}
                     ],
                     "isError": is_err,
                 },
@@ -1976,6 +2248,138 @@ def main() -> None:
 
     p_sync = sub.add_parser("sync", help="立即执行本地物理文件夹与数据库双向同步")
     p_sync.set_defaults(func=cmd_sync)
+
+    # v3.3.5: 移动端低成本待办摘要导出
+    def cmd_digest(args):
+        res = _do_digest(
+            preset=args.preset,
+            ids=args.ids or "",
+            category=args.category or "",
+            due=args.due or "",
+            status=args.status,
+            priority=args.priority or "",
+            query=args.query or "",
+            template=args.template,
+            limit=args.limit,
+            max_chars=args.max_chars,
+            include_done_today=args.done_today,
+        )
+        if not res.get("ok", True):
+            print(json.dumps(res, ensure_ascii=False), file=sys.stderr)
+            sys.exit(1)
+        if args.format == "plain":
+            print(res.get("text", ""))
+        else:
+            print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+
+    p_dig = sub.add_parser("digest", help="【手机端低成本导出】按模板直接输出轻量待办摘要文本（不生成文件）")
+    p_dig.add_argument("--preset", choices=["all", "urgent", "today", "week"], default="all", help="快捷预设")
+    p_dig.add_argument("--ids", help="按事项 ID 精确筛选，逗号分隔如 12,15")
+    p_dig.add_argument("--category", help="按业务分类模糊筛选")
+    p_dig.add_argument("--due", help="截止日期过滤：overdue | today | 3d | 7d | YYYY-MM-DD")
+    p_dig.add_argument("--status", choices=["active", "in_progress", "pending", "archived", "all"], default="active")
+    p_dig.add_argument("--priority", help="优先级过滤，如 紧急,重要")
+    p_dig.add_argument("--query", help="标题/摘要关键词过滤")
+    p_dig.add_argument("--template", choices=["mobile", "checklist", "report", "detail"], default="mobile", help="输出模板")
+    p_dig.add_argument("--limit", type=int, default=15, help="条数上限")
+    p_dig.add_argument("--max-chars", type=int, default=1500, dest="max_chars", help="总字符预算上限")
+    p_dig.add_argument("--done-today", action="store_true", dest="done_today", help="附带今日已办结事项")
+    p_dig.add_argument("--format", choices=["plain", "json"], default="plain", help="默认直接输出纯文本")
+    p_dig.set_defaults(func=cmd_digest)
+
+    # v3.3.5: 透明常驻业务记忆与红头规则库 CLI
+    def cmd_mem(args):
+        act = args.mem_action
+        if act == "brief":
+            res = _do_mem_brief(scene=args.scene or "", since_rev=args.since_rev or 0)
+            if args.format == "plain":
+                print(res.get("text", ""))
+            else:
+                print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+        elif act == "search":
+            res = _do_mem_search(query=args.query, kind=args.kind or "", top_k=args.top)
+            if args.format == "plain":
+                print(res.get("text", ""))
+            else:
+                print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+        elif act == "list":
+            res = _do_mem_list(kind=args.kind or "", scope=args.scope or "", query=args.query or "")
+            print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+        elif act == "set":
+            meta_obj = {}
+            if args.meta:
+                try:
+                    meta_obj = json.loads(args.meta)
+                except Exception:
+                    print(json.dumps({"ok": False, "error": "--meta 必须是合法 JSON 对象"}, ensure_ascii=False), file=sys.stderr)
+                    sys.exit(1)
+            payload = {
+                "mem_key": args.key or "",
+                "kind": args.kind,
+                "scope": args.scope,
+                "priority": args.priority,
+                "title": args.title,
+                "rule_text": args.rule,
+                "triggers": [x.strip() for x in (args.triggers or "").split(",") if x.strip()],
+                "meta": meta_obj,
+                "source": "agent",
+                "review_status": "pending_review" if args.pending else "approved",
+            }
+            res = _do_mem_set(payload)
+            print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+            if not res.get("ok"):
+                sys.exit(1)
+        elif act == "toggle":
+            en = True if args.on else (False if args.off else None)
+            res = _do_mem_toggle(args.target, enabled=en)
+            print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+            if not res.get("ok"):
+                sys.exit(1)
+        elif act == "approve":
+            res = _do_mem_approve(args.target)
+            print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+            if not res.get("ok"):
+                sys.exit(1)
+        elif act == "del":
+            res = _do_mem_delete(args.target)
+            print(json.dumps(res, ensure_ascii=False, separators=(",", ":")))
+            if not res.get("ok"):
+                sys.exit(1)
+
+    p_mem = sub.add_parser("mem", help="透明常驻业务记忆与红头规则库（邮箱/电话/红头/发文对象/注意事项）")
+    mem_sub = p_mem.add_subparsers(dest="mem_action", required=True)
+    p_mb = mem_sub.add_parser("brief", help="拉取 L0 常驻精简简报（支持 --since-rev 版本号短路）")
+    p_mb.add_argument("--scene", default="", help="可选场景：global/draft/task/report/archive/mobile")
+    p_mb.add_argument("--since-rev", type=int, default=0, dest="since_rev", help="上次版本号")
+    p_mb.add_argument("--format", choices=["plain", "json"], default="plain")
+    p_ms = mem_sub.add_parser("search", help="按关键词检索业务记忆与红头")
+    p_ms.add_argument("query", help="检索关键词")
+    p_ms.add_argument("--kind", default="", choices=["", "contact", "redhead", "recipient", "rule"])
+    p_ms.add_argument("--top", type=int, default=5)
+    p_ms.add_argument("--format", choices=["plain", "json"], default="plain")
+    p_ml = mem_sub.add_parser("list", help="列出全部记忆条目")
+    p_ml.add_argument("--kind", default="")
+    p_ml.add_argument("--scope", default="")
+    p_ml.add_argument("--query", default="")
+    p_mset = mem_sub.add_parser("set", help="新增或更新一条常驻记忆/红头规则")
+    p_mset.add_argument("--key", default="", help="稳定短键，如 contact.office")
+    p_mset.add_argument("--kind", required=True, choices=["contact", "redhead", "recipient", "rule"])
+    p_mset.add_argument("--title", required=True, help="简短标题")
+    p_mset.add_argument("--rule", required=True, help="精炼规则或事实内容")
+    p_mset.add_argument("--scope", default="global", choices=["global", "draft", "task", "report", "archive", "mobile"])
+    p_mset.add_argument("--priority", type=int, default=2, choices=[1, 2, 3])
+    p_mset.add_argument("--triggers", default="", help="触发词，逗号分隔")
+    p_mset.add_argument("--meta", default="", help="可选 JSON 元数据（如红头参数）")
+    p_mset.add_argument("--pending", action="store_true", help="置为待 UI 审核状态")
+    p_mt = mem_sub.add_parser("toggle", help="启用或停用指定记忆")
+    p_mt.add_argument("target", help="ID 或 mem_key")
+    p_mt.add_argument("--on", action="store_true")
+    p_mt.add_argument("--off", action="store_true")
+    p_ma = mem_sub.add_parser("approve", help="批准待审记忆")
+    p_ma.add_argument("target", help="ID 或 mem_key")
+    p_md = mem_sub.add_parser("del", help="删除记忆条目")
+    p_md.add_argument("target", help="ID 或 mem_key")
+    p_mem.set_defaults(func=cmd_mem)
 
     p_mcp = sub.add_parser("mcp", help="启动原生 Model Context Protocol (MCP) stdio Server")
     p_mcp.set_defaults(func=lambda _args: run_mcp_stdio_server())

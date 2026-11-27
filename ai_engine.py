@@ -8,6 +8,7 @@ import ipaddress
 import json
 import logging
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -23,8 +24,13 @@ MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024
 # AI 检索上下文总字符预算，防止小上下文本地模型溢出
 MAX_SEARCH_CONTEXT_CHARS = 6000
 
-# 最近一次 API 调用错误信息，便于调用方感知失败原因
-_LAST_API_ERROR: str = ""
+# 线程隔离的最近一次 API 调用错误信息，避免多线程并发覆写
+_API_ERR_TLS = threading.local()
+
+
+def _set_last_api_error(msg: str) -> None:
+    _API_ERR_TLS.last_error = msg
+    call_openai_compatible_api.last_error = msg
 
 # 政务公文高频虚词/停用词（用于旧稿精准关联与关键词清洗）
 GOV_STOPWORDS = frozenset({
@@ -78,14 +84,14 @@ def _validate_deadline(val: Any) -> str:
 
 
 def get_last_api_error() -> str:
-    """获取最近一次 LLM API 调用的错误描述（成功时为空字符串）"""
-    return _LAST_API_ERROR
+    """获取当前线程最近一次 LLM API 调用的错误描述（成功时为空字符串）"""
+    return getattr(_API_ERR_TLS, "last_error", "")
 
 
 def _is_openai_o_series(model: str) -> bool:
-    """判断是否为 OpenAI o1/o3/o4 推理模型系列"""
+    """判断是否为 OpenAI o1/o3/o4 推理模型系列（避免误伤自定义 o10 等模型名）"""
     m = (model or "").strip().lower()
-    return bool(re.search(r"(?:^|[/:\-_])o[134](?:$|[/:\-_.\d])", m))
+    return bool(re.search(r"(?:^|[/:\-_])o[134](?:$|[\-_](?:mini|preview|pro|high|low|\d{4}))", m))
 
 
 def is_reasoning_model(model: str) -> bool:
@@ -163,22 +169,18 @@ def call_openai_compatible_api(
     - HTTP 400/401/403/404 直接返回不重试，并记录清晰错误日志与 last_error
     - 兼容推理模型（o1/o3/o4 传 max_completion_tokens，推理模型自动提升 token 上限 >= 3000）
     """
-    global _LAST_API_ERROR
-    _LAST_API_ERROR = ""
-    call_openai_compatible_api.last_error = ""
+    _set_last_api_error("")
 
     api_base = _safe_str((config or {}).get("ai_api_base")).rstrip("/")
     api_key = _safe_str((config or {}).get("ai_api_key"))
     model = _safe_str((config or {}).get("ai_model")) or "deepseek-chat"
 
     if not api_base:
-        _LAST_API_ERROR = "missing ai_api_base"
-        call_openai_compatible_api.last_error = _LAST_API_ERROR
+        _set_last_api_error("missing ai_api_base")
         return None
     if not api_key and not _is_private_or_local_url(api_base):
-        _LAST_API_ERROR = f"missing api_key for non-private endpoint {api_base}"
-        call_openai_compatible_api.last_error = _LAST_API_ERROR
-        logger.warning("AI API skipped: %s", _LAST_API_ERROR)
+        _set_last_api_error(f"missing api_key for non-private endpoint {api_base}")
+        logger.warning("AI API skipped: %s", get_last_api_error())
         return None
 
     url = _normalize_chat_completions_url(api_base)
@@ -212,19 +214,33 @@ def call_openai_compatible_api(
     total_budget = 42.0
 
     for attempt in range(attempts):
+        elapsed = time.monotonic() - start_ts
+        remaining_budget = total_budget - elapsed
+        if remaining_budget <= 1.0:
+            _set_last_api_error("total timeout budget exceeded")
+            return None
+        eff_timeout = max(3.0, min(float(timeout), remaining_budget))
         try:
             req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw_resp = resp.read(MAX_API_RESPONSE_BYTES).decode("utf-8", errors="replace")
-                body = json.loads(raw_resp)
+            with urllib.request.urlopen(req, timeout=eff_timeout) as resp:
+                raw_bytes = resp.read(MAX_API_RESPONSE_BYTES + 1)
+                if len(raw_bytes) > MAX_API_RESPONSE_BYTES:
+                    _set_last_api_error("API response exceeds 2MB safety limit")
+                    logger.warning("AI API response truncated (>2MB) on %s", url)
+                    return None
+                body = json.loads(raw_bytes.decode("utf-8", errors="replace"))
                 choices = body.get("choices") if isinstance(body, dict) else None
                 if not isinstance(choices, list) or not choices:
-                    _LAST_API_ERROR = "empty choices in API response"
-                    call_openai_compatible_api.last_error = _LAST_API_ERROR
+                    _set_last_api_error("empty choices in API response")
                     logger.warning("AI API returned empty choices on %s", url)
                     return None
-                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                c0 = choices[0] if isinstance(choices[0], dict) else {}
+                msg = c0.get("message") if isinstance(c0, dict) else None
                 content = _safe_str(msg.get("content") if isinstance(msg, dict) else "")
+                if not content and isinstance(msg, dict) and msg.get("reasoning_content"):
+                    _set_last_api_error("reasoning model exhausted max_tokens before emitting content")
+                    logger.warning("AI API empty content with reasoning_content (finish_reason=%s)", c0.get("finish_reason"))
+                    return None
                 return content
         except urllib.error.HTTPError as e:
             status = getattr(e, "code", 0)
@@ -233,22 +249,25 @@ def call_openai_compatible_api(
                 err_body = e.read(512).decode("utf-8", errors="replace").strip()
             except Exception:
                 pass
-            _LAST_API_ERROR = f"HTTP {status}" + (f": {err_body[:200]}" if err_body else "")
-            call_openai_compatible_api.last_error = _LAST_API_ERROR
+            _set_last_api_error(f"HTTP {status}" + (f": {err_body[:200]}" if err_body else ""))
             if status in (400, 401, 403, 404):
-                logger.error("AI API non-retryable %s on %s", _LAST_API_ERROR, url)
+                logger.error("AI API non-retryable %s on %s", get_last_api_error(), url)
                 return None
             logger.warning("AI API HTTP %s (attempt %d/%d) on %s", status, attempt + 1, attempts, url)
             if status in (429, 500, 502, 503, 504) and attempt + 1 < attempts:
-                if time.monotonic() - start_ts < total_budget:
-                    time.sleep(0.8 * (attempt + 1))
+                wait_sec = 0.8 * (attempt + 1)
+                if status == 429 and getattr(e, "headers", None):
+                    ra = e.headers.get("Retry-After")
+                    if ra and str(ra).strip().isdigit():
+                        wait_sec = min(6.0, max(0.5, float(ra)))
+                if time.monotonic() - start_ts + wait_sec < total_budget:
+                    time.sleep(wait_sec)
                     continue
             return None
         except Exception as e:
-            _LAST_API_ERROR = f"{type(e).__name__}: {e}"
-            call_openai_compatible_api.last_error = _LAST_API_ERROR
-            logger.warning("AI API error (attempt %d/%d) on %s: %s", attempt + 1, attempts, url, _LAST_API_ERROR)
-            if attempt + 1 < attempts and (time.monotonic() - start_ts < total_budget):
+            _set_last_api_error(f"{type(e).__name__}: {e}")
+            logger.warning("AI API error (attempt %d/%d) on %s: %s", attempt + 1, attempts, url, get_last_api_error())
+            if attempt + 1 < attempts and (time.monotonic() - start_ts + 0.6 < total_budget):
                 time.sleep(0.6)
                 continue
             return None
@@ -552,21 +571,27 @@ def _detect_doc_kind(title: str, text: str) -> str:
     return "action"
 
 
+def _safe_date_for_year(y: int, month: int, day: int) -> datetime:
+    """构造日期，平年遇到 2 月 29 日时安全回退至 2 月 28 日或寻找下个闰年"""
+    try:
+        return datetime(y, month, day)
+    except ValueError:
+        if month == 2 and day == 29:
+            return datetime(y, 2, 28)
+        raise
+
+
 def _resolve_inferred_date(year: Optional[int], month: int, day: int, now: datetime) -> Optional[str]:
-    """根据提取到的年月日构建 YYYY-MM-DD；缺省年份时若早于当前日期超过 60 天，自动推算为下一年"""
+    """根据提取到的年月日构建 YYYY-MM-DD；缺省年份时若早于当前日期超过 60 天，自动推算为下一年（修复闰年 2 月 29 日崩溃）"""
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     try:
         if year is not None:
-            dt = datetime(year, month, day)
+            dt = _safe_date_for_year(year, month, day)
         else:
             y = today.year
-            try:
-                dt = datetime(y, month, day)
-            except ValueError:
-                # 例如平年遇到 2月29日，尝试下一年
-                dt = datetime(y + 1, month, day)
+            dt = _safe_date_for_year(y, month, day)
             if (today - dt).days > 60:
-                dt = datetime(dt.year + 1, month, day)
+                dt = _safe_date_for_year(dt.year + 1, month, day)
         return dt.strftime("%Y-%m-%d")
     except ValueError:
         return None
@@ -703,7 +728,7 @@ def _rule_based_parse_document(
 
     doc_number = ""
     doc_num_match = re.search(
-        r"([\u4e00-\u9fa5]{2,12}(?:发|字|函|办|办发|明电|通|号)[〔\[\(（]\d{4}[〕\]\)）]\s*\d+\s*号)",
+        r"([\u4e00-\u9fa5]{2,12}[〔\[\(（]\d{4}[〕\]\)）]\s*\d+\s*号)",
         clean_text,
     )
     if doc_num_match:
@@ -871,6 +896,7 @@ def parse_incoming_content(
     source_hint: str = "",
     categories: Optional[List[str]] = None,
     config: Optional[Dict[str, Any]] = None,
+    memory_prompt: str = "",
 ) -> Dict[str, Any]:
     cfg = config or {}
     cats = categories or [
@@ -904,6 +930,8 @@ def parse_incoming_content(
         "同一材料的起草/审签/盖章/报送合并为 1 条；会议通知仅保留明确要求动作（如报名单、按时参会）；"
         "纯阅知件直接返回空数组 []；严禁拆出“研读文件/核对要求/高度重视/审签盖章/归档”等常识性内部步骤。"
     )
+    if memory_prompt and memory_prompt.strip():
+        sys_prompt = sys_prompt + "\n\n" + memory_prompt.strip()
     # 超过 4000 字长公文采用首 2000 + 中段关键词 1200 + 尾 1000 三段智能采样
     clean_body = (text or "").strip()
     clipped = _sample_long_document(clean_body, max_len=4000)
@@ -941,7 +969,7 @@ def parse_incoming_content(
     return {
         "title": (llm_title or rule_res["title"])[:60],
         "doc_kind": doc_kind,
-        "source_channel": llm_source_channel or rule_res["source_channel"],
+        "source_channel": llm_source_channel if llm_source_channel in ("上级来文", "微信群", "电话通知", "自建") else rule_res["source_channel"],
         "doc_number": llm_doc_number or rule_res["doc_number"],
         "issuing_org": llm_issuing_org or rule_res["issuing_org"],
         "priority": llm_priority if llm_priority in ("普通", "重要", "紧急") else rule_res["priority"],
@@ -1085,6 +1113,7 @@ def synthesize_ai_search_answer(
     matched_archives: Optional[List[Dict[str, Any]]] = None,
     matched_records: Optional[List[Dict[str, Any]]] = None,
     config: Optional[Dict[str, Any]] = None,
+    memory_prompt: str = "",
 ) -> Dict[str, Any]:
     """
     两段式 AI 搜索的第二阶段：覆盖【重要事项记录】、【资料存档】、【工作台待办】与【公文与材料库】四维知识解答
@@ -1148,6 +1177,8 @@ def synthesize_ai_search_answer(
             "直接、简明地回答用户的查询问题，按【重要事项底数与预案】、【相关资料存档】、【关联工作事项】、【相关公文与材料】分点梳理，"
             "并标明对应的标题或文件名。不要使用 Emoji，也不要编造库中不存在的数据。"
         )
+        if memory_prompt and memory_prompt.strip():
+            sys_prompt = sys_prompt + "\n\n" + memory_prompt.strip()
         user_prompt = (
             f"用户检索问题：{query}\n"
             f"提取检索词：{', '.join(keywords)}\n"

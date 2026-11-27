@@ -15,6 +15,7 @@
 
 import csv
 import io
+import html
 import logging
 import os
 import posixpath
@@ -58,8 +59,8 @@ def _subprocess_kwargs(timeout: int = 15) -> Dict[str, Any]:
 
 
 def read_text_with_fallback_encodings(raw_bytes: bytes) -> str:
-    """自适应常见中文办公编码（UTF-8 / UTF-8-SIG / GB18030 / UTF-16）"""
-    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk", "utf-16", "utf-16le"):
+    """自适应常见中文办公编码（UTF-8 / UTF-8-SIG / GB18030 / UTF-16LE / UTF-16BE）"""
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk", "utf-16", "utf-16le", "utf-16be"):
         try:
             text = raw_bytes.decode(enc)
             if "\x00" not in text or enc.startswith("utf-16"):
@@ -69,10 +70,34 @@ def read_text_with_fallback_encodings(raw_bytes: bytes) -> str:
     return raw_bytes.decode("utf-8", errors="ignore").replace("\x00", "")
 
 
+def _trim_incomplete_utf8_tail(data: bytes) -> bytes:
+    """截断大文件时剥离末尾残缺的 UTF-8 多字节序列，避免整篇误回落 GB18030 变乱码"""
+    if not data:
+        return data
+    n = len(data)
+    for back in range(1, min(4, n) + 1):
+        b = data[n - back]
+        if (b & 0x80) == 0:
+            return data
+        if (b & 0xC0) == 0xC0:
+            if (b & 0xE0) == 0xC0:
+                expected = 2
+            elif (b & 0xF0) == 0xE0:
+                expected = 3
+            elif (b & 0xF8) == 0xF0:
+                expected = 4
+            else:
+                return data
+            if back < expected:
+                return data[: n - back]
+            return data
+    return data
+
+
 def _read_file_bytes_limited(
     file_path: Path, max_bytes: int = MAX_TEXT_READ_BYTES
 ) -> Tuple[bytes, bool, int]:
-    """安全读取文本/XML/CSV 等文件，限制最大读取体积以防 OOM"""
+    """安全读取文本/XML/CSV 等文件，限制最大读取体积并保护 UTF-8 截断边界"""
     total_size = 0
     try:
         total_size = file_path.stat().st_size
@@ -81,7 +106,7 @@ def _read_file_bytes_limited(
     with open(file_path, "rb") as f:
         raw = f.read(max_bytes + 1)
     if len(raw) > max_bytes:
-        return raw[:max_bytes], True, max(total_size, len(raw))
+        return _trim_incomplete_utf8_tail(raw[:max_bytes]), True, max(total_size, len(raw))
     return raw, False, max(total_size, len(raw))
 
 
@@ -95,6 +120,19 @@ def _check_zip_entry_size(
             f"ZIP entry '{name}' uncompressed size ({info.file_size} bytes) exceeds limit ({max_bytes} bytes)"
         )
     return info
+
+
+MAX_ZIP_TOTAL_UNCOMPRESSED = 120 * 1024 * 1024
+
+
+def _check_zip_archive_budget(zf: zipfile.ZipFile, max_total: int = MAX_ZIP_TOTAL_UNCOMPRESSED) -> None:
+    """校验 ZIP 压缩包所有条目累计声明解压体积与条目数，防止多文件组合 Zip Bomb"""
+    infos = zf.infolist()
+    if len(infos) > 5000:
+        raise ValueError(f"ZIP entry count ({len(infos)}) exceeds safety limit")
+    total = sum(getattr(i, "file_size", 0) for i in infos)
+    if total > max_total:
+        raise ValueError(f"ZIP total uncompressed size ({total} bytes) exceeds limit ({max_total} bytes)")
 
 
 def _safe_zip_read(
@@ -476,17 +514,19 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
     if zipfile.is_zipfile(file_path):
         try:
             with zipfile.ZipFile(file_path, "r") as zf:
+                _check_zip_archive_budget(zf)
                 names = set(zf.namelist())
                 date_xfs = _load_xlsx_date_style_indices(zf, names)
                 shared_strings: List[str] = []
                 if "xl/sharedStrings.xml" in names:
-                    _check_zip_entry_size(zf, "xl/sharedStrings.xml")
-                    with zf.open("xl/sharedStrings.xml", "r") as ss_stream:
-                        for _ev, si in ET.iterparse(ss_stream, events=("end",)):
-                            if _local_tag(si.tag) == "si":
-                                parts = [t.text for t in si.iter() if _local_tag(t.tag) == "t" and t.text]
-                                shared_strings.append("".join(parts))
-                                si.clear()
+                    ss_bytes = _safe_zip_read(zf, "xl/sharedStrings.xml")
+                    for _ev, si in ET.iterparse(io.BytesIO(ss_bytes), events=("end",)):
+                        if _local_tag(si.tag) == "si":
+                            parts = [t.text for t in si.iter() if _local_tag(t.tag) == "t" and t.text]
+                            shared_strings.append("".join(parts))
+                            si.clear()
+                            if len(shared_strings) >= 200000:
+                                break
 
                 sheet_entries: List[Tuple[str, str]] = []
                 if "xl/workbook.xml" in names:
@@ -512,7 +552,8 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                                     break
                             if not rid:
                                 for k, v in elem.attrib.items():
-                                    if k.endswith("id"):
+                                    kl = _local_tag(k).lower()
+                                    if kl == "id" and k != "sheetId":
                                         rid = v
                                         break
                             target_xml = rels_map.get(rid, f"xl/worksheets/sheet{len(sheet_entries)+1}.xml")
@@ -527,13 +568,12 @@ def extract_xlsx_structured(file_path: Path) -> Tuple[str, List[Dict[str, Any]]]
                     sheet_entries = [(f"工作表{i+1}", wf) for i, wf in enumerate(ws_files)]
 
                 for sname, sxml_path in sheet_entries:
-                    _check_zip_entry_size(zf, sxml_path)
+                    ws_bytes = _safe_zip_read(zf, sxml_path)
                     rows_matrix: List[List[str]] = []
                     max_col = 0
                     parsed_rows_dict: List[Dict[int, str]] = []
 
-                    with zf.open(sxml_path, "r") as ws_stream:
-                        for _event, elem in ET.iterparse(ws_stream, events=("end",)):
+                    for _event, elem in ET.iterparse(io.BytesIO(ws_bytes), events=("end",)):
                             if _local_tag(elem.tag) != "row":
                                 continue
                             row_map: Dict[int, str] = {}
@@ -637,12 +677,14 @@ def _resolve_ofd_page_paths(zf: zipfile.ZipFile, names: List[str]) -> List[str]:
     """按 OFD.xml -> DocRoot -> Document.xml -> Pages/Page/@BaseLoc 标准链路解析页面 XML 列表（兼容反斜杠）"""
     # 规范化键名到原始 ZIP 成员名的映射，兼容国产签章软件产生的反斜杠路径
     norm_to_orig: Dict[str, str] = {}
+    norm_lower_to_orig: Dict[str, str] = {}
     for n in names:
         norm = posixpath.normpath(n.replace("\\", "/")).lstrip("/")
         norm_to_orig[norm] = n
+        norm_lower_to_orig[norm.lower()] = n
 
     ordered_pages: List[str] = []
-    ofd_orig = norm_to_orig.get("OFD.xml")
+    ofd_orig = norm_to_orig.get("OFD.xml") or norm_lower_to_orig.get("ofd.xml")
 
     if ofd_orig:
         try:
@@ -771,7 +813,14 @@ def extract_ofd(file_path: Path) -> str:
                     grouped_lines: List[str] = []
                     for cl in clusters:
                         cl.sort(key=lambda it: it[1])
-                        grouped_lines.append("".join(it[2] for it in cl))
+                        line_parts: List[str] = []
+                        prev_x: Optional[float] = None
+                        for _y, x_pos, seg_txt in cl:
+                            if prev_x is not None and (x_pos - prev_x) > 8.0 and line_parts and not line_parts[-1].endswith(" "):
+                                line_parts.append(" ")
+                            line_parts.append(seg_txt)
+                            prev_x = x_pos
+                        grouped_lines.append("".join(line_parts))
                     page_texts.append("\n".join(grouped_lines).strip())
                 except Exception as e:
                     logger.warning("OFD page parse failed (%s in %s): %s", pf, file_path.name, e)
@@ -800,9 +849,15 @@ def extract_pdf(file_path: Path) -> str:
     first_five_checked = 0
     first_five_has_text = False
 
+    pypdf_scanned_empty = False
     try:
         import pypdf
         reader = pypdf.PdfReader(str(file_path))
+        if getattr(reader, "is_encrypted", False):
+            try:
+                reader.decrypt("")
+            except Exception:
+                return "[提示：该 PDF 已加密受密码保护，无法提取正文]"
         total_pages = len(reader.pages)
         pages: List[str] = []
         for i, page in enumerate(reader.pages[:MAX_PDF_SYNC_PAGES]):
@@ -815,10 +870,13 @@ def extract_pdf(file_path: Path) -> str:
                 pages.append(txt)
         if pages:
             return _append_pdf_truncation_notice("\n\n".join(pages), total_pages)
+        if total_pages > 0 and first_five_checked >= min(total_pages, 5) and not first_five_has_text:
+            pypdf_scanned_empty = True
     except Exception as e:
         logger.warning("PDF pypdf parse failed for %s: %s", file_path.name, e)
 
-    try:
+    if not pypdf_scanned_empty:
+      try:
         import pdfplumber
         pages = []
         with pdfplumber.open(str(file_path)) as pdf:
@@ -834,7 +892,7 @@ def extract_pdf(file_path: Path) -> str:
                     pages.append(txt)
         if pages:
             return _append_pdf_truncation_notice("\n\n".join(pages), total_pages)
-    except Exception as e:
+      except Exception as e:
         logger.warning("PDF pdfplumber parse failed for %s: %s", file_path.name, e)
 
     try:
@@ -1209,7 +1267,9 @@ def extract_document_text(file_path: Path) -> Tuple[str, str]:
     elif ext in (".html", ".htm", ".xml"):
         raw, truncated, total_size = _read_file_bytes_limited(file_path, MAX_TEXT_READ_BYTES)
         txt = read_text_with_fallback_encodings(raw)
+        txt = re.sub(r"<(script|style)\b[^>]*>[\s\S]*?</\1>", " ", txt, flags=re.I)
         clean = re.sub(r"<[^>]{0,4096}>", " ", txt)
+        clean = html.unescape(clean)
         clean = re.sub(r"\s+", " ", clean).strip()
         if truncated:
             size_mb = total_size / (1024 * 1024)

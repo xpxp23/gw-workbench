@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>公文与材料智能工作台 (GW-Workbench v3.3.0)</title>
+  <title>公文与材料智能工作台 (GW-Workbench v3.3.5)</title>
   <style>
     :root {
       --bg: #f1f5f9;
@@ -2042,6 +2042,45 @@
       .drawer-split-container { flex-direction: column; }
       .min-list-sub { display: none; }
     }
+    /* v3.3.5: 视觉规范统一、深色模式修复、移动端断点与新功能样式 */
+    body.dark-mode .mf-kind.k-pdf { background: rgba(239,68,68,.22); color: #fca5a5; border-color: rgba(239,68,68,.35); }
+    body.dark-mode .mf-kind.k-doc { background: rgba(59,130,246,.22); color: #93c5fd; border-color: rgba(59,130,246,.35); }
+    body.dark-mode .mf-kind.k-ofd { background: rgba(245,158,11,.22); color: #fcd34d; border-color: rgba(245,158,11,.35); }
+    body.dark-mode .mf-kind.k-xls { background: rgba(16,185,129,.22); color: #6ee7b7; border-color: rgba(16,185,129,.35); }
+    body.dark-mode .mf-kind.k-ppt { background: rgba(249,115,22,.22); color: #fdba74; border-color: rgba(249,115,22,.35); }
+    body.dark-mode .mf-kind.k-img { background: rgba(168,85,247,.22); color: #d8b4fe; border-color: rgba(168,85,247,.35); }
+    body.dark-mode .mf-kind.k-zip { background: rgba(148,163,184,.2); color: #cbd5e1; border-color: rgba(148,163,184,.35); }
+    body.dark-mode mark.hl { background: rgba(250,204,21,.28); color: #fef08a; }
+    #customDialogBackdrop { z-index: 480 !important; }
+    .mem-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:14px; }
+    .mem-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:12px; }
+    .mem-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:8px; transition:border-color .15s; }
+    .mem-card:hover { border-color:var(--primary); }
+    .mem-card.is-disabled { opacity:.58; }
+    .mem-card.is-pending { border-left:3px solid #f59e0b; }
+    .mem-card-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .mem-card-title { font-weight:700; font-size:14.5px; color:var(--text); flex:1; min-width:120px; }
+    .mem-card-rule { font-size:13.5px; color:var(--text-secondary); line-height:1.6; white-space:pre-wrap; word-break:break-word; }
+    .mem-card-meta { font-size:12px; color:var(--text-muted); display:flex; flex-wrap:wrap; gap:10px; align-items:center; border-top:1px dashed var(--border); padding-top:8px; }
+    .mem-kind-pill { font-size:11.5px; font-weight:600; padding:2px 7px; border-radius:6px; background:var(--surface-alt); color:var(--text-secondary); border:1px solid var(--border); }
+    .mem-kind-pill.k-contact { color:#0369a1; border-color:#bae6fd; background:#f0f9ff; }
+    .mem-kind-pill.k-redhead { color:#b91c1c; border-color:#fecaca; background:#fef2f2; }
+    .mem-kind-pill.k-recipient { color:#6d28d9; border-color:#ddd6fe; background:#f5f3ff; }
+    .mem-kind-pill.k-rule { color:#b45309; border-color:#fde68a; background:#fffbeb; }
+    body.dark-mode .mem-kind-pill.k-contact { background:rgba(14,165,233,.18); color:#7dd3fc; border-color:rgba(14,165,233,.35); }
+    body.dark-mode .mem-kind-pill.k-redhead { background:rgba(239,68,68,.18); color:#fca5a5; border-color:rgba(239,68,68,.35); }
+    body.dark-mode .mem-kind-pill.k-recipient { background:rgba(139,92,246,.18); color:#c4b5fd; border-color:rgba(139,92,246,.35); }
+    body.dark-mode .mem-kind-pill.k-rule { background:rgba(245,158,11,.18); color:#fcd34d; border-color:rgba(245,158,11,.35); }
+    .min-quick-ops { display:inline-flex; gap:4px; align-items:center; margin-left:4px; }
+    .digest-preview-box { background:var(--surface-alt); border:1px solid var(--border); border-radius:8px; padding:12px 14px; font-family:ui-monospace,Consolas,monospace; font-size:13px; line-height:1.65; white-space:pre-wrap; max-height:380px; overflow-y:auto; color:var(--text); }
+    @media (max-width: 768px) {
+      .app-main .topbar { height:auto; min-height:50px; flex-wrap:wrap; padding:8px 10px; }
+      .topbar-search-zone { max-width:100%; width:100%; order:1; }
+      .top-actions { width:100%; justify-content:flex-end; flex-wrap:wrap; order:2; }
+      .drawer { width:100vw !important; max-width:100vw !important; }
+      .prog-ops { opacity:1 !important; pointer-events:auto !important; }
+      .mem-grid { grid-template-columns:1fr; }
+    }
   </style>
 </head>
 <body>
@@ -2124,7 +2163,7 @@
           <svg class="ico ico-lg" style="color:#60a5fa;"><use href="#ico-gov"/></svg>
           <div class="sb-brand-titles">
             <span class="sb-text">公文智能工作台</span>
-            <span class="sb-ver" id="verBadge">v3.3.0</span>
+            <span class="sb-ver" id="verBadge">v3.3.5</span>
           </div>
         </div>
         <button class="sb-collapse-btn" onclick="toggleSidebar()" title="收起/展开侧边栏">
@@ -2155,6 +2194,10 @@
         </button>
         <button class="sb-nav-btn" id="tabBtnSummary" onclick="switchMainTab('summary')">
           <span class="sb-nav-btn-main"><svg class="ico"><use href="#ico-chart"/></svg><span class="sb-text">台账导出与总结</span></span>
+        </button>
+        <button class="sb-nav-btn" id="tabBtnMemories" onclick="switchMainTab('memories')">
+          <span class="sb-nav-btn-main"><svg class="ico"><use href="#ico-spark"/></svg><span class="sb-text">记忆与规则</span></span>
+          <span class="sb-badge" id="memCountBadge" style="display:none;">0</span>
         </button>
       </nav>
 
@@ -2276,6 +2319,7 @@
             <option value="updated_desc">排序 · 最近更新</option>
             <option value="title_asc">排序 · 事项名称</option>
           </select>
+          <button class="btn btn-xs" onclick="openMobileDigestModal()" title="按手机竖屏/汇报模板一键预览并复制待办摘要（不生成文件）">📱 待办摘要</button>
           <div class="browse-mode-switch" title="极简版只列来文原件与我写的材料，适合领导同事快速找文件">
             <button id="browseModeMinBtn" onclick="setBrowseMode('minimal')">极简浏览</button>
             <button id="browseModeFullBtn" onclick="setBrowseMode('full')">完整视图</button>
@@ -2555,6 +2599,37 @@
         </div>
         <div id="summaryResultArea" class="preview-rendered-box" style="min-height:260px;">
           点击上方“一键生成阶段工作总结初稿”，系统将自动汇总工作台中的已办结事项、推进中事项、会议培训与下沉资料存档以及您撰写的全部材料，生成规范的总结汇报初稿。
+        </div>
+      </div>
+    </section>
+
+    <!-- v3.3.5: 第七栏目【🧠 记忆与规则】透明常驻业务记忆与红头规则库 -->
+    <section id="tabMemories" class="tab-panel" style="display:none;">
+      <div class="panel" style="padding:18px 20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+          <div>
+            <h2 style="margin:0;font-size:17px;">🧠 常驻业务记忆与红头规则库 <span id="memRevBadge" class="badge badge-normal" style="font-size:11.5px;margin-left:6px;">rev=1</span></h2>
+            <div style="font-size:12.5px;color:var(--text-muted);margin-top:4px;">
+              透明记录科室邮箱、联系电话、常用红头、发文对象与注意事项；Agent 调用时极低成本读取，口头交代修改可实时同步，你可在此随时审核、开关或编辑。
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-sm" onclick="copyAgentMemoryBrief()" title="复制发给 Agent 的极简常驻记忆简报">复制 Agent 简报</button>
+            <button class="btn btn-sm btn-primary edit-only" onclick="openMemoryModal()">+ 新增记忆/红头</button>
+          </div>
+        </div>
+        <div class="mem-toolbar">
+          <div class="filter-pills" id="memKindFilter">
+            <button class="filter-pill active" data-kind="" onclick="setMemoryKindFilter('')">全部</button>
+            <button class="filter-pill" data-kind="contact" onclick="setMemoryKindFilter('contact')">联络名片</button>
+            <button class="filter-pill" data-kind="redhead" onclick="setMemoryKindFilter('redhead')">红头配置</button>
+            <button class="filter-pill" data-kind="recipient" onclick="setMemoryKindFilter('recipient')">发文对象</button>
+            <button class="filter-pill" data-kind="rule" onclick="setMemoryKindFilter('rule')">注意事项</button>
+          </div>
+          <input type="text" id="memSearchInput" class="form-control" style="max-width:260px;padding:5px 10px;font-size:13px;" placeholder="搜索标题、关键词或红头..." oninput="renderMemoriesTab()" />
+        </div>
+        <div id="memoriesGrid" class="mem-grid">
+          <div style="color:var(--text-muted);font-size:13px;">加载中...</div>
         </div>
       </div>
     </section>
@@ -3073,7 +3148,19 @@
         </div>
         <div class="form-group">
           <label>AI 模型名称</label>
-          <input type="text" id="cfgAiModel" class="form-control" placeholder="deepseek-chat / qwen-plus" />
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="cfgAiModel" class="form-control" placeholder="deepseek-chat / qwen-plus" />
+            <button type="button" class="btn btn-sm" id="btnTestAiConn" onclick="testAiConnection()" style="white-space:nowrap;">测试连通</button>
+          </div>
+          <div id="aiTestResultText" style="font-size:12px;margin-top:4px;color:var(--text-muted);"></div>
+        </div>
+        <div class="form-group full" style="border-top:1px dashed var(--border);padding-top:10px;">
+          <label>本地 Agent 与 MCP 配置（仅本机可见）</label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <span id="cfgAgentTokenPreview" style="font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--text-secondary);"></span>
+            <button type="button" class="btn btn-xs" onclick="copyMcpConfigJson()">一键复制 MCP JSON 配置</button>
+            <button type="button" class="btn btn-xs" onclick="openMobileDigestModal()">预览手机端待办摘要</button>
+          </div>
         </div>
         <div class="form-group full">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -3129,8 +3216,122 @@
     </div>
   </div>
 
+  <!-- 弹窗：新增/编辑透明常驻记忆与红头规则 -->
+  <div class="modal-backdrop" id="memoryModalBackdrop" style="z-index:320;display:none;">
+    <div class="modal" style="max-width:600px;">
+      <div class="modal-header">
+        <span id="memoryModalTitle">新增业务记忆 / 红头规则</span>
+        <button class="btn btn-sm" onclick="closeMemoryModal()" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
+      </div>
+      <input type="hidden" id="memEditId" />
+      <div class="form-grid">
+        <div class="form-group">
+          <label>记忆分类 *</label>
+          <select id="memEditKind" class="form-control" onchange="toggleMemoryRedheadFields()">
+            <option value="contact">联络名片（邮箱/电话/联系人）</option>
+            <option value="redhead">红头配置（一岗多红头模板）</option>
+            <option value="recipient">发文对象（主送/抄送/简称）</option>
+            <option value="rule">注意事项（办理红线/偏好）</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>优先级</label>
+          <select id="memEditPriority" class="form-control">
+            <option value="1">P1 · 核心必读 / 红线</option>
+            <option value="2" selected>P2 · 常规常用</option>
+            <option value="3">P3 · 参考 / 按需检索</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>简短标题 *</label>
+          <input type="text" id="memEditTitle" class="form-control" placeholder="如：科室对外报送邮箱 / 安委办红头" />
+        </div>
+        <div class="form-group">
+          <label>生效范围</label>
+          <select id="memEditScope" class="form-control">
+            <option value="global">全局常驻 (global)</option>
+            <option value="draft">起草排版 (draft)</option>
+            <option value="task">收文建档 (task)</option>
+            <option value="report">汇报总结 (report)</option>
+            <option value="mobile">手机端 (mobile)</option>
+          </select>
+        </div>
+        <div class="form-group full">
+          <label>规则 / 事实内容 *（建议 ≤160 字，越直白 Agent 越不易误解）</label>
+          <textarea id="memEditRule" class="form-control" rows="3" placeholder="如：报送市局防灾科邮箱 yjglk@gaomi.gov.cn，值班电话 0536-232xxxx，发完须电话确认。"></textarea>
+        </div>
+        <div class="form-group">
+          <label>稳定短键 mem_key（可选，留空自动生成）</label>
+          <input type="text" id="memEditKey" class="form-control" placeholder="如：contact.office / redhead.anwei" />
+        </div>
+        <div class="form-group">
+          <label>触发关键词（逗号分隔，可选）</label>
+          <input type="text" id="memEditTriggers" class="form-control" placeholder="如：邮箱,报送,安委办" />
+        </div>
+        <div class="form-group full" id="memRedheadMetaWrap" style="display:none;border-top:1px dashed var(--border);padding-top:10px;">
+          <label style="font-weight:700;color:var(--danger);">红头排版联动参数（供国标 .docx 导出自动调用）</label>
+          <div class="form-grid" style="margin-top:6px;">
+            <div class="form-group">
+              <label>发文机关标志（红头抬头，如“高密市安委会办公室文件”）</label>
+              <input type="text" id="memRhHeader" class="form-control" />
+            </div>
+            <div class="form-group">
+              <label>发文字号前缀（如“高安办发”）</label>
+              <input type="text" id="memRhPrefix" class="form-control" />
+            </div>
+            <div class="form-group full">
+              <label>默认主送机关（如“各镇街区，市安委会有关成员单位”）</label>
+              <input type="text" id="memRhRecipients" class="form-control" />
+            </div>
+            <div class="form-group">
+              <label>默认抄送机关</label>
+              <input type="text" id="memRhCc" class="form-control" />
+            </div>
+            <div class="form-group">
+              <label>版记印发机关</label>
+              <input type="text" id="memRhIssuer" class="form-control" />
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+        <button class="btn" onclick="closeMemoryModal()">取消</button>
+        <button class="btn btn-primary" id="btnSaveMemory" onclick="saveMemoryModal()">保存并同步</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 弹窗：手机端/微信低成本待办摘要预览与一键复制 -->
+  <div class="modal-backdrop" id="digestModalBackdrop" style="z-index:320;display:none;">
+    <div class="modal" style="max-width:620px;">
+      <div class="modal-header">
+        <span>📱 待办摘要速览（低成本纯文本 · 直接复制发微信/手机）</span>
+        <button class="btn btn-sm" onclick="closeMobileDigestModal()" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">
+        <select id="digestPresetSelect" class="form-control" style="width:auto;padding:5px 8px;font-size:13px;" onchange="refreshMobileDigestPreview()">
+          <option value="urgent">紧急/逾期/3日内必盯</option>
+          <option value="all" selected>全部在办事项</option>
+          <option value="today">今日到期及逾期</option>
+          <option value="week">7日内到期</option>
+        </select>
+        <select id="digestTplSelect" class="form-control" style="width:auto;padding:5px 8px;font-size:13px;" onchange="refreshMobileDigestPreview()">
+          <option value="mobile" selected>手机速览模板</option>
+          <option value="checklist">极简清单模板</option>
+          <option value="report">领导汇报模板</option>
+        </select>
+        <span id="digestMetaInfo" style="font-size:12px;color:var(--text-muted);margin-left:auto;"></span>
+      </div>
+      <div id="digestPreviewBox" class="digest-preview-box">加载中...</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button class="btn" onclick="closeMobileDigestModal()">关闭</button>
+        <button class="btn btn-primary" onclick="copyMobileDigestText()">一键复制摘要文本</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 弹窗：统一非阻塞自定义对话框 -->
-  <div class="modal-backdrop" id="customDialogBackdrop" style="z-index:400;">
+  <div class="modal-backdrop" id="customDialogBackdrop" style="z-index:480;">
     <div class="modal" style="max-width:440px;">
       <div class="modal-header">
         <span id="customDialogTitle">操作确认</span>
@@ -3199,7 +3400,7 @@
 
   <script>
     let STATE = {
-      version: '3.3.0',
+      version: '3.3.5',
       can_view: true,
       can_edit: false,
       is_localhost: false,
@@ -3436,7 +3637,26 @@
     }
 
     function escapeJsAttr(str) {
-      return String(str ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, '\\n').replace(/\r/g, '');
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/"/g, '&quot;')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '');
+    }
+
+    function localDateStr(d = new Date()) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    function localYearMonthStr(d = new Date()) {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     }
 
     function debounceFn(fn, wait = 220) {
@@ -3831,7 +4051,7 @@
       return null;
     }
 
-    const DIRTY_TABS = { workbench: true, archives: true, records: true, library: true, recurring: true };
+    const DIRTY_TABS = { workbench: true, archives: true, records: true, library: true, recurring: true, memories: true };
     let _LAST_BOOTSTRAP_AT = 0;
 
     function renderActiveTabOnly() {
@@ -3841,6 +4061,7 @@
       else if (tab === 'records' && DIRTY_TABS.records) { renderRecordsModule(); DIRTY_TABS.records = false; }
       else if (tab === 'library' && DIRTY_TABS.library) { renderLibrary(); DIRTY_TABS.library = false; }
       else if (tab === 'recurring' && DIRTY_TABS.recurring) { renderRecurring(); DIRTY_TABS.recurring = false; }
+      else if (tab === 'memories' && DIRTY_TABS.memories) { loadAndRenderMemories(); DIRTY_TABS.memories = false; }
     }
 
     async function loadBootstrap() {
@@ -3853,10 +4074,14 @@
         renderCategorySelectors();
         renderKpiStrip();
         renderLanBanner();
+        updateMemoriesNavBadge();
         Object.keys(DIRTY_TABS).forEach(k => { DIRTY_TABS[k] = true; });
         renderActiveTabOnly();
       } catch (err) {
         console.warn(err);
+        if (err && err.message && err.message !== '需要密码登录') {
+          showToast('加载工作台数据失败：' + err.message);
+        }
       }
     }
 
@@ -3884,13 +4109,13 @@
         else STATE.documents.unshift(tf);
       });
 
+      DIRTY_TABS.library = true;
       renderHeaderAndAuth();
       renderKpiStrip();
       renderLanBanner();
 
       const cardEl = document.getElementById(`task_card_${updatedTask.id}`);
       const stillMatches = doesTaskMatchCurrentFilter(updatedTask);
-      // 排序后位置可能变化：只有在原位置没变时才原地替换，否则整表重绘
       let samePosition = false;
       if (cardEl && cardEl.parentNode) {
         const ordered = sortTaskList((STATE.tasks || []).filter(doesTaskMatchCurrentFilter));
@@ -3898,10 +4123,14 @@
         const domIdx = Array.prototype.indexOf.call(cardEl.parentNode.children, cardEl);
         samePosition = (targetIdx !== -1 && targetIdx === domIdx);
       }
-      if (cardEl && STATE.browseMode !== 'minimal' && STATE.taskViewMode === 'card' && stillMatches && samePosition) {
+      if (cardEl && stillMatches && samePosition && STATE.browseMode === 'minimal') {
+        const temp = document.createElement('div');
+        temp.innerHTML = STATE.minLayout === 'grid' ? buildMinimalTaskCardHtml(updatedTask) : buildMinimalListItemHtml(updatedTask);
+        if (temp.firstElementChild) cardEl.replaceWith(temp.firstElementChild);
+      } else if (cardEl && STATE.browseMode !== 'minimal' && STATE.taskViewMode === 'card' && stillMatches && samePosition) {
         const temp = document.createElement('div');
         temp.innerHTML = buildSingleTaskCardHtml(updatedTask);
-        cardEl.replaceWith(temp.firstElementChild);
+        if (temp.firstElementChild) cardEl.replaceWith(temp.firstElementChild);
       } else {
         renderTasks();
       }
@@ -3935,7 +4164,7 @@
     }
 
     function renderHeaderAndAuth() {
-      document.getElementById('verBadge').textContent = `v${STATE.version || '3.3.0'}`;
+      document.getElementById('verBadge').textContent = `v${STATE.version || '3.3.5'}`;
       const lanEl = document.getElementById('lanUrlBadge');
       if (lanEl) lanEl.innerHTML = `${ico('globe')}<span class="sb-foot-label">${escapeHtml(STATE.lan_url || '')}</span>`;
       const dirEl = document.getElementById('localDirBadge');
@@ -4025,7 +4254,8 @@
         records: 'Records',
         library: 'Library',
         recurring: 'Recurring',
-        summary: 'Summary'
+        summary: 'Summary',
+        memories: 'Memories'
       };
       Object.entries(tabMap).forEach(([k, suffix]) => {
         const sec = document.getElementById('tab' + suffix);
@@ -4660,7 +4890,11 @@
               <span>· ${escapeHtml(recDt)}</span>
             </span>
             <span class="min-fold-sum">来文 ${inc.length} · 材料 ${draft.length}</span>
-            <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" onclick="event.stopPropagation()" title="一键打包下载本事项全部文件">ZIP</a>
+            <span class="min-quick-ops" onclick="event.stopPropagation()">
+              <button class="btn btn-xs" onclick="copyHumanTaskSummary(${t.id})" title="一键复制精简待办摘要（可直接发微信/汇报）">摘要</button>
+              ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickAddProgressPrompt(${t.id})" title="不切视图，直接记一条最新进展">+进展</button>` : ''}
+              <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" title="一键打包下载本事项全部文件">ZIP</a>
+            </span>
           </div>
           <div class="min-list-body">
             <div class="min-file-block">
@@ -4701,7 +4935,11 @@
             ${t.is_pinned ? `<span class="badge badge-warning" style="margin-top:2px;">置顶</span>` : ''}
             <div class="min-card-title">${escapeHtml(t.title)}</div>
             <span class="min-fold-sum" style="${folded ? '' : 'display:none;'}">来文 ${inc.length} · 材料 ${draft.length}</span>
-            <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" onclick="event.stopPropagation()" title="一键打包下载">ZIP</a>
+            <span class="min-quick-ops" onclick="event.stopPropagation()">
+              <button class="btn btn-xs" onclick="copyHumanTaskSummary(${t.id})" title="一键复制精简待办摘要">摘要</button>
+              ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickAddProgressPrompt(${t.id})" title="快记一条进展">+进展</button>` : ''}
+              <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" title="一键打包下载">ZIP</a>
+            </span>
           </div>
           ${metaHtml}
           <div class="min-card-body">
@@ -4760,7 +4998,7 @@
       });
 
       // 按 置顶 / 本月 / 更早 插入轻量时间分组分隔条
-      const curMonth = new Date().toISOString().slice(0, 7);
+      const curMonth = localYearMonthStr();
       const groups = [
         { key: 'pinned', label: '置顶事项', items: [] },
         { key: 'month', label: `本月 (${curMonth})`, items: [] },
@@ -5016,7 +5254,7 @@
                   : (t.priority === '重要'
                     ? `<span class="badge badge-warning ${STATE.can_edit ? 'badge-clickable' : ''}" ${STATE.can_edit ? `onclick="cycleTaskPriority(${t.id}, '重要')" title="点击切换紧急程度"` : ''}>重要</span>`
                     : (STATE.can_edit ? `<span class="badge badge-priority-normal badge-clickable" onclick="cycleTaskPriority(${t.id}, '普通')" title="点击切换紧急程度">普通</span>` : ''))}
-                <span class="task-title" ${STATE.can_edit ? `ondblclick="event.stopPropagation();startInlineEditTaskField(this, ${t.id}, 'title')" title="双击就地修改标题 · 点右侧编辑打开完整表单"` : ''} onclick="openEditTaskModal(${t.id})">${escapeHtml(t.title)}</span>
+                <span class="task-title" ${STATE.can_edit ? `ondblclick="event.stopPropagation();startInlineEditTaskField(this, ${t.id}, 'title')" title="双击就地修改标题 · 点右侧编辑按钮打开完整表单"` : ''}>${escapeHtml(t.title)}</span>
               </div>
               <div class="task-submeta">
                 ${subMetaParts.map(p => `<span>${escapeHtml(p)}</span>`).join('<span>·</span>')}
@@ -5775,7 +6013,7 @@
     async function submitNewArchiveBundle() {
       let title = document.getElementById('archTitleInput').value.trim();
       const cat = document.getElementById('archCatSelect').value;
-      const archDate = document.getElementById('archDateInput').value || new Date().toISOString().slice(0, 10);
+      const archDate = document.getElementById('archDateInput').value || localDateStr();
       const notes = document.getElementById('archNotesInput').value.trim();
       const rawTags = document.getElementById('archTagsInput').value.trim();
       const tags = rawTags ? rawTags.split(/[\s,，、]+/).filter(Boolean) : [];
@@ -5853,7 +6091,7 @@
       if (catListEl) catListEl.innerHTML = catHtml;
 
       const dateInp = document.getElementById('archDateInput');
-      if (dateInp && !dateInp.value) dateInp.value = new Date().toISOString().slice(0, 10);
+      if (dateInp && !dateInp.value) dateInp.value = localDateStr();
 
       const kw = (document.getElementById('archSearchInput')?.value || '').trim().toLowerCase();
       const filtered = allArchives.filter(a => {
@@ -7668,8 +7906,19 @@
       if (nextId) openDocPreview(nextId);
     }
 
+    let _docPreviewReqSeq = 0;
     async function openDocPreview(docId) {
+      if (STATE.editorDirty && STATE.drawerDoc && STATE.drawerDoc.id !== docId) {
+        const dlg = await showCustomDialog({
+          title: '草稿尚未保存',
+          message: '当前在线编辑的内容尚未保存，切换文件将丢失未保存改动，确定继续吗？',
+          danger: true
+        });
+        if (!dlg || !dlg.confirmed) return;
+      }
+      const reqSeq = ++_docPreviewReqSeq;
       const res = await apiFetch(`/api/docs/${docId}/preview`);
+      if (reqSeq !== _docPreviewReqSeq) return;
       const d = res.document;
       STATE.drawerDoc = d;
       STATE.drawerTaskId = d.task_id || null;
@@ -7685,6 +7934,7 @@
 
       const dlLink = document.getElementById('drawerDownloadLink');
       dlLink.href = `/api/docs/${d.id}/download`;
+      dlLink.textContent = '下载原件';
       dlLink.style.display = 'inline-flex';
       document.getElementById('btnDrawerFormatGw').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerFormatRedhead').style.display = STATE.can_edit ? 'inline-flex' : 'none';
@@ -7745,7 +7995,7 @@
         });
         const nd = res.document || {};
         const newAbs = nd.abs_path || (d.abs_path
-          ? d.abs_path.slice(0, d.abs_path.lastIndexOf('/') + 1) + (nd.filename || finalName)
+          ? d.abs_path.slice(0, Math.max(d.abs_path.lastIndexOf('/'), d.abs_path.lastIndexOf('\\')) + 1) + (nd.filename || finalName)
           : '');
 
         STATE.drawerDoc = { ...d, ...nd, abs_path: newAbs };
@@ -8062,6 +8312,11 @@
     }
 
     async function saveTaskModal() {
+      const titleVal = document.getElementById('editTaskTitleInput').value.trim();
+      if (!titleVal) { showToast('请填写事项标题'); document.getElementById('editTaskTitleInput').focus(); return; }
+      const saveBtn = document.querySelector('#taskModalBackdrop .btn-primary');
+      if (saveBtn) saveBtn.disabled = true;
+      try {
       const id = document.getElementById('editTaskId').value;
       const lines = document.getElementById('editTaskChecklist').value.split('\n').map(s => s.trim()).filter(Boolean);
       const checklist = lines.map((ln, idx) => {
@@ -8098,6 +8353,9 @@
         updateSingleTaskInStateAndDOM(res.task);
       }
       showToast('事项已保存并同步更新本地物理文件夹！');
+      } finally {
+        if (saveBtn) saveBtn.disabled = false;
+      }
     }
 
     async function deleteCurrentTask() {
@@ -8122,13 +8380,18 @@
       const period = document.getElementById('summaryPeriodInput').value.trim() || '近期阶段工作';
       const box = document.getElementById('summaryResultArea');
       box.textContent = '正在汇总工作台办文台账、会议培训下沉存档并生成阶段工作总结汇报初稿...';
-      const res = await apiFetch('/api/ai/summary', {
-        method: 'POST',
-        body: JSON.stringify({ period_label: period })
-      });
-      box.dataset.rawMd = res.summary_markdown || '';
-      box.innerHTML = renderSimpleMarkdown(res.summary_markdown || '');
-      showToast('阶段工作总结初稿已生成！');
+      try {
+        const res = await apiFetch('/api/ai/summary', {
+          method: 'POST',
+          body: JSON.stringify({ period_label: period })
+        });
+        box.dataset.rawMd = res.summary_markdown || '';
+        box.innerHTML = renderSimpleMarkdown(res.summary_markdown || '');
+        showToast('阶段工作总结初稿已生成！');
+      } catch (err) {
+        box.textContent = '生成失败：' + (err && err.message ? err.message : '请求异常');
+        showToast('阶段总结生成失败');
+      }
     }
 
     function copySummaryText() {
@@ -8494,6 +8757,16 @@
         }
       }
 
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
+        const dr = document.getElementById('previewDrawer');
+        const edBox = document.getElementById('drawerEditorBox');
+        if (dr && dr.style.display === 'flex' && edBox && edBox.style.display !== 'none' && STATE.can_edit) {
+          ev.preventDefault();
+          if (typeof saveDrawerEditorText === 'function') saveDrawerEditorText();
+          return;
+        }
+      }
+
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
         ev.preventDefault();
         const inp = document.getElementById('globalSearchInput');
@@ -8501,7 +8774,10 @@
         return;
       }
 
-      if (!inInput && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+      const _hasModalOpen = (typeof _topOpenBackdropId === 'function' && !!_topOpenBackdropId());
+      const _drawerOpen = (document.getElementById('previewDrawer')?.style.display === 'flex');
+
+      if (!inInput && !_hasModalOpen && !_drawerOpen && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
         if (ev.key === '/') {
           ev.preventDefault();
           const inp = document.getElementById('globalSearchInput');
@@ -8534,10 +8810,10 @@
         }
       }
 
-      if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !inInput) {
-        const tabOrder = ['workbench', 'archives', 'records', 'library', 'recurring', 'summary'];
+      if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !inInput && !_hasModalOpen) {
+        const tabOrder = ['workbench', 'archives', 'records', 'library', 'recurring', 'summary', 'memories'];
         const num = parseInt(ev.key);
-        if (num >= 1 && num <= 6) {
+        if (num >= 1 && num <= 7) {
           ev.preventDefault();
           switchMainTab(tabOrder[num - 1]);
           return;
@@ -8631,9 +8907,300 @@
         const ae = document.activeElement;
         const tag = (ae && ae.tagName || '').toUpperCase();
         if (tag === 'INPUT' || tag === 'TEXTAREA' || (ae && ae.isContentEditable)) return;
+        if (typeof _topOpenBackdropId === 'function' && _topOpenBackdropId()) return;
+        if (document.getElementById('previewDrawer')?.style.display === 'flex') return;
         loadBootstrap();
       }
     });
+
+    // ==================== v3.3.5: 透明常驻记忆库 + 移动端待办摘要 + 快捷操作 ====================
+    STATE.memories = [];
+    STATE.memoryKindFilter = '';
+
+    function updateMemoriesNavBadge() {
+      const badge = document.getElementById('memCountBadge');
+      if (!badge) return;
+      const pending = Number(STATE.memory_pending_count || 0);
+      if (pending > 0) {
+        badge.textContent = `待审${pending}`;
+        badge.style.display = 'inline-block';
+        badge.style.background = '#f59e0b';
+        badge.style.color = '#fff';
+      } else if (STATE.memories && STATE.memories.length > 0) {
+        badge.textContent = String(STATE.memories.length);
+        badge.style.display = 'inline-block';
+        badge.style.background = '';
+        badge.style.color = '';
+      } else {
+        badge.style.display = 'none';
+      }
+      const tokEl = document.getElementById('cfgAgentTokenPreview');
+      if (tokEl) {
+        tokEl.textContent = STATE.is_localhost && STATE.agent_token
+          ? `X-Agent-Token: ${STATE.agent_token}`
+          : '仅本机 127.0.0.1 可查看 Token 与完整 MCP 路径';
+      }
+    }
+
+    async function loadAndRenderMemories() {
+      try {
+        const res = await apiFetch('/api/memories');
+        STATE.memories = res.memories || [];
+        STATE.memory_revision = res.revision || 1;
+        STATE.memory_pending_count = res.pending_count || 0;
+        const revEl = document.getElementById('memRevBadge');
+        if (revEl) revEl.textContent = `rev=${STATE.memory_revision} · 生效 ${res.active_count || 0}/${STATE.memories.length}`;
+        updateMemoriesNavBadge();
+        renderMemoriesTab();
+      } catch (err) {
+        const g = document.getElementById('memoriesGrid');
+        if (g) g.innerHTML = `<div style="color:var(--danger);font-size:13px;">加载记忆库失败：${escapeHtml(err.message || '')}</div>`;
+      }
+    }
+
+    function setMemoryKindFilter(kind) {
+      STATE.memoryKindFilter = kind || '';
+      document.querySelectorAll('#memKindFilter .filter-pill').forEach(btn => {
+        btn.classList.toggle('active', (btn.dataset.kind || '') === STATE.memoryKindFilter);
+      });
+      renderMemoriesTab();
+    }
+
+    function renderMemoriesTab() {
+      const grid = document.getElementById('memoriesGrid');
+      if (!grid) return;
+      const q = (document.getElementById('memSearchInput')?.value || '').trim().toLowerCase();
+      const list = (STATE.memories || []).filter(m => {
+        if (STATE.memoryKindFilter && m.kind !== STATE.memoryKindFilter) return false;
+        if (q) {
+          const hay = `${m.mem_key} ${m.title} ${m.rule_text} ${(m.triggers || []).join(' ')} ${JSON.stringify(m.meta || {})}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+      if (!list.length) {
+        grid.innerHTML = '<div style="grid-column:1/-1;padding:28px;text-align:center;color:var(--text-muted);font-size:13.5px;">暂无匹配的业务记忆条目。点击右上角「+ 新增记忆/红头」记录你的邮箱、电话、常用红头、发文对象或注意事项，Agent 即可透明调用并按你口头指令实时更新。</div>';
+        return;
+      }
+      grid.innerHTML = list.map(m => {
+        const isPend = m.review_status === 'pending_review';
+        const rhInfo = (m.kind === 'redhead' && m.meta && (m.meta.display_header || m.meta.doc_num_prefix))
+          ? `<div style="font-size:12px;color:var(--text-muted);background:var(--surface-alt);padding:6px 8px;border-radius:6px;">红头：${escapeHtml(m.meta.display_header || '')}${m.meta.doc_num_prefix ? ' ｜ 代字：' + escapeHtml(m.meta.doc_num_prefix) : ''}${m.meta.default_recipients ? ' ｜ 主送：' + escapeHtml(m.meta.default_recipients) : ''}</div>`
+          : '';
+        return `
+          <div class="mem-card ${m.enabled ? '' : 'is-disabled'} ${isPend ? 'is-pending' : ''}">
+            <div class="mem-card-head">
+              <span class="mem-kind-pill k-${escapeHtml(m.kind)}">${escapeHtml(m.kind_label || m.kind)}</span>
+              <span class="badge badge-normal">P${m.priority}</span>
+              ${isPend ? '<span class="badge badge-warning">Agent提议待审</span>' : ''}
+              <span class="mem-card-title">${escapeHtml(m.title)}</span>
+              ${STATE.can_edit ? `<button class="btn btn-xs" onclick="toggleMemoryItem(${m.id})">${m.enabled ? '停用' : '启用'}</button>` : ''}
+            </div>
+            <div class="mem-card-rule">${escapeHtml(m.rule_text)}</div>
+            ${rhInfo}
+            <div class="mem-card-meta">
+              <span>key: <code>${escapeHtml(m.mem_key)}</code></span>
+              <span>范围: ${escapeHtml(m.scope_label || m.scope)}</span>
+              <span>调用 ${m.hit_count || 0} 次</span>
+              <span>来源: ${escapeHtml(m.source || 'user_ui')}</span>
+              <span style="margin-left:auto;display:flex;gap:5px;">
+                ${(STATE.can_edit && isPend) ? `<button class="btn btn-xs btn-success" onclick="approveMemoryItem(${m.id})">批准生效</button>` : ''}
+                ${STATE.can_edit ? `<button class="btn btn-xs" onclick="openMemoryModal(${m.id})">编辑</button><button class="btn btn-xs" style="color:var(--danger);" onclick="deleteMemoryItem(${m.id})">删除</button>` : ''}
+              </span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function toggleMemoryRedheadFields() {
+      const k = document.getElementById('memEditKind')?.value;
+      const w = document.getElementById('memRedheadMetaWrap');
+      if (w) w.style.display = (k === 'redhead') ? 'block' : 'none';
+    }
+
+    function openMemoryModal(id = null) {
+      const m = id ? (STATE.memories || []).find(x => x.id === id) : null;
+      document.getElementById('memoryModalTitle').textContent = m ? '编辑业务记忆 / 红头规则' : '新增业务记忆 / 红头规则';
+      document.getElementById('memEditId').value = m ? String(m.id) : '';
+      document.getElementById('memEditKind').value = m ? m.kind : (STATE.memoryKindFilter || 'contact');
+      document.getElementById('memEditPriority').value = m ? String(m.priority || 2) : '1';
+      document.getElementById('memEditTitle').value = m ? m.title : '';
+      document.getElementById('memEditScope').value = m ? m.scope : 'global';
+      document.getElementById('memEditRule').value = m ? m.rule_text : '';
+      document.getElementById('memEditKey').value = m ? m.mem_key : '';
+      document.getElementById('memEditTriggers').value = m ? (m.triggers || []).join(', ') : '';
+      const meta = (m && m.meta) || {};
+      document.getElementById('memRhHeader').value = meta.display_header || '';
+      document.getElementById('memRhPrefix').value = meta.doc_num_prefix || '';
+      document.getElementById('memRhRecipients').value = meta.default_recipients || '';
+      document.getElementById('memRhCc').value = meta.default_cc || '';
+      document.getElementById('memRhIssuer').value = meta.issuer_name || '';
+      toggleMemoryRedheadFields();
+      document.getElementById('memoryModalBackdrop').style.display = 'flex';
+    }
+
+    function closeMemoryModal() {
+      document.getElementById('memoryModalBackdrop').style.display = 'none';
+    }
+
+    async function saveMemoryModal() {
+      const title = document.getElementById('memEditTitle').value.trim();
+      const rule_text = document.getElementById('memEditRule').value.trim();
+      if (!title || !rule_text) { showToast('请填写标题和规则/事实内容'); return; }
+      const btn = document.getElementById('btnSaveMemory');
+      if (btn) btn.disabled = true;
+      try {
+        const id = document.getElementById('memEditId').value.trim();
+        const kind = document.getElementById('memEditKind').value;
+        const meta = kind === 'redhead' ? {
+          display_header: document.getElementById('memRhHeader').value.trim(),
+          doc_num_prefix: document.getElementById('memRhPrefix').value.trim(),
+          default_recipients: document.getElementById('memRhRecipients').value.trim(),
+          default_cc: document.getElementById('memRhCc').value.trim(),
+          issuer_name: document.getElementById('memRhIssuer').value.trim(),
+        } : {};
+        const payload = {
+          id: id ? Number(id) : undefined,
+          mem_key: document.getElementById('memEditKey').value.trim(),
+          kind,
+          priority: Number(document.getElementById('memEditPriority').value || 2),
+          scope: document.getElementById('memEditScope').value,
+          title,
+          rule_text,
+          triggers: document.getElementById('memEditTriggers').value.trim(),
+          meta,
+          source: 'user_ui',
+          review_status: 'approved'
+        };
+        await apiFetch(id ? `/api/memories/${id}` : '/api/memories', {
+          method: id ? 'PUT' : 'POST',
+          body: JSON.stringify(payload)
+        });
+        closeMemoryModal();
+        await loadAndRenderMemories();
+        showToast('业务记忆已保存并实时同步！');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function toggleMemoryItem(id) {
+      await apiFetch(`/api/memories/${id}/toggle`, { method: 'POST', body: '{}' });
+      await loadAndRenderMemories();
+      showToast('已更新启用状态');
+    }
+
+    async function approveMemoryItem(id) {
+      await apiFetch(`/api/memories/${id}/approve`, { method: 'POST', body: '{}' });
+      await loadAndRenderMemories();
+      showToast('已批准并全局生效');
+    }
+
+    async function deleteMemoryItem(id) {
+      const dlg = await showCustomDialog({ title: '删除记忆条目', message: '确定删除这条业务记忆吗？', danger: true });
+      if (!dlg || !dlg.confirmed) return;
+      await apiFetch(`/api/memories/${id}`, { method: 'DELETE' });
+      await loadAndRenderMemories();
+      showToast('已删除该条记忆');
+    }
+
+    async function copyAgentMemoryBrief() {
+      const res = await apiFetch('/api/memories/brief');
+      copyText(res.text || '', '已复制 Agent 常驻记忆简报！');
+    }
+
+    // 移动端/微信待办摘要弹窗与单卡微操作
+    async function openMobileDigestModal() {
+      document.getElementById('digestModalBackdrop').style.display = 'flex';
+      await refreshMobileDigestPreview();
+    }
+    function closeMobileDigestModal() {
+      document.getElementById('digestModalBackdrop').style.display = 'none';
+    }
+    async function refreshMobileDigestPreview() {
+      const box = document.getElementById('digestPreviewBox');
+      const info = document.getElementById('digestMetaInfo');
+      const preset = document.getElementById('digestPresetSelect')?.value || 'all';
+      const tpl = document.getElementById('digestTplSelect')?.value || 'mobile';
+      box.textContent = '正在生成轻量摘要...';
+      try {
+        const res = await apiFetch(`/api/tasks/digest?preset=${encodeURIComponent(preset)}&template=${encodeURIComponent(tpl)}`);
+        box.textContent = res.text || '';
+        if (info) info.textContent = `匹配 ${res.total_matched || 0} 项 · 约 ${(res.text || '').length} 字`;
+      } catch (err) {
+        box.textContent = '生成失败：' + (err.message || '');
+      }
+    }
+    function copyMobileDigestText() {
+      const txt = document.getElementById('digestPreviewBox')?.textContent || '';
+      if (!txt) return;
+      copyText(txt, '已复制待办摘要，可直接粘贴发微信或手机！');
+    }
+
+    function copyHumanTaskSummary(taskId) {
+      const t = (STATE.tasks || []).find(x => x.id === taskId);
+      if (!t) return;
+      const latest = (t.progress_logs && t.progress_logs.length) ? t.progress_logs[t.progress_logs.length - 1].text : '推进中';
+      const parts = [
+        `【事项】#${t.id} ${t.title}`,
+        t.doc_number ? `【文号】${t.doc_number}` : '',
+        t.deadline ? `【截止】${t.deadline}` : '',
+        t.summary ? `【要求】${t.summary}` : '',
+        `【进展】${latest}`
+      ].filter(Boolean);
+      copyText(parts.join('\n'), '已复制精简待办摘要！');
+    }
+
+    async function quickAddProgressPrompt(taskId) {
+      const dlg = await showCustomDialog({
+        title: `快记进展 (#${taskId})`,
+        message: '输入最新办理进展（回车直接保存，无需切换视图）：',
+        inputPlaceholder: '如：已报送市局邮箱并电话确认'
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ append_progress: dlg.value.trim() })
+      });
+      if (res && res.task) updateSingleTaskInStateAndDOM(res.task);
+      showToast('进展已记录！');
+    }
+
+    async function testAiConnection() {
+      const btn = document.getElementById('btnTestAiConn');
+      const out = document.getElementById('aiTestResultText');
+      if (btn) btn.disabled = true;
+      if (out) { out.textContent = '正在测试连通性...'; out.style.color = 'var(--text-muted)'; }
+      try {
+        const res = await apiFetch('/api/ai/test', {
+          method: 'POST',
+          body: JSON.stringify({
+            ai_api_base: document.getElementById('cfgAiBase')?.value.trim() || '',
+            ai_api_key: document.getElementById('cfgAiKey')?.value.trim() || '',
+            ai_model: document.getElementById('cfgAiModel')?.value.trim() || ''
+          })
+        });
+        if (res.ok) {
+          out.textContent = `连通正常（${res.latency_ms}ms · ${res.model || ''}）`;
+          out.style.color = '#16a34a';
+        } else {
+          out.textContent = `连接失败：${res.error || '未知错误'}`;
+          out.style.color = 'var(--danger)';
+        }
+      } catch (err) {
+        if (out) { out.textContent = '测试失败：' + (err.message || ''); out.style.color = 'var(--danger)'; }
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function copyMcpConfigJson() {
+      const ws = (STATE.workspace_root || '').replace(/[\\/]workspace_files$/, '');
+      const wbPath = ws ? `${ws}/wb.py` : '/你的绝对路径/gw-workbench/wb.py';
+      const cfg = { mcpServers: { "gw-workbench": { command: "python3", args: [wbPath, "mcp"] } } };
+      copyText(JSON.stringify(cfg, null, 2), '已复制 MCP 配置 JSON！');
+    }
 
     window.addEventListener('DOMContentLoaded', () => {
       if (localStorage.getItem('wb_sidebar_collapsed') === '1') {

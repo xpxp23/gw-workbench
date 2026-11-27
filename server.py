@@ -46,7 +46,7 @@ from datetime import datetime, date, timedelta
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 from parser import (
     extract_document_text,
@@ -65,8 +65,22 @@ from ai_engine import (
     extract_reference_terms,
 )
 from gw_formatter import build_gb9704_docx
+from memory_store import (
+    MIRROR_FILENAME as MEMORY_MIRROR_FILENAME,
+    approve_memory,
+    build_memory_brief,
+    delete_memory,
+    get_active_memory_prompt,
+    get_redhead_profiles,
+    init_memory_tables,
+    list_memories,
+    search_memories,
+    toggle_memory,
+    upsert_memory,
+)
+from digest_service import build_tasks_digest, compute_digest_etag
 
-VERSION = "3.3.0"
+VERSION = (Path(__file__).resolve().parent / "VERSION").read_text(encoding="utf-8").strip() if (Path(__file__).resolve().parent / "VERSION").exists() else "3.3.5"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "workbench.db"
@@ -137,7 +151,7 @@ DEFAULT_CONFIG = {
 
 logger = logging.getLogger("gw_workbench.server")
 DB_LOCK = threading.RLock()
-_CONFIG_LOCK = threading.Lock()
+_CONFIG_LOCK = threading.RLock()
 _CONFIG_CACHE: Tuple[float, Optional[Dict[str, Any]]] = (0.0, None)
 _SYNC_STATE_LOCK = threading.Lock()
 _SYNC_RUNNING_LOCK = threading.Lock()
@@ -778,6 +792,9 @@ def init_db() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_starred_id ON documents(is_starred DESC, id DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_content_hash ON documents(content_hash)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_task_subfolder ON documents(task_id, sub_folder)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_deadline ON tasks(status, deadline)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC)")
+            init_memory_tables(conn)
 
             try:
                 cur.execute(
@@ -1595,7 +1612,8 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
                 return stats
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        README_NAMES = {"00_事项要求与进展.md", "00_存档说明与纪要.md", "00_重要事项内容.md"}
+        README_NAMES = {
+    "00_业务记忆与规则.md","00_事项要求与进展.md", "00_存档说明与纪要.md", "00_重要事项内容.md"}
 
         # Phase 1: 快速读取既有文档索引（微秒级持锁），随后在锁外完成耗时文本解析与指纹计算
         with DB_LOCK:
@@ -1744,7 +1762,7 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
                                     continue
                                 sf_name = rel_to_entry.parts[0] if (task_obj and len(rel_to_entry.parts) > 1) else ""
                                 auto_tags = [entry.name] if (not task_obj and entry.name != cat_name) else []
-                                prev_changes = stats["added"] + stats["updated"]
+                                prev_changes = stats["added"] + stats["updated"] + stats["renamed"]
                                 _upsert_synced_doc(
                                     conn, sub_file, ws_root, existing_docs, seen_rel_paths,
                                     cat_name=cat_name, now_str=now_str, stats=stats,
@@ -1753,7 +1771,7 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
                                     sub_folder=sf_name,
                                     pre_parsed=pre_parsed,
                                 )
-                                if task_obj and (stats["added"] + stats["updated"]) > prev_changes:
+                                if task_obj and (stats["added"] + stats["updated"] + stats["renamed"]) > prev_changes:
                                     dirty_task_readme_ids.add(int(task_obj["id"]))
                         elif entry.is_file():
                             if entry.name in README_NAMES:
@@ -1927,7 +1945,18 @@ def sync_filesystem(force: bool = False) -> Dict[str, int]:
                                 if not rm_path.exists():
                                     write_record_readme_file(conn, rid)
 
-                # ---------- D. 清理磁盘上已移除的文件索引及孤儿目录记录（含 tasks / archives / important_records） ----------
+                # ---------- D. 清理磁盘上已移除的文件索引及孤儿目录记录（带空盘熔断保护，防止挂载盘掉线清空数据库） ----------
+                _total_known = len(existing_docs) + len(tasks)
+                _disk_has_any = bool(seen_rel_paths) or any(
+                    (ws_root / t_o["folder_rel_path"]).exists()
+                    for t_o in list(tasks.values())[:20]
+                    if t_o.get("folder_rel_path")
+                )
+                if _total_known >= 5 and not _disk_has_any:
+                    logger.error("sync_filesystem: 空盘熔断保护触发（库内 %d 条记录但磁盘扫描为空），已跳过清理以防误删！", _total_known)
+                    conn.commit()
+                    return stats
+
                 for rel_p, doc_rec in existing_docs.items():
                     if rel_p not in seen_rel_paths:
                         abs_p = ws_root / rel_p
@@ -2647,12 +2676,20 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     ai_parsed = {}
     if auto_ai and (full_source_text or first_filename):
+        mem_prompt = ""
+        try:
+            with DB_LOCK:
+                with db_conn() as _mc:
+                    mem_prompt, _ = get_active_memory_prompt(_mc, scope="task")
+        except Exception:
+            mem_prompt = ""
         ai_parsed = parse_incoming_content(
             full_source_text,
             filename=first_filename,
             source_hint=payload.get("source_channel") or "",
             categories=categories,
             config=cfg,
+            memory_prompt=mem_prompt,
         )
 
     title = sanitize_filename(payload.get("title") or ai_parsed.get("title") or first_filename or "新建工作事项")
@@ -2785,6 +2822,15 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
                         file_type, file_size, mtime, extracted_text,
                         tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
                     ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                    ON CONFLICT(rel_path) DO UPDATE SET
+                        task_id=excluded.task_id,
+                        doc_role=excluded.doc_role,
+                        sub_folder=excluded.sub_folder,
+                        file_size=excluded.file_size,
+                        mtime=excluded.mtime,
+                        extracted_text=excluded.extracted_text,
+                        content_hash=excluded.content_hash,
+                        updated_at=excluded.updated_at
                     """,
                     (
                         task_id,
@@ -2861,10 +2907,11 @@ def create_archive_record(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         tags = [str(t).strip() for t in raw_tags if str(t).strip()]
 
-    # 锁外解码并提取文本与指纹
+    # 锁外解码并提取文本与指纹（修复 CLI/MCP local_source_path 写出 0 字节空文件 Bug）
+    allow_local = bool(payload.get("_allow_local_path", False))
     prepared_files = []
     for fitem in uploaded_files:
-        fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
+        fname, raw_bytes, _ = _decode_file_item_bytes(fitem, allow_local_path=allow_local)
         ext_text, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
         prepared_files.append((fname, raw_bytes, ext_text, ftype, _bytes_content_sig(raw_bytes)))
 
@@ -2916,6 +2963,13 @@ def create_archive_record(payload: Dict[str, Any]) -> Dict[str, Any]:
                         file_type, file_size, mtime, extracted_text,
                         tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
                     ) VALUES (NULL, ?, NULL, ?, ?, ?, 'archive', '', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+                    ON CONFLICT(rel_path) DO UPDATE SET
+                        archive_id=excluded.archive_id,
+                        file_size=excluded.file_size,
+                        mtime=excluded.mtime,
+                        extracted_text=excluded.extracted_text,
+                        content_hash=excluded.content_hash,
+                        updated_at=excluded.updated_at
                     """,
                     (
                         archive_id,
@@ -2941,14 +2995,14 @@ def create_archive_record(payload: Dict[str, Any]) -> Dict[str, Any]:
     return res
 
 
-def append_files_to_archive(archive_id: int, files_list: List[Dict[str, Any]], notes_append: str = "") -> Optional[Dict[str, Any]]:
+def append_files_to_archive(archive_id: int, files_list: List[Dict[str, Any]], notes_append: str = "", allow_local_path: bool = False) -> Optional[Dict[str, Any]]:
     cfg = load_config()
     ws_root = get_workspace_root(cfg)
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     prepared_files = []
     for fitem in files_list:
-        fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
+        fname, raw_bytes, _ = _decode_file_item_bytes(fitem, allow_local_path=allow_local_path)
         ext_text, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
         prepared_files.append((fname, raw_bytes, ext_text, ftype, _bytes_content_sig(raw_bytes)))
 
@@ -3050,9 +3104,10 @@ def upsert_important_record(payload: Dict[str, Any], record_id: Optional[int] = 
     else:
         tags = [str(t).strip() for t in raw_tags if str(t).strip()]
 
+    allow_local = bool(payload.get("_allow_local_path", False))
     prepared_files = []
     for fitem in uploaded_files:
-        fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
+        fname, raw_bytes, _ = _decode_file_item_bytes(fitem, allow_local_path=allow_local)
         ext_text, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
         prepared_files.append((fname, raw_bytes, ext_text, ftype, _bytes_content_sig(raw_bytes)))
 
@@ -3864,7 +3919,10 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_json_body(self) -> Dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            return {}
         if length <= 0 or length > MAX_JSON_BODY_BYTES:
             return {}
         raw = self.rfile.read(length)
@@ -4162,21 +4220,27 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         recurring_rules.append(r_dict)
 
             lan_ip_cached = get_lan_ip()
+            with DB_LOCK:
+                with db_conn() as _mconn:
+                    mem_summary = list_memories(_mconn)
+                    rh_profiles = get_redhead_profiles(_mconn)
+            is_local = self._is_localhost()
             self._send_json({
                 "version": VERSION,
                 "can_view": can_view,
                 "can_edit": can_edit,
-                "is_localhost": self._is_localhost(),
+                "is_localhost": is_local,
                 "lan_url": f"http://{lan_ip_cached}:{cfg.get('port', 8090)}",
-                "workspace_root": str(ws_root),
+                "workspace_root": str(ws_root) if can_edit else "",
                 "default_org_name": cfg.get("default_org_name", "县应急管理局"),
                 "lan_notice": cfg.get("lan_notice", ""),
                 "ai_configured": bool(cfg.get("ai_api_base")),
-                "ai_model": cfg.get("ai_model", "deepseek-chat"),
-                "ai_api_base": cfg.get("ai_api_base", ""),
-                "xkl_gw_cli": cfg.get("xkl_gw_cli", ""),
+                "ai_model": cfg.get("ai_model", "deepseek-chat") if can_edit else "",
+                "ai_api_base": cfg.get("ai_api_base", "") if can_edit else "",
+                "xkl_gw_cli": cfg.get("xkl_gw_cli", "") if is_local else "",
+                "agent_token": cfg.get("agent_token", "") if is_local else "",
                 "prefix_archived_folder": bool(cfg.get("prefix_archived_folder", False)),
-                "ip_whitelist": cfg.get("ip_whitelist", ""),
+                "ip_whitelist": cfg.get("ip_whitelist", "") if can_edit else "",
                 "my_lan_ip": lan_ip_cached,
                 "categories": categories,
                 "archive_categories": archive_categories,
@@ -4186,6 +4250,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 "archives": archives,
                 "important_records": important_records,
                 "recurring_rules": recurring_rules,
+                "memory_revision": mem_summary.get("revision", 1),
+                "memory_pending_count": mem_summary.get("pending_count", 0),
+                "redhead_profiles": rh_profiles,
                 "sync_stats": sync_stats,
             })
             return
@@ -4422,8 +4489,13 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 try:
                     r_part = range_hdr.split("=", 1)[1].split(",")[0].strip()
                     start_s, end_s = r_part.split("-", 1)
-                    start = int(start_s) if start_s else 0
-                    end = int(end_s) if end_s else (file_size - 1)
+                    if not start_s and end_s:
+                        suffix_len = int(end_s)
+                        start = max(0, file_size - suffix_len)
+                        end = file_size - 1
+                    else:
+                        start = int(start_s) if start_s else 0
+                        end = int(end_s) if end_s else (file_size - 1)
                     end = min(end, file_size - 1)
                     if 0 <= start <= end < file_size:
                         end = min(end, start + 4 * 1024 * 1024 - 1)
@@ -4452,6 +4524,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(file_size))
+            if ctype == "image/svg+xml":
+                self.send_header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
+                self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{encoded_name}")
             self.end_headers()
             with open(file_path, "rb") as f:
@@ -4736,17 +4811,125 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(csv_bytes)
                 return
 
+        # v3.3.5: 移动端低成本待办摘要导出（零扫盘、严格只读、强 ETag 304 缓存）
+        if path in ("/api/tasks/digest", "/api/export/mobile-digest"):
+            with DB_LOCK:
+                with db_conn() as conn:
+                    etag = compute_digest_etag(conn)
+                    if self.headers.get("If-None-Match") == etag:
+                        self.send_response(304)
+                        self.send_header("ETag", etag)
+                        self.end_headers()
+                        return
+                    lim_raw = (qs.get("limit") or ["15"])[0]
+                    mc_raw = (qs.get("max_chars") or ["1500"])[0]
+                    res = build_tasks_digest(
+                        conn,
+                        preset=(qs.get("preset") or ["all"])[0],
+                        ids=(qs.get("ids") or [""])[0],
+                        category=(qs.get("category") or [""])[0],
+                        due=(qs.get("due") or [""])[0],
+                        status=(qs.get("status") or ["active"])[0],
+                        priority=(qs.get("priority") or [""])[0],
+                        query=(qs.get("query") or [""])[0],
+                        template=(qs.get("template") or ["mobile"])[0],
+                        limit=int(lim_raw) if str(lim_raw).isdigit() else 15,
+                        max_chars=int(mc_raw) if str(mc_raw).isdigit() else 1500,
+                        include_done_today=(qs.get("include_done_today") or ["0"])[0] in ("1", "true", "yes"),
+                    )
+            fmt = (qs.get("format") or ["json"])[0].lower()
+            if fmt in ("text", "plain", "md"):
+                raw = (res.get("text") or "").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("ETag", res["etag"])
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self._send_json(res)
+            return
+
+        # v3.3.5: 透明常驻业务记忆与红头规则库 GET 接口
+        if path == "/api/memories":
+            with DB_LOCK:
+                with db_conn() as conn:
+                    res = list_memories(
+                        conn,
+                        kind=(qs.get("kind") or [""])[0],
+                        scope=(qs.get("scope") or [""])[0],
+                        enabled_only=(qs.get("enabled_only") or ["0"])[0] in ("1", "true"),
+                        include_pending=(qs.get("include_pending") or ["1"])[0] not in ("0", "false"),
+                        query=(qs.get("query") or [""])[0],
+                    )
+            self._send_json(res)
+            return
+
+        if path == "/api/memories/brief":
+            since_raw = (qs.get("since_rev") or ["0"])[0]
+            since_val = int(since_raw) if str(since_raw).isdigit() else 0
+            mi_raw = (qs.get("max_items") or ["15"])[0]
+            mc_raw = (qs.get("max_chars") or ["1200"])[0]
+            with DB_LOCK:
+                with db_conn() as conn:
+                    res = build_memory_brief(
+                        conn,
+                        scene=(qs.get("scene") or [""])[0],
+                        since_rev=since_val,
+                        max_items=int(mi_raw) if str(mi_raw).isdigit() else 15,
+                        max_chars=int(mc_raw) if str(mc_raw).isdigit() else 1200,
+                    )
+                    conn.commit()
+            fmt = (qs.get("format") or ["json"])[0].lower()
+            if fmt in ("text", "plain"):
+                raw = (res.get("text") or "").encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+            self._send_json(res)
+            return
+
+        if path == "/api/memories/search":
+            tk_raw = (qs.get("top_k") or ["5"])[0]
+            with DB_LOCK:
+                with db_conn() as conn:
+                    res = search_memories(
+                        conn,
+                        query=(qs.get("query") or [""])[0],
+                        kind=(qs.get("kind") or [""])[0],
+                        scope=(qs.get("scope") or [""])[0],
+                        top_k=int(tk_raw) if str(tk_raw).isdigit() else 5,
+                    )
+            self._send_json(res)
+            return
+
+        if path == "/api/memories/redheads":
+            with DB_LOCK:
+                with db_conn() as conn:
+                    profiles = get_redhead_profiles(conn)
+            self._send_json({"ok": True, "redhead_profiles": profiles})
+            return
+
         self._send_json({"error": f"未知接口: {path}"}, status=404)
 
     # ---------------- API POST ----------------
     def handle_api_post(self, path: str) -> None:
+        cfg = load_config()
+        if path not in ("/api/auth/login", "/api/auth/unlock-edit", "/api/auth/lock-edit"):
+            _pre_view, _pre_edit = self._check_auth()
+            if not _pre_view:
+                self._send_json({"error": "未登录"}, status=401)
+                return
         if self._is_multipart_request():
             mp_fields, mp_files = self._parse_multipart_form_data()
             body: Dict[str, Any] = dict(mp_fields)
             body["files"] = mp_files
         else:
             body = self._read_json_body()
-        cfg = load_config()
 
         if path == "/api/auth/login":
             pwd = str(body.get("password") or "").strip()
@@ -4895,11 +5078,19 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     scored_docs.sort(key=lambda x: (-x[0], -x[1]["id"]))
                     top_docs = [x[1] for x in scored_docs[:15]]
 
+            mem_prompt = ""
+            try:
+                with DB_LOCK:
+                    with db_conn() as _mc:
+                        mem_prompt, _ = get_active_memory_prompt(_mc, scope="global")
+            except Exception:
+                pass
             ai_res = synthesize_ai_search_answer(
                 query, kws, top_tasks, top_docs,
                 matched_archives=top_archives,
                 matched_records=top_records,
                 config=cfg,
+                memory_prompt=mem_prompt,
             )
             self._send_json({
                 "query": query,
@@ -5014,6 +5205,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         if not _is_safe_subpath(dest_path, ws_root):
                             self._send_json({"error": "非法路径"}, status=403)
                             return
+                        if dest_path.suffix.lower() not in (".md", ".txt", ".csv", ".json", ".log", ".yaml", ".yml", ".ini", ""):
+                            self._send_json({"error": f"禁止用纯文本覆写二进制文件 ({dest_path.suffix})"}, status=400)
+                            return
                         dest_path.write_bytes(content_bytes)
                         st = dest_path.stat()
                         conn.execute(
@@ -5053,17 +5247,23 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         dest_path.write_bytes(content_bytes)
                         st = dest_path.stat()
                         rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-                        cur = conn.execute(
+                        conn.execute(
                             """
                             INSERT INTO documents (
                                 task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
                                 file_type, file_size, mtime, extracted_text,
                                 tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
                             ) VALUES (?, NULL, NULL, ?, ?, ?, 'draft', ?, '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                            ON CONFLICT(rel_path) DO UPDATE SET
+                                file_size=excluded.file_size,
+                                mtime=excluded.mtime,
+                                extracted_text=excluded.extracted_text,
+                                content_hash=excluded.content_hash,
+                                updated_at=excluded.updated_at
                             """,
                             (int(task_id), dest_path.name, rel_file, t_row["category"], sub_folder_clean, st.st_size, round(st.st_mtime, 2), content, now_str, now_str, content_sig),
                         )
-                        new_doc_id = int(cur.lastrowid)
+                        new_doc_id = int(conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()["id"])
                         _sync_fts_doc(conn, new_doc_id)
                         write_task_readme_file(conn, int(task_id))
                         conn.commit()
@@ -5079,17 +5279,23 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         dest_path.write_bytes(content_bytes)
                         st = dest_path.stat()
                         rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-                        cur = conn.execute(
+                        conn.execute(
                             """
                             INSERT INTO documents (
                                 task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
                                 file_type, file_size, mtime, extracted_text,
                                 tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
                             ) VALUES (NULL, NULL, NULL, ?, ?, ?, 'draft', '', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                            ON CONFLICT(rel_path) DO UPDATE SET
+                                file_size=excluded.file_size,
+                                mtime=excluded.mtime,
+                                extracted_text=excluded.extracted_text,
+                                content_hash=excluded.content_hash,
+                                updated_at=excluded.updated_at
                             """,
                             (dest_path.name, rel_file, cat, st.st_size, round(st.st_mtime, 2), content, now_str, now_str, content_sig),
                         )
-                        new_doc_id = int(cur.lastrowid)
+                        new_doc_id = int(conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()["id"])
                         _sync_fts_doc(conn, new_doc_id)
                         conn.commit()
                         u_doc = serialize_doc_light(conn.execute("SELECT * FROM documents WHERE id = ?", (new_doc_id,)).fetchone(), ws_root=ws_root)
@@ -5103,6 +5309,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             mode = body.get("mode") or "report"
             custom_doc_num = str(body.get("doc_number") or "").strip()
             custom_org = str(body.get("issuing_org") or "").strip()
+            redhead_key = str(body.get("redhead_key") or "").strip()
+            redhead_profile = None
             ws_root = get_workspace_root(cfg)
             default_org = cfg.get("default_org_name") or "县应急管理局"
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -5116,6 +5324,11 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     d_dict = dict(d_row)
                     t_row = conn.execute("SELECT doc_number FROM tasks WHERE id = ?", (d_dict["task_id"],)).fetchone() if d_dict["task_id"] else None
                     t_doc_num = (t_row["doc_number"] or "") if t_row else ""
+                    if mode == "redhead" and redhead_key:
+                        for _rh in get_redhead_profiles(conn):
+                            if _rh["mem_key"] == redhead_key or str(_rh["id"]) == redhead_key or _rh["title"] == redhead_key:
+                                redhead_profile = _rh
+                                break
 
             src_abs = ws_root / d_dict["rel_path"]
             stem = re.sub(r"^(\[材料\]_|\[来文\]_|【材料】_|【来文】_)+", "", Path(d_dict["filename"]).stem)
@@ -5136,6 +5349,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 issuing_org=org_name,
                 mode=mode,
                 xkl_gw_cli=cfg.get("xkl_gw_cli", ""),
+                redhead_profile=redhead_profile,
             )
             st = out_abs.stat()
             ext_text, ftype = extract_document_text(out_abs)
@@ -5205,14 +5419,23 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 if ext_txt and not ext_txt.startswith("【影像图片文件："):
                     text = (text + "\n\n" + ext_txt).strip()
 
+            mem_prompt, applied_mems = "", []
+            try:
+                with DB_LOCK:
+                    with db_conn() as _mc:
+                        mem_prompt, applied_mems = get_active_memory_prompt(_mc, scope="task")
+            except Exception:
+                pass
             parsed = parse_incoming_content(
                 text,
                 filename=filename,
                 source_hint=str(body.get("source_channel") or ""),
                 categories=list_physical_categories(scope="task"),
                 config=cfg,
+                memory_prompt=mem_prompt,
             )
             parsed["extracted_text"] = text
+            parsed["applied_memories"] = applied_mems
             self._send_json({"ok": True, "parsed": parsed})
             return
 
@@ -5223,6 +5446,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/archives":
+            body["_allow_local_path"] = self._is_localhost()
             created_arch = create_archive_record(body)
             self._send_json({"ok": True, "archive": created_arch, "archive_categories": list_physical_categories(scope="archive")})
             return
@@ -5234,6 +5458,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 aid,
                 files_list=body.get("files") or [],
                 notes_append=str(body.get("notes_append") or ""),
+                allow_local_path=self._is_localhost(),
             )
             if not updated_arch:
                 self._send_json({"error": "资料存档包不存在"}, status=404)
@@ -5242,6 +5467,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/records":
+            body["_allow_local_path"] = self._is_localhost()
             created_rec = upsert_important_record(body)
             self._send_json({"ok": True, "record": created_rec, "record_categories": list_physical_categories(scope="record")})
             return
@@ -5249,7 +5475,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         m_rfiles = re.match(r"^/api/records/(\d+)/files$", path)
         if m_rfiles:
             rid = int(m_rfiles.group(1))
-            updated_rec = upsert_important_record({"files": body.get("files") or []}, record_id=rid)
+            updated_rec = upsert_important_record({"files": body.get("files") or [], "_allow_local_path": self._is_localhost()}, record_id=rid)
             self._send_json({"ok": True, "record": updated_rec})
             return
 
@@ -5339,6 +5565,15 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                             file_type, file_size, mtime, extracted_text,
                             tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
                         ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+                        ON CONFLICT(rel_path) DO UPDATE SET
+                            task_id=excluded.task_id,
+                            doc_role=excluded.doc_role,
+                            sub_folder=excluded.sub_folder,
+                            file_size=excluded.file_size,
+                            mtime=excluded.mtime,
+                            extracted_text=excluded.extracted_text,
+                            content_hash=excluded.content_hash,
+                            updated_at=excluded.updated_at
                         """,
                         (
                             task_id,
@@ -5428,9 +5663,11 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                             INSERT INTO documents (
                                 task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
                                 file_type, file_size, mtime, extracted_text,
-                                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
-                            ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash, role_locked
+                            ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?, ?, 1)
                             ON CONFLICT(rel_path) DO UPDATE SET
+                                doc_role=excluded.doc_role,
+                                role_locked=1,
                                 sub_folder=excluded.sub_folder,
                                 file_size=excluded.file_size,
                                 mtime=excluded.mtime,
@@ -6003,7 +6240,16 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             raw_summary_data = "\n".join(prompt_context)
             llm_text = None
             if cfg.get("ai_api_base"):
+                mem_prompt = ""
+                try:
+                    with DB_LOCK:
+                        with db_conn() as _mc:
+                            mem_prompt, _ = get_active_memory_prompt(_mc, scope="report")
+                except Exception:
+                    pass
                 sys_p = "你是机关单位综合文字工作专家，请根据提供的工作台办文台账、会议培训下沉存档及材料清单，撰写一份条理清晰、用词规范的阶段性工作总结（包含：一、工作总体开展情况；二、重点工作与会议督导落实成效；三、下一步工作计划）。"
+                if mem_prompt:
+                    sys_p = sys_p + "\n\n" + mem_prompt
                 llm_text = call_openai_compatible_api(cfg, sys_p, raw_summary_data)
 
             if not llm_text:
@@ -6093,6 +6339,72 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             save_config(cfg2)
             sync_filesystem(force=True)
             self._send_json({"ok": True, "purged": stats})
+            return
+
+        # v3.3.5: AI 接口一键连通性测试
+        if path == "/api/ai/test":
+            test_cfg = dict(cfg)
+            for k in ("ai_api_base", "ai_api_key", "ai_model"):
+                if body.get(k):
+                    test_cfg[k] = str(body[k]).strip()
+            t0 = time.monotonic()
+            ans = call_openai_compatible_api(
+                test_cfg,
+                "你是连通性测试助手。",
+                "请仅回复 OK 二字。",
+                temperature=0.0,
+                timeout=12,
+                max_tokens=16,
+                retries=0,
+            )
+            ms = int((time.monotonic() - t0) * 1000)
+            if ans:
+                self._send_json({"ok": True, "reply": ans[:80], "latency_ms": ms, "model": test_cfg.get("ai_model", "")})
+            else:
+                from ai_engine import get_last_api_error
+                self._send_json({"ok": False, "error": get_last_api_error() or "接口无响应", "latency_ms": ms}, status=200)
+            return
+
+        # v3.3.5: 透明常驻业务记忆与红头规则库 POST 接口
+        if path == "/api/memories":
+            ws_root = get_workspace_root(cfg)
+            try:
+                with DB_LOCK:
+                    with db_conn() as conn:
+                        res = upsert_memory(conn, body, ws_root=ws_root)
+                        conn.commit()
+                self._send_json(res)
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=400)
+            return
+
+        m_mem_toggle = re.match(r"^/api/memories/([^/]+)/toggle$", path)
+        if m_mem_toggle:
+            key_or_id = urllib.parse.unquote(m_mem_toggle.group(1))
+            ws_root = get_workspace_root(cfg)
+            enabled_val = body.get("enabled") if "enabled" in body else None
+            try:
+                with DB_LOCK:
+                    with db_conn() as conn:
+                        res = toggle_memory(conn, key_or_id, enabled=enabled_val, ws_root=ws_root)
+                        conn.commit()
+                self._send_json(res)
+            except KeyError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=404)
+            return
+
+        m_mem_approve = re.match(r"^/api/memories/([^/]+)/approve$", path)
+        if m_mem_approve:
+            key_or_id = urllib.parse.unquote(m_mem_approve.group(1))
+            ws_root = get_workspace_root(cfg)
+            try:
+                with DB_LOCK:
+                    with db_conn() as conn:
+                        res = approve_memory(conn, key_or_id, ws_root=ws_root)
+                        conn.commit()
+                self._send_json(res)
+            except KeyError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=404)
             return
 
         self._send_json({"error": f"未知接口: {path}"}, status=404)
@@ -6318,6 +6630,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         m_rec_put = re.match(r"^/api/records/(\d+)$", path)
         if m_rec_put:
             rid = int(m_rec_put.group(1))
+            body["_allow_local_path"] = self._is_localhost()
             updated = upsert_important_record(body, record_id=rid)
             self._send_json({"ok": True, "record": updated})
             return
@@ -6645,6 +6958,25 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "document": res_doc, "task": updated_task})
             return
 
+        m_mem_put = re.match(r"^/api/memories/([^/]+)$", path)
+        if m_mem_put:
+            key_or_id = urllib.parse.unquote(m_mem_put.group(1))
+            payload = dict(body)
+            if key_or_id.isdigit():
+                payload["id"] = int(key_or_id)
+            else:
+                payload["mem_key"] = key_or_id
+            ws_root = get_workspace_root(cfg)
+            try:
+                with DB_LOCK:
+                    with db_conn() as conn:
+                        res = upsert_memory(conn, payload, ws_root=ws_root)
+                        conn.commit()
+                self._send_json(res)
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=400)
+            return
+
         self._send_json({"error": f"未知接口: {path}"}, status=404)
 
     # ---------------- API DELETE ----------------
@@ -6865,6 +7197,19 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                             write_record_readme_file(conn, row["record_id"])
                         conn.commit()
             self._send_json({"ok": True})
+            return
+
+        m_mem_del = re.match(r"^/api/memories/([^/]+)$", path)
+        if m_mem_del:
+            key_or_id = urllib.parse.unquote(m_mem_del.group(1))
+            try:
+                with DB_LOCK:
+                    with db_conn() as conn:
+                        res = delete_memory(conn, key_or_id, ws_root=ws_root)
+                        conn.commit()
+                self._send_json(res)
+            except KeyError as e:
+                self._send_json({"ok": False, "error": str(e)}, status=404)
             return
 
         self._send_json({"error": f"未知接口: {path}"}, status=404)

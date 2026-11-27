@@ -12,7 +12,7 @@
 set -e
 cd "$(dirname "$0")"
 APP_DIR="$(pwd)"
-PORT="${PORT:-8090}"
+PORT="${GW_PORT:-${PORT:-8090}}"
 PID_FILE="$APP_DIR/data/server.pid"
 LOG_FILE="$APP_DIR/data/server.log"
 MAX_LOG_BYTES=$((10 * 1024 * 1024))
@@ -60,7 +60,7 @@ is_workbench_pid() {
     cmdline="$(ps -p "$pid" -o args= 2>/dev/null || true)"
   fi
 
-  if [[ "$cmdline" == *"server.py"* ]]; then
+  if [[ "$cmdline" == *"$APP_DIR/server.py"* || "$cmdline" == *"server.py"* && "$cmdline" == *"$PORT"* ]]; then
     return 0
   fi
   return 1

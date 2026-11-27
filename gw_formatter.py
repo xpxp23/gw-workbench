@@ -15,6 +15,7 @@ import html
 import os
 import re
 import subprocess
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _XML_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 # 仅匹配两侧不紧邻空白与星号的单个 *...* 斜体，避免误伤 3 * 5 * 2 等乘号表达式
 _MD_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\s|\*)([^*\n]+?)(?<!\s|\*)\*(?!\*)")
-_MD_BOLD_SPLIT_RE = re.compile(r"\*\*([^\n*]+?)\*\*")
+_MD_BOLD_SPLIT_RE = re.compile(r"\*\*([^\n]+?)\*\*")
 
 
 def _sanitize_xml_text(text: str) -> str:
@@ -146,7 +147,9 @@ def parse_draft_structure(
         if first_stripped.startswith("# "):
             title = _clean_md_inline(first_stripped[2:])
             start_idx = 1
-        elif not title or _clean_md_inline(first_stripped) == title:
+        elif _clean_md_inline(first_stripped) == title:
+            start_idx = 1
+        elif not title and not re.match(r"^([一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\d+[\.、])", first_stripped) and not first_stripped.endswith(("：", ":")):
             title = _clean_md_inline(first_stripped)
             start_idx = 1
 
@@ -215,18 +218,24 @@ def parse_draft_structure(
                 blocks.append(("h3", ln_rich))
             else:
                 blocks.append(("body", ln_rich))
+        elif re.match(r"^附件[：:]", ln_plain):
+            blocks.append(("attachment", ln_rich))
+        elif re.match(r"^(抄送|印发)[：:]", ln_plain):
+            blocks.append(("colophon", ln_plain))
         elif (
-            line_idx >= total_len - 2
+            line_idx >= total_len - 6
             and re.match(
                 r"^(?:\d{4}[年\.\-/]\d{1,2}[月\.\-/]\d{1,2}日?|[二〇○零一二三四五六七八九十]+年[一二三四五六七八九十]+月[一二三四五六七八九十]+日)$",
                 ln_plain,
             )
         ):
-            blocks.append(("sign_date", ln_plain))
+            m_d = re.match(r"^(\d{4})[年\.\-/](\d{1,2})[月\.\-/](\d{1,2})日?$", ln_plain)
+            norm_d = f"{int(m_d.group(1))}年{int(m_d.group(2))}月{int(m_d.group(3))}日" if m_d else ln_plain
+            blocks.append(("sign_date", norm_d))
         elif (
-            line_idx >= total_len - 3
+            line_idx >= total_len - 7
             and len(ln_plain) <= 24
-            and not re.match(r"^(抄送|报送|印发|联系)", ln_plain)
+            and not re.match(r"^(抄送|报送|印发|联系|附件)", ln_plain)
             and "：" not in ln_plain
             and ":" not in ln_plain
             and re.search(r"(局|委|办公室|指挥部|中心|政府|部|专班|科|处)$", ln_plain)
@@ -249,7 +258,11 @@ def parse_draft_structure(
                 in_code_fence = True
                 code_fence_buf = []
             else:
-                # 正常闭合的代码块过滤丢弃
+                # 保留闭合代码块内的文本内容，避免结构化数据静默消失
+                for _c_idx, c_ln in code_fence_buf:
+                    clean_c = _clean_md_inline_keep_bold(c_ln.strip())
+                    if clean_c:
+                        blocks.append(("body", clean_c))
                 in_code_fence = False
                 code_fence_buf = []
             idx += 1
@@ -402,7 +415,7 @@ def _make_w_p(
     if bottom_red_border:
         p_bdr = (
             '<w:pBdr>'
-            '<w:bottom w:val="single" w:sz="18" w:space="4" w:color="D40000"/>'
+            '<w:bottom w:val="single" w:sz="8" w:space="4" w:color="D40000"/>'
             '</w:pBdr>'
         )
     ind_attrs = []
@@ -552,10 +565,10 @@ def _build_font_table_xml(
 ) -> str:
     """构建响应 font_overrides 的 fontTable.xml，为麒麟/Linux 提供完整衬线/页码跨平台回退"""
     default_specs: List[Tuple[str, str, str, str]] = [
-        ("仿宋_GB2312", "FangSong", "86", "roman"),
-        ("楷体_GB2312", "KaiTi", "86", "script"),
+        ("仿宋_GB2312", "FZFangSong-Z02", "86", "roman"),
+        ("楷体_GB2312", "Noto Serif CJK SC", "86", "script"),
         ("方正小标宋简体", "Noto Serif CJK SC", "86", "roman"),
-        ("黑体", "SimHei", "86", "swiss"),
+        ("黑体", "Noto Sans CJK SC", "86", "swiss"),
         ("宋体", "Noto Serif CJK SC", "86", "roman"),
         ("Times New Roman", "Liberation Serif", "00", "roman"),
     ]
@@ -602,13 +615,16 @@ def build_gb9704_docx(
     mode: str = "report",
     xkl_gw_cli: str = "",
     font_overrides: Optional[Dict[str, str]] = None,
+    redhead_profile: Optional[Dict[str, Any]] = None,
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if xkl_gw_cli:
         cli_path = Path(xkl_gw_cli).expanduser()
         if cli_path.exists():
-            tmp_in = output_path.with_suffix(".tmp.md")
+            tmp_fd, tmp_name = tempfile.mkstemp(prefix="gw_fmt_", suffix=".md", dir=str(output_path.parent))
+            os.close(tmp_fd)
+            tmp_in = Path(tmp_name)
             try:
                 tmp_in.write_text(raw_text, encoding="utf-8")
                 cmd = [str(cli_path), "--input", str(tmp_in), "--output", str(output_path)]
@@ -636,37 +652,52 @@ def build_gb9704_docx(
                 tmp_in.unlink(missing_ok=True)
 
     fmap = font_overrides or {}
-    f_title = fmap.get("title", "方正小标宋简体")
-    f_body = fmap.get("body", "仿宋_GB2312")
-    f_h1 = fmap.get("h1", "黑体")
-    f_h2 = fmap.get("h2", "楷体_GB2312")
-    f_page = fmap.get("page", "宋体")
+    f_title = (fmap.get("title") or "").strip() or "方正小标宋简体"
+    f_body = (fmap.get("body") or "").strip() or "仿宋_GB2312"
+    f_h1 = (fmap.get("h1") or "").strip() or "黑体"
+    f_h2 = (fmap.get("h2") or "").strip() or "楷体_GB2312"
+    f_page = (fmap.get("page") or "").strip() or "宋体"
 
-    effective_doc_num = doc_number if mode == "redhead" else ""
+    rh = redhead_profile if isinstance(redhead_profile, dict) else {}
+    effective_org = (issuing_org or "").strip() or str(rh.get("issuer_name") or rh.get("display_header") or "").strip()
+    effective_doc_num = (doc_number or "").strip() if mode == "redhead" else ""
+    if mode == "redhead" and not effective_doc_num and rh.get("doc_num_prefix"):
+        effective_doc_num = f"{str(rh['doc_num_prefix']).strip()}〔{datetime.now().year}〕 号"
+    if effective_doc_num:
+        effective_doc_num = re.sub(r"[\[\(（](\d{4})[\]\)）]", r"〔\1〕", effective_doc_num)
+
     parsed = parse_draft_structure(
         raw_text,
         default_title=title,
         doc_number=effective_doc_num,
-        issuing_org=issuing_org,
+        issuing_org=effective_org,
         mode=mode,
     )
+    if not parsed["recipient"] and rh.get("default_recipients"):
+        rec = str(rh["default_recipients"]).strip()
+        if not rec.endswith(("：", ":")):
+            rec += "："
+        parsed["recipient"] = rec
+
     p_nodes: List[str] = []
 
     if mode == "redhead":
+        explicit_header = str(rh.get("display_header") or "").strip()
         raw_org = parsed["issuing_org"].strip()
         raw_doc_num = parsed["doc_number"].strip()
-        if raw_org:
+        header_org = explicit_header
+        if not header_org and raw_org:
             header_org = raw_org
             if not header_org.endswith(("文件", "函", "纪要", "通告")):
                 header_org += "文件"
-            # 发文机关标志字号按字数自适应：≤10 字 28pt(56)，11-16 字 24pt(48)，>16 字 20pt(40)
+        if header_org:
             org_len = len(header_org)
             if org_len <= 10:
-                org_sz_half_pt = 56
+                org_sz_half_pt = 72
             elif org_len <= 16:
-                org_sz_half_pt = 48
+                org_sz_half_pt = 56
             else:
-                org_sz_half_pt = 40
+                org_sz_half_pt = 48
             p_nodes.append(
                 _make_w_p(
                     header_org,
@@ -677,13 +708,12 @@ def build_gb9704_docx(
                     align="center",
                     first_line_indent_twips=0,
                     first_line_chars=0,
-                    line_twips=720,
-                    space_after_twips=160,
+                    line_twips=840,
+                    space_after_twips=560 if raw_doc_num else 240,
                     bottom_red_border=(not raw_doc_num),
                     parse_inline_bold=False,
                 )
             )
-        # 绝不硬编码假文号，仅在明确提供 doc_number 时渲染发文字号与红线
         if raw_doc_num:
             p_nodes.append(
                 _make_w_p(
@@ -694,13 +724,12 @@ def build_gb9704_docx(
                     first_line_indent_twips=0,
                     first_line_chars=0,
                     line_twips=560,
-                    space_after_twips=80,
+                    space_after_twips=120,
                     bottom_red_border=True,
                     parse_inline_bold=False,
                 )
             )
 
-    # 主标题：红头模式下按国标空二行（1120 twips）
     title_space_before = 1120 if mode == "redhead" else 240
     p_nodes.append(
         _make_w_p(
@@ -712,7 +741,7 @@ def build_gb9704_docx(
             first_line_chars=0,
             line_twips=660,
             space_before_twips=title_space_before,
-            space_after_twips=240,
+            space_after_twips=560,
             parse_inline_bold=False,
         )
     )
@@ -807,18 +836,73 @@ def build_gb9704_docx(
                     parse_inline_bold=False,
                 )
             )
+        elif b_type == "attachment":
+            p_nodes.append(
+                _make_w_p(
+                    b_val,
+                    font_east_asia=f_body,
+                    size_half_pt=32,
+                    first_line_indent_twips=640,
+                    space_before_twips=560,
+                    line_twips=560,
+                )
+            )
+        elif b_type == "colophon":
+            p_nodes.append(
+                _make_w_p(
+                    b_val,
+                    font_east_asia=f_body,
+                    size_half_pt=28,
+                    first_line_indent_twips=280,
+                    space_before_twips=240,
+                    line_twips=480,
+                    parse_inline_bold=False,
+                )
+            )
         else:
             p_nodes.append(
                 _make_w_p(b_val, font_east_asia=f_body, size_half_pt=32, first_line_indent_twips=640, line_twips=560)
             )
 
-    # GB/T 9704—2012 7.5：单页码居右空一字，双页码居左空一字
+    has_colophon = any(b[0] == "colophon" for b in parsed["blocks"])
+    if mode == "redhead" and not has_colophon and (rh.get("default_cc") or rh.get("issuer_name")):
+        cc_txt = str(rh.get("default_cc") or "").strip()
+        issuer_txt = str(rh.get("issuer_name") or "").strip()
+        if cc_txt:
+            p_nodes.append(
+                _make_w_p(
+                    f"抄送：{cc_txt}。",
+                    font_east_asia=f_body,
+                    size_half_pt=28,
+                    first_line_indent_twips=280,
+                    space_before_twips=560,
+                    line_twips=480,
+                    parse_inline_bold=False,
+                )
+            )
+        if issuer_txt:
+            now_d = datetime.now()
+            p_nodes.append(
+                _make_w_p(
+                    f"{issuer_txt}    {now_d.year}年{now_d.month}月{now_d.day}日印发",
+                    font_east_asia=f_body,
+                    size_half_pt=28,
+                    align="right",
+                    first_line_indent_twips=0,
+                    first_line_chars=0,
+                    space_before_twips=120,
+                    line_twips=480,
+                    parse_inline_bold=False,
+                )
+            )
+
+    # GB/T 9704—2012 7.5：单页码居右空一字，双页码居左空一字；版心下边缘之下 1 行（footer=1587）
     sect_pr = (
         '<w:sectPr>'
         '<w:footerReference w:type="default" r:id="rId2"/>'
         '<w:footerReference w:type="even" r:id="rId5"/>'
         '<w:pgSz w:w="11906" w:h="16838"/>'
-        '<w:pgMar w:top="2098" w:right="1474" w:bottom="1984" w:left="1587" w:header="851" w:footer="1417" w:gutter="0"/>'
+        '<w:pgMar w:top="2098" w:right="1474" w:bottom="1984" w:left="1587" w:header="851" w:footer="1587" w:gutter="0"/>'
         '<w:docGrid w:type="linesAndChars" w:linePitch="560" w:charSpace="0"/>'
         '</w:sectPr>'
     )
@@ -839,6 +923,7 @@ def build_gb9704_docx(
     settings_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:updateFields w:val="true"/>'
         '<w:evenAndOddHeaders/>'
         '<w:displayHorizontalDrawingGridEvery w:val="0"/>'
         '<w:displayVerticalDrawingGridEvery w:val="2"/>'
