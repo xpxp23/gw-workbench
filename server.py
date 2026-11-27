@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与材料智能工作台 (GW-Workbench v3.2.2) 核心服务端
+公文与材料智能工作台 (GW-Workbench v3.3.0) 核心服务端
 专为银河麒麟 Kylin V10 (海光 3350) 与局域网跨平台协同设计
 v3.0.0 架构升级与全量缺陷清零特性：
 1. 四维政务知识资产模型：
@@ -18,7 +18,10 @@ v3.0.0 架构升级与全量缺陷清零特性：
 """
 
 import base64
+import contextlib
 import csv
+from email.parser import BytesParser
+from email.policy import default as email_default_policy
 import hashlib
 import hmac
 import io
@@ -63,7 +66,7 @@ from ai_engine import (
 )
 from gw_formatter import build_gb9704_docx
 
-VERSION = "3.2.2"
+VERSION = "3.3.0"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "workbench.db"
@@ -136,13 +139,31 @@ logger = logging.getLogger("gw_workbench.server")
 DB_LOCK = threading.RLock()
 _CONFIG_LOCK = threading.Lock()
 _CONFIG_CACHE: Tuple[float, Optional[Dict[str, Any]]] = (0.0, None)
+_SYNC_STATE_LOCK = threading.Lock()
+_SYNC_RUNNING_LOCK = threading.Lock()
+_BG_SYNC_STOP = threading.Event()
 _LAST_SYNC_TIME: float = 0.0
+_LAST_SYNC_STATS: Dict[str, int] = {"skipped": 1}
 _FILE_STAT_SNAPSHOT: Dict[str, Tuple[float, int]] = {}
+_LOGIN_FAIL_LOCK = threading.Lock()
 _LOGIN_FAIL_MAP: Dict[str, List[float]] = {}
+_LOGIN_FAIL_LAST_CLEANUP: float = 0.0
+_LAN_IP_LOCK = threading.Lock()
+_LAN_IP_CACHE: Tuple[float, str] = (0.0, "")
+_WL_RULES_LOCK = threading.Lock()
+_WL_RULES_CACHE: Tuple[str, List[Tuple[str, Any]]] = ("", [])
+_STATIC_ETAG_CACHE: Dict[str, Tuple[int, int, str]] = {}
 MAX_JSON_BODY_BYTES = 64 * 1024 * 1024  # 64 MB
+MAX_MULTIPART_BODY_BYTES = 256 * 1024 * 1024  # 256 MB
+DEFAULT_AGENT_TOKEN = "gw-local-agent-token"
+_WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
 
 DOC_LIGHT_COLS = """
-    id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, file_type,
+    id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder, file_type,
     file_size, mtime, substr(extracted_text, 1, 240) AS content_preview,
     tags_json, is_starred, is_pinned, created_at, updated_at
 """
@@ -218,6 +239,40 @@ def save_config(cfg: Dict[str, Any]) -> None:
             _CONFIG_CACHE = (0.0, None)
 
 
+def _check_and_prune_rate_limit(client_ip: str, now_t: Optional[float] = None) -> bool:
+    """线程安全地检查客户端 IP 是否触发 5 分钟 10 次失败速率限制，并定期清理过期 IP 防止内存泄漏"""
+    global _LOGIN_FAIL_LAST_CLEANUP
+    t = now_t if now_t is not None else time.time()
+    with _LOGIN_FAIL_LOCK:
+        if t - _LOGIN_FAIL_LAST_CLEANUP > 60.0 or len(_LOGIN_FAIL_MAP) > 128:
+            expired_ips = [
+                ip for ip, ts_list in _LOGIN_FAIL_MAP.items()
+                if not any(t - ts < 300.0 for ts in ts_list)
+            ]
+            for ip in expired_ips:
+                _LOGIN_FAIL_MAP.pop(ip, None)
+            _LOGIN_FAIL_LAST_CLEANUP = t
+        fails = [ts for ts in _LOGIN_FAIL_MAP.get(client_ip, []) if t - ts < 300.0]
+        if fails:
+            _LOGIN_FAIL_MAP[client_ip] = fails
+        else:
+            _LOGIN_FAIL_MAP.pop(client_ip, None)
+        return len(fails) >= 10
+
+
+def _record_auth_failure(client_ip: str) -> None:
+    t = time.time()
+    with _LOGIN_FAIL_LOCK:
+        fails = [ts for ts in _LOGIN_FAIL_MAP.get(client_ip, []) if t - ts < 300.0]
+        fails.append(t)
+        _LOGIN_FAIL_MAP[client_ip] = fails
+
+
+def _clear_auth_failures(client_ip: str) -> None:
+    with _LOGIN_FAIL_LOCK:
+        _LOGIN_FAIL_MAP.pop(client_ip, None)
+
+
 def parse_whitelist_rules(raw: Any) -> List[Tuple[str, Any]]:
     """把白名单文本解析成规则列表。每条形如 ("net", ip_network) 或 ("exact", ip_address)。
 
@@ -270,7 +325,14 @@ def ip_allowed(client_ip: str, cfg: Optional[Dict[str, Any]] = None) -> Tuple[bo
         return True, "本机直连"
 
     c = cfg or load_config()
-    rules = parse_whitelist_rules(c.get("ip_whitelist"))
+    raw_wl = str(c.get("ip_whitelist") or "")
+    with _WL_RULES_LOCK:
+        global _WL_RULES_CACHE
+        if _WL_RULES_CACHE[0] == raw_wl:
+            rules = _WL_RULES_CACHE[1]
+        else:
+            rules = parse_whitelist_rules(raw_wl)
+            _WL_RULES_CACHE = (raw_wl, rules)
 
     # 去掉可能的 IPv6 域后缀，如 ::ffff:172.19.51.3
     try:
@@ -333,17 +395,26 @@ def get_access_log(limit: int = 100) -> List[Dict[str, Any]]:
 
 def get_workspace_root(cfg: Optional[Dict[str, Any]] = None) -> Path:
     c = cfg or load_config()
-    raw = c.get("workspace_root")
-    if not raw or "/working_dir/" in str(raw):
-        p = (BASE_DIR / "workspace_files").resolve()
+    raw = str(c.get("workspace_root") or "").strip()
+    fallback = (BASE_DIR / "workspace_files").resolve()
+    if not raw:
+        p = fallback
     else:
-        p = Path(str(raw)).expanduser()
+        p = Path(raw).expanduser()
         if not p.is_absolute():
             p = (BASE_DIR / p).resolve()
-        elif not p.exists() and (BASE_DIR / "workspace_files").exists():
-            p = (BASE_DIR / "workspace_files").resolve()
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+        else:
+            try:
+                p = p.resolve()
+            except Exception:
+                pass
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    except OSError as e:
+        logger.warning("Configured workspace_root %s is unusable (%s), falling back to %s", p, e, fallback)
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
 def ensure_category_dir(ws_root: Path, cat_name: str, scope: str = "task") -> Path:
@@ -365,15 +436,29 @@ def ensure_category_dir(ws_root: Path, cat_name: str, scope: str = "task") -> Pa
 
 
 def get_lan_ip() -> str:
+    global _LAN_IP_CACHE
+    now_t = time.time()
+    with _LAN_IP_LOCK:
+        if _LAN_IP_CACHE[1] and (now_t - _LAN_IP_CACHE[0]) < 60.0:
+            return _LAN_IP_CACHE[1]
+    ip = "127.0.0.1"
+    s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(0.2)
         s.connect(("10.255.255.255", 1))
         ip = s.getsockname()[0]
-        s.close()
-        return ip
     except Exception:
-        return "127.0.0.1"
+        ip = "127.0.0.1"
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except Exception:
+                pass
+    with _LAN_IP_LOCK:
+        _LAN_IP_CACHE = (now_t, ip)
+    return ip
 
 
 def sanitize_filename(name: str) -> str:
@@ -381,11 +466,14 @@ def sanitize_filename(name: str) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip(". ")
     if cleaned in ("", ".", ".."):
         return "未命名"
-    if len(cleaned) <= 85:
-        return cleaned
     p_obj = Path(cleaned)
     suffix = p_obj.suffix if (p_obj.suffix and len(p_obj.suffix) <= 15) else ""
     stem = cleaned[:-len(suffix)] if suffix else cleaned
+    if stem.upper() in _WINDOWS_RESERVED_NAMES:
+        stem = "_" + stem
+        cleaned = stem + suffix
+    if len(cleaned) <= 85:
+        return cleaned
     max_stem = max(12, 85 - len(suffix))
     return (stem[:max_stem].rstrip(". ") or "未命名") + suffix
 
@@ -425,11 +513,29 @@ def get_db() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
-    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA busy_timeout=15000;")
     return conn
+
+
+@contextlib.contextmanager
+def db_conn():
+    """统一数据库连接上下文管理器：异常自动 rollback，finally 必然 close，杜绝连接与锁泄漏"""
+    conn = get_db()
+    try:
+        yield conn
+    except BaseException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _cjk_segment_for_fts(text: str) -> str:
@@ -513,178 +619,197 @@ def _sync_fts_doc(conn: sqlite3.Connection, doc_id: int) -> None:
 
 
 def init_db() -> None:
+    cfg = load_config()
+    need_save_fts_ver = False
     with DB_LOCK:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                source_channel TEXT DEFAULT '上级来文',
-                doc_number TEXT DEFAULT '',
-                issuing_org TEXT DEFAULT '',
-                priority TEXT DEFAULT '普通',
-                deadline TEXT DEFAULT '',
-                category TEXT DEFAULT '02_省及潍坊来文',
-                summary TEXT DEFAULT '',
-                raw_notice_text TEXT DEFAULT '',
-                checklist_json TEXT DEFAULT '[]',
-                progress_json TEXT DEFAULT '[]',
-                status TEXT DEFAULT 'in_progress',
-                is_pinned INTEGER DEFAULT 0,
-                is_collapsed INTEGER DEFAULT 0,
-                completed_at TEXT DEFAULT '',
-                recurring_id INTEGER DEFAULT NULL,
-                folder_rel_path TEXT DEFAULT '',
-                readme_mtime REAL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS archives (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                archive_date TEXT NOT NULL,
-                category TEXT DEFAULT '01_会议记录',
-                notes_md TEXT DEFAULT '',
-                tags_json TEXT DEFAULT '[]',
-                is_pinned INTEGER DEFAULT 0,
-                folder_rel_path TEXT NOT NULL UNIQUE,
-                readme_mtime REAL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS important_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                category TEXT DEFAULT '01_汛情与防灾底数',
-                content_md TEXT DEFAULT '',
-                tags_json TEXT DEFAULT '[]',
-                primary_doc_id INTEGER DEFAULT NULL,
-                is_pinned INTEGER DEFAULT 0,
-                sort_order INTEGER DEFAULT 0,
-                folder_rel_path TEXT NOT NULL UNIQUE,
-                readme_mtime REAL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS custom_categories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                scope TEXT NOT NULL,
-                name TEXT NOT NULL,
-                sort_order INTEGER DEFAULT 0,
-                UNIQUE(scope, name)
-            );
-
-            CREATE TABLE IF NOT EXISTS documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id INTEGER,
-                archive_id INTEGER DEFAULT NULL,
-                record_id INTEGER DEFAULT NULL,
-                filename TEXT NOT NULL,
-                rel_path TEXT NOT NULL UNIQUE,
-                category TEXT DEFAULT '02_省及潍坊来文',
-                doc_role TEXT DEFAULT 'incoming',
-                file_type TEXT DEFAULT '',
-                file_size INTEGER DEFAULT 0,
-                mtime REAL DEFAULT 0,
-                extracted_text TEXT DEFAULT '',
-                tags_json TEXT DEFAULT '[]',
-                is_starred INTEGER DEFAULT 0,
-                is_pinned INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE SET NULL,
-                FOREIGN KEY(archive_id) REFERENCES archives(id) ON DELETE SET NULL,
-                FOREIGN KEY(record_id) REFERENCES important_records(id) ON DELETE SET NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS recurring_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title_template TEXT NOT NULL,
-                category TEXT DEFAULT '02_省及潍坊来文',
-                source_channel TEXT DEFAULT '上级来文',
-                issuing_org TEXT DEFAULT '',
-                priority TEXT DEFAULT '重要',
-                freq_type TEXT DEFAULT 'weekly',
-                freq_value INTEGER DEFAULT 4,
-                deadline_offset_days INTEGER DEFAULT 1,
-                summary TEXT DEFAULT '',
-                checklist_json TEXT DEFAULT '[]',
-                reference_doc_id INTEGER DEFAULT NULL,
-                enabled INTEGER DEFAULT 1,
-                last_spawned_period TEXT DEFAULT '',
-                last_spawned_at TEXT DEFAULT '',
-                created_at TEXT NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-            CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category);
-            CREATE INDEX IF NOT EXISTS idx_docs_task_id ON documents(task_id);
-            CREATE INDEX IF NOT EXISTS idx_docs_category ON documents(category);
-            CREATE INDEX IF NOT EXISTS idx_docs_role ON documents(doc_role);
-            CREATE INDEX IF NOT EXISTS idx_archives_cat ON archives(category);
-            CREATE INDEX IF NOT EXISTS idx_records_cat ON important_records(category);
-            """
-        )
-
-        task_cols = {r["name"] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
-        if "completed_at" not in task_cols:
-            cur.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT DEFAULT ''")
-        if "is_collapsed" not in task_cols:
-            cur.execute("ALTER TABLE tasks ADD COLUMN is_collapsed INTEGER DEFAULT 0")
-        if "recurring_id" not in task_cols:
-            cur.execute("ALTER TABLE tasks ADD COLUMN recurring_id INTEGER DEFAULT NULL")
-        if "readme_mtime" not in task_cols:
-            cur.execute("ALTER TABLE tasks ADD COLUMN readme_mtime REAL DEFAULT 0")
-
-        doc_cols = {r["name"] for r in cur.execute("PRAGMA table_info(documents)").fetchall()}
-        if "archive_id" not in doc_cols:
-            cur.execute("ALTER TABLE documents ADD COLUMN archive_id INTEGER DEFAULT NULL")
-        if "record_id" not in doc_cols:
-            cur.execute("ALTER TABLE documents ADD COLUMN record_id INTEGER DEFAULT NULL")
-        # v3.1.1：内容指纹（改名/移动后据此认回原文件，保住“我写的材料”角色）
-        if "content_hash" not in doc_cols:
-            cur.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT DEFAULT ''")
-        # v3.1.1：角色锁定（用户手动 ⇄ 过的文件，重扫/改名不再被启发式覆盖）
-        if "role_locked" not in doc_cols:
-            cur.execute("ALTER TABLE documents ADD COLUMN role_locked INTEGER DEFAULT 0")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_archive_id ON documents(archive_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_record_id ON documents(record_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_starred_id ON documents(is_starred DESC, id DESC)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_content_hash ON documents(content_hash)")
-
-        try:
-            cur.execute(
+        with db_conn() as conn:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            cur = conn.cursor()
+            cur.executescript(
                 """
-                CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
-                    doc_id UNINDEXED,
-                    filename,
-                    category,
-                    tags,
-                    extracted_text,
-                    tokenize='unicode61'
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    source_channel TEXT DEFAULT '上级来文',
+                    doc_number TEXT DEFAULT '',
+                    issuing_org TEXT DEFAULT '',
+                    priority TEXT DEFAULT '普通',
+                    deadline TEXT DEFAULT '',
+                    category TEXT DEFAULT '02_省及潍坊来文',
+                    summary TEXT DEFAULT '',
+                    raw_notice_text TEXT DEFAULT '',
+                    checklist_json TEXT DEFAULT '[]',
+                    progress_json TEXT DEFAULT '[]',
+                    status TEXT DEFAULT 'in_progress',
+                    is_pinned INTEGER DEFAULT 0,
+                    is_collapsed INTEGER DEFAULT 0,
+                    completed_at TEXT DEFAULT '',
+                    recurring_id INTEGER DEFAULT NULL,
+                    folder_rel_path TEXT DEFAULT '',
+                    readme_mtime REAL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS archives (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    archive_date TEXT NOT NULL,
+                    category TEXT DEFAULT '01_会议记录',
+                    notes_md TEXT DEFAULT '',
+                    tags_json TEXT DEFAULT '[]',
+                    is_pinned INTEGER DEFAULT 0,
+                    folder_rel_path TEXT NOT NULL UNIQUE,
+                    readme_mtime REAL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS important_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    category TEXT DEFAULT '01_汛情与防灾底数',
+                    content_md TEXT DEFAULT '',
+                    tags_json TEXT DEFAULT '[]',
+                    primary_doc_id INTEGER DEFAULT NULL,
+                    is_pinned INTEGER DEFAULT 0,
+                    sort_order INTEGER DEFAULT 0,
+                    folder_rel_path TEXT NOT NULL UNIQUE,
+                    readme_mtime REAL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS custom_categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    sort_order INTEGER DEFAULT 0,
+                    UNIQUE(scope, name)
+                );
+
+                CREATE TABLE IF NOT EXISTS documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER,
+                    archive_id INTEGER DEFAULT NULL,
+                    record_id INTEGER DEFAULT NULL,
+                    filename TEXT NOT NULL,
+                    rel_path TEXT NOT NULL UNIQUE,
+                    category TEXT DEFAULT '02_省及潍坊来文',
+                    doc_role TEXT DEFAULT 'incoming',
+                    sub_folder TEXT DEFAULT '',
+                    file_type TEXT DEFAULT '',
+                    file_size INTEGER DEFAULT 0,
+                    mtime REAL DEFAULT 0,
+                    extracted_text TEXT DEFAULT '',
+                    tags_json TEXT DEFAULT '[]',
+                    is_starred INTEGER DEFAULT 0,
+                    is_pinned INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    content_hash TEXT DEFAULT '',
+                    role_locked INTEGER DEFAULT 0,
+                    FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+                    FOREIGN KEY(archive_id) REFERENCES archives(id) ON DELETE SET NULL,
+                    FOREIGN KEY(record_id) REFERENCES important_records(id) ON DELETE SET NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS recurring_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title_template TEXT NOT NULL,
+                    category TEXT DEFAULT '02_省及潍坊来文',
+                    source_channel TEXT DEFAULT '上级来文',
+                    issuing_org TEXT DEFAULT '',
+                    priority TEXT DEFAULT '重要',
+                    freq_type TEXT DEFAULT 'weekly',
+                    freq_value INTEGER DEFAULT 4,
+                    deadline_offset_days INTEGER DEFAULT 1,
+                    summary TEXT DEFAULT '',
+                    checklist_json TEXT DEFAULT '[]',
+                    reference_doc_id INTEGER DEFAULT NULL,
+                    enabled INTEGER DEFAULT 1,
+                    last_spawned_period TEXT DEFAULT '',
+                    last_spawned_at TEXT DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+                CREATE INDEX IF NOT EXISTS idx_tasks_category ON tasks(category);
+                CREATE INDEX IF NOT EXISTS idx_tasks_pinned_id ON tasks(is_pinned DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_tasks_recurring ON tasks(recurring_id);
+                CREATE INDEX IF NOT EXISTS idx_tasks_folder ON tasks(folder_rel_path);
+                CREATE INDEX IF NOT EXISTS idx_docs_task_id ON documents(task_id);
+                CREATE INDEX IF NOT EXISTS idx_docs_category ON documents(category);
+                CREATE INDEX IF NOT EXISTS idx_docs_role ON documents(doc_role);
+                CREATE INDEX IF NOT EXISTS idx_docs_task_role ON documents(task_id, doc_role);
+                CREATE INDEX IF NOT EXISTS idx_docs_mtime ON documents(mtime);
+                CREATE INDEX IF NOT EXISTS idx_archives_cat ON archives(category);
+                CREATE INDEX IF NOT EXISTS idx_archives_pinned_date ON archives(is_pinned DESC, archive_date DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_records_cat ON important_records(category);
+                CREATE INDEX IF NOT EXISTS idx_records_title ON important_records(title);
+                CREATE INDEX IF NOT EXISTS idx_records_pinned_sort ON important_records(is_pinned DESC, sort_order ASC, id DESC);
                 """
             )
-            fts_cnt = cur.execute("SELECT COUNT(*) FROM documents_fts").fetchone()[0]
-            doc_rows = cur.execute("SELECT id FROM documents").fetchall()
-            sample_fts = cur.execute("SELECT filename FROM documents_fts LIMIT 1").fetchone()
-            needs_rebuild = (fts_cnt != len(doc_rows)) or (
-                sample_fts and " " not in (sample_fts["filename"] or "") and len(sample_fts["filename"] or "") >= 4
-            )
-            if needs_rebuild:
-                cur.execute("DELETE FROM documents_fts")
-                for dr in doc_rows:
-                    _sync_fts_doc(conn, dr["id"])
-        except Exception:
-            pass
 
-        conn.commit()
-        conn.close()
+            task_cols = {r["name"] for r in cur.execute("PRAGMA table_info(tasks)").fetchall()}
+            if "completed_at" not in task_cols:
+                cur.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT DEFAULT ''")
+            if "is_collapsed" not in task_cols:
+                cur.execute("ALTER TABLE tasks ADD COLUMN is_collapsed INTEGER DEFAULT 0")
+            if "recurring_id" not in task_cols:
+                cur.execute("ALTER TABLE tasks ADD COLUMN recurring_id INTEGER DEFAULT NULL")
+            if "readme_mtime" not in task_cols:
+                cur.execute("ALTER TABLE tasks ADD COLUMN readme_mtime REAL DEFAULT 0")
+
+            doc_cols = {r["name"] for r in cur.execute("PRAGMA table_info(documents)").fetchall()}
+            if "archive_id" not in doc_cols:
+                cur.execute("ALTER TABLE documents ADD COLUMN archive_id INTEGER DEFAULT NULL")
+            if "record_id" not in doc_cols:
+                cur.execute("ALTER TABLE documents ADD COLUMN record_id INTEGER DEFAULT NULL")
+            if "content_hash" not in doc_cols:
+                cur.execute("ALTER TABLE documents ADD COLUMN content_hash TEXT DEFAULT ''")
+            if "role_locked" not in doc_cols:
+                cur.execute("ALTER TABLE documents ADD COLUMN role_locked INTEGER DEFAULT 0")
+            if "sub_folder" not in doc_cols:
+                cur.execute("ALTER TABLE documents ADD COLUMN sub_folder TEXT DEFAULT ''")
+
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_archive_id ON documents(archive_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_record_id ON documents(record_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_starred_id ON documents(is_starred DESC, id DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_content_hash ON documents(content_hash)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_docs_task_subfolder ON documents(task_id, sub_folder)")
+
+            try:
+                cur.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+                        doc_id UNINDEXED,
+                        filename,
+                        category,
+                        tags,
+                        extracted_text,
+                        tokenize='unicode61'
+                    );
+                    """
+                )
+                fts_cnt = cur.execute("SELECT COUNT(*) FROM documents_fts").fetchone()[0]
+                doc_rows = cur.execute("SELECT id FROM documents").fetchall()
+                fts_ver = int(cfg.get("fts_version") or 0)
+                needs_rebuild = (fts_ver < 3) or (fts_cnt != len(doc_rows))
+                if needs_rebuild:
+                    cur.execute("DELETE FROM documents_fts")
+                    for dr in doc_rows:
+                        _sync_fts_doc(conn, dr["id"])
+                    if fts_ver < 3:
+                        need_save_fts_ver = True
+            except Exception as e:
+                logger.warning("FTS5 init/rebuild failed: %s", e)
+
+            conn.commit()
+
+    if need_save_fts_ver:
+        cfg["fts_version"] = 3
+        save_config(cfg)
 
     ws_root = get_workspace_root()
     for cat in DEFAULT_CATEGORIES:
@@ -743,7 +868,7 @@ def write_task_readme_file(conn: sqlite3.Connection, task_id: int) -> None:
     folder_path.mkdir(parents=True, exist_ok=True)
 
     docs = conn.execute(
-        "SELECT filename, doc_role, updated_at FROM documents WHERE task_id = ? ORDER BY id ASC",
+        "SELECT filename, doc_role, sub_folder, updated_at FROM documents WHERE task_id = ? ORDER BY id ASC",
         (task_id,),
     ).fetchall()
 
@@ -790,14 +915,25 @@ def write_task_readme_file(conn: sqlite3.Connection, task_id: int) -> None:
     md_lines.append("### 1. 来文/通知原件")
     if incoming_files:
         for d in incoming_files:
-            md_lines.append(f"- 📄 `{d['filename']}`")
+            sf_prefix = f"{d['sub_folder']}/" if (d["sub_folder"] or "") else ""
+            md_lines.append(f"- 📄 `{sf_prefix}{d['filename']}`")
     else:
         md_lines.append("- （无独立原件，详见下方原始通知文本）")
 
     md_lines.append("### 2. 我撰写的材料")
     if draft_files:
+        root_drafts = [d for d in draft_files if not (d["sub_folder"] or "")]
+        grouped_drafts: Dict[str, List[Any]] = defaultdict(list)
         for d in draft_files:
+            sf = (d["sub_folder"] or "").strip()
+            if sf:
+                grouped_drafts[sf].append(d)
+        for d in root_drafts:
             md_lines.append(f"- ✍️ `{d['filename']}` （更新于 {d['updated_at']}）")
+        for sf_name in sorted(grouped_drafts.keys()):
+            md_lines.append(f"#### 📁 {sf_name}")
+            for d in grouped_drafts[sf_name]:
+                md_lines.append(f"- ✍️ `{sf_name}/{d['filename']}` （更新于 {d['updated_at']}）")
     else:
         md_lines.append("- （暂未放入产出材料，可直接将写好的 WPS/Word 文档拖入本文件夹）")
 
@@ -908,9 +1044,11 @@ def _extract_anchor_id(readme_path: Path, tag_name: str = "gw_task_id") -> Optio
 
 def _parse_and_reverse_sync_readme(conn: sqlite3.Connection, task_id: int, readme_path: Path) -> bool:
     """
-    修复 BUG-04：
-    1. 支持在本地编辑器中修改标题、发文字号、来文单位、紧急程度、截止日期并反向写回数据库
-    2. 当用户在本地删光最后一条待办细项或进展记录时，允许清空数据库列表而非保留旧数据
+    v3.3.0 反向同步修复：
+    1. 标题保留中文标点（不调用 sanitize_filename）
+    2. 二级标题正则仅在行首匹配 `^## [一二三四]、` 防止正文截断
+    3. 手写无时间戳进展保持稳定时间（优先沿用原记录时间或文件 mtime），不每次刷成当前时间
+    4. 异常记录日志，不再静默吞错
     """
     try:
         raw = readme_path.read_text(encoding="utf-8", errors="ignore")
@@ -921,7 +1059,7 @@ def _parse_and_reverse_sync_readme(conn: sqlite3.Connection, task_id: int, readm
         new_title = row["title"]
         m_title = re.search(r"^#\s+(.+)$", raw, flags=re.MULTILINE)
         if m_title and m_title.group(1).strip():
-            new_title = sanitize_filename(m_title.group(1).strip())
+            new_title = m_title.group(1).strip()[:200]
 
         new_status = row["status"]
         m_st = re.search(r"\*\*当前状态\*\*[：:]\s*([^\n]+)", raw)
@@ -958,13 +1096,13 @@ def _parse_and_reverse_sync_readme(conn: sqlite3.Connection, task_id: int, readm
             new_dl = "" if ("常态" in val or val == "无") else val[:10]
 
         new_summary = row["summary"]
-        m_sum = re.search(r"## 一、核心工作要求摘要\s*\n+([\s\S]*?)(?=\n+## 二、|$)", raw)
+        m_sum = re.search(r"^## 一、核心工作要求摘要\s*\n+([\s\S]*?)(?=\n+^## 二、|\Z)", raw, flags=re.MULTILINE)
         if m_sum:
             s_val = m_sum.group(1).strip()
             new_summary = "" if s_val == "（暂无摘要）" else s_val
 
         new_checklist = json.loads(row["checklist_json"] or "[]")
-        m_chk = re.search(r"## 二、待办细项清单[^\n]*\n+([\s\S]*?)(?=\n+## 三、|$)", raw)
+        m_chk = re.search(r"^## 二、待办细项清单[^\n]*\n+([\s\S]*?)(?=\n+^## 三、|\Z)", raw, flags=re.MULTILINE)
         if m_chk is not None:
             parsed_chk = []
             for idx, ln in enumerate(m_chk.group(1).splitlines()):
@@ -980,8 +1118,17 @@ def _parse_and_reverse_sync_readme(conn: sqlite3.Connection, task_id: int, readm
                         })
             new_checklist = parsed_chk
 
-        new_progress = json.loads(row["progress_json"] or "[]")
-        m_prog = re.search(r"## 三、实时进展流水[^\n]*\n+([\s\S]*?)(?=\n+## 四、|$)", raw)
+        old_progress = json.loads(row["progress_json"] or "[]")
+        old_time_by_text = {
+            str(p.get("text") or "").strip(): str(p.get("time") or "").strip()
+            for p in old_progress
+            if isinstance(p, dict) and str(p.get("text") or "").strip()
+        }
+        file_mtime_ts = readme_path.stat().st_mtime
+        stable_fallback_time = datetime.fromtimestamp(file_mtime_ts).strftime("%m-%d %H:%M")
+
+        new_progress = old_progress
+        m_prog = re.search(r"^## 三、实时进展流水[^\n]*\n+([\s\S]*?)(?=\n+^## 四、|\Z)", raw, flags=re.MULTILINE)
         if m_prog is not None:
             parsed_prog = []
             for ln in m_prog.group(1).splitlines():
@@ -994,11 +1141,12 @@ def _parse_and_reverse_sync_readme(conn: sqlite3.Connection, task_id: int, readm
                 else:
                     plain_p = re.sub(r"^-\s*", "", ln_s).strip()
                     if plain_p:
-                        parsed_prog.append({"time": datetime.now().strftime("%m-%d %H:%M"), "text": plain_p})
+                        kept_time = old_time_by_text.get(plain_p, stable_fallback_time)
+                        parsed_prog.append({"time": kept_time, "text": plain_p})
             new_progress = parsed_prog
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        new_mtime = round(readme_path.stat().st_mtime, 2)
+        new_mtime = round(file_mtime_ts, 2)
         comp_at = row["completed_at"] or ""
         if new_status == "archived" and row["status"] != "archived":
             comp_at = now_str
@@ -1037,7 +1185,8 @@ def _parse_and_reverse_sync_readme(conn: sqlite3.Connection, task_id: int, readm
             ),
         )
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning("Reverse sync task readme failed (task_id=%s, path=%s): %s", task_id, readme_path, e)
         return False
 
 
@@ -1051,10 +1200,10 @@ def _parse_and_reverse_sync_archive_readme(conn: sqlite3.Connection, archive_id:
         new_title = row["title"]
         m_title = re.search(r"^#\s+(.+)$", raw, flags=re.MULTILINE)
         if m_title and m_title.group(1).strip():
-            new_title = sanitize_filename(m_title.group(1).strip())
+            new_title = m_title.group(1).strip()[:200]
 
         new_notes = row["notes_md"]
-        m_notes = re.search(r"## 一、会议纪要[^\n]*\n+([\s\S]*?)(?=\n+## 二、|$)", raw)
+        m_notes = re.search(r"^## 一、会议纪要[^\n]*\n+([\s\S]*?)(?=\n+^## 二、|\Z)", raw, flags=re.MULTILINE)
         if m_notes is not None:
             val = m_notes.group(1).strip()
             new_notes = "" if val == "（暂无文字说明）" else val
@@ -1066,7 +1215,8 @@ def _parse_and_reverse_sync_archive_readme(conn: sqlite3.Connection, archive_id:
             (new_title, new_notes, new_mtime, now_str, archive_id),
         )
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning("Reverse sync archive readme failed (archive_id=%s, path=%s): %s", archive_id, readme_path, e)
         return False
 
 
@@ -1079,11 +1229,11 @@ def _parse_and_reverse_sync_record_readme(conn: sqlite3.Connection, record_id: i
             return False
         new_title = row["title"]
         m_title = re.search(r"^#\s+(.+)$", raw, flags=re.MULTILINE)
-        if m_title and m_title.strip() if isinstance(m_title, str) else (m_title and m_title.group(1).strip()):
-            new_title = sanitize_filename(m_title.group(1).strip())
+        if m_title and m_title.group(1).strip():
+            new_title = m_title.group(1).strip()[:200]
 
         new_content = row["content_md"]
-        m_body = re.search(r"## 正文内容\s*\n+([\s\S]*)$", raw)
+        m_body = re.search(r"^## 正文内容\s*\n+([\s\S]*)\Z", raw, flags=re.MULTILINE)
         if m_body is not None:
             val = m_body.group(1).strip()
             new_content = "" if val.startswith("（详见本目录下") else val
@@ -1095,27 +1245,42 @@ def _parse_and_reverse_sync_record_readme(conn: sqlite3.Connection, record_id: i
             (new_title, new_content, new_mtime, now_str, record_id),
         )
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning("Reverse sync record readme failed (record_id=%s, path=%s): %s", record_id, readme_path, e)
         return False
 
 
 def _collect_fast_file_snapshot(ws_root: Path) -> Dict[str, Tuple[float, int]]:
-    """快速采集工作区所有文件与目录的 (mtime, size) 元组"""
+    """快速采集工作区所有文件与目录的 (mtime, size) 元组（跳过符号链接防死循环与目录逃逸）"""
     snap: Dict[str, Tuple[float, int]] = {}
     try:
         for top_dir in ws_root.iterdir():
-            if not top_dir.is_dir() or top_dir.name.startswith("."):
+            if top_dir.is_symlink() or not top_dir.is_dir() or top_dir.name.startswith("."):
                 continue
             st_c = top_dir.stat()
             snap[str(top_dir)] = (round(st_c.st_mtime, 2), 0)
             for f in top_dir.rglob("*"):
+                if f.is_symlink():
+                    continue
                 if f.name.startswith(".") or f.name.startswith("~$") or f.name == ".gitkeep":
                     continue
-                st_f = f.stat()
+                try:
+                    st_f = f.stat()
+                except OSError:
+                    continue
                 snap[str(f)] = (round(st_f.st_mtime, 2), st_f.st_size)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Snapshot collection error: %s", e)
     return snap
+
+
+def _bytes_content_sig(raw_bytes: bytes) -> str:
+    """从内存字节流直接计算与 _file_content_sig 一致的内容指纹：`文件大小:前 64KB 的 SHA1`"""
+    if raw_bytes is None:
+        return ""
+    h = hashlib.sha1()
+    h.update(raw_bytes[:65536])
+    return f"{len(raw_bytes)}:{h.hexdigest()}"
 
 
 def _file_content_sig(path: Path) -> str:
@@ -1134,6 +1299,23 @@ def _file_content_sig(path: Path) -> str:
         return ""
 
 
+def _resolve_subfolder_doc_role(
+    fname: str,
+    extracted_preview: str,
+    task_id: Optional[int],
+    cat_name: str,
+    sub_folder: str,
+    forced_role: Optional[str] = None,
+) -> str:
+    if forced_role:
+        return forced_role
+    if sub_folder:
+        fn_s = (fname or "").strip()
+        if not fn_s.startswith(("[来文]", "【来文】", "来文_")):
+            return "draft"
+    return infer_doc_role(fname, extracted_preview, in_task_folder=bool(task_id), cat_name=cat_name)
+
+
 def _upsert_synced_doc(
     conn: sqlite3.Connection,
     sub_file: Path,
@@ -1148,50 +1330,103 @@ def _upsert_synced_doc(
     record_id: Optional[int] = None,
     forced_role: Optional[str] = None,
     auto_tags: Optional[List[str]] = None,
+    sub_folder: str = "",
+    pre_parsed: Optional[Dict[str, Tuple[str, str, str]]] = None,
 ) -> int:
     rel_file = str(sub_file.relative_to(ws_root)).replace("\\", "/")
     seen_rel_paths.add(rel_file)
     st = sub_file.stat()
     mtime = round(st.st_mtime, 2)
     fsize = st.st_size
-    # 只给待办目录内的文件算指纹：库内四五千份历史件按用户要求不再折腾
-    content_sig = _file_content_sig(sub_file) if task_id is not None else ""
+    sub_folder = (sub_folder or "").strip()
+
+    cached_p = pre_parsed.get(rel_file) if pre_parsed else None
+    if cached_p is not None:
+        content_sig = cached_p[2]
+    else:
+        content_sig = _file_content_sig(sub_file) if task_id is not None else ""
+
+    def _get_extracted() -> Tuple[str, str]:
+        if cached_p is not None and (cached_p[0] or cached_p[1]):
+            return cached_p[0], cached_p[1]
+        return extract_document_text(sub_file)
 
     if rel_file in existing_docs:
         doc_rec = existing_docs[rel_file]
-        need_update = (
-            abs(doc_rec["mtime"] - mtime) > 0.5
-            or doc_rec["file_size"] != fsize
-            or doc_rec["category"] != cat_name
+        old_sf = doc_rec.get("sub_folder") or ""
+        sf_changed = old_sf != sub_folder
+        file_changed = abs(float(doc_rec["mtime"] or 0) - mtime) > 0.5 or doc_rec["file_size"] != fsize
+        meta_changed = (
+            doc_rec["category"] != cat_name
             or (task_id is not None and doc_rec.get("task_id") != task_id)
             or (archive_id is not None and doc_rec.get("archive_id") != archive_id)
             or (record_id is not None and doc_rec.get("record_id") != record_id)
             or (bool(content_sig) and doc_rec.get("content_hash") != content_sig)
+            or sf_changed
         )
-        if need_update:
-            extracted, ftype = extract_document_text(sub_file)
-            conn.execute(
-                """
-                UPDATE documents
-                SET category = ?, task_id = ?, archive_id = ?, record_id = ?,
-                    file_size = ?, mtime = ?, extracted_text = ?, file_type = ?, updated_at = ?
-                    {sig_set}
-                WHERE id = ?
-                """.format(sig_set=", content_hash = ?" if content_sig else ""),
-                (
-                    cat_name,
-                    task_id if task_id is not None else doc_rec.get("task_id"),
-                    archive_id if archive_id is not None else doc_rec.get("archive_id"),
-                    record_id if record_id is not None else doc_rec.get("record_id"),
-                    fsize,
-                    mtime,
-                    extracted,
-                    ftype,
-                    now_str,
-                    *((content_sig,) if content_sig else ()),
-                    doc_rec["id"],
-                ),
-            )
+        if file_changed or meta_changed:
+            new_role = doc_rec.get("doc_role") or "draft"
+            if sub_folder and not doc_rec.get("role_locked"):
+                if not sub_file.name.strip().startswith(("[来文]", "【来文】", "来文_")):
+                    new_role = "draft"
+            if file_changed:
+                extracted, ftype = _get_extracted()
+                conn.execute(
+                    """
+                    UPDATE documents
+                    SET category = ?, task_id = ?, archive_id = ?, record_id = ?,
+                        sub_folder = ?, doc_role = ?,
+                        file_size = ?, mtime = ?, extracted_text = ?, file_type = ?, updated_at = ?
+                        {sig_set}
+                    WHERE id = ?
+                    """.format(sig_set=", content_hash = ?" if content_sig else ""),
+                    (
+                        cat_name,
+                        task_id if task_id is not None else doc_rec.get("task_id"),
+                        archive_id if archive_id is not None else doc_rec.get("archive_id"),
+                        record_id if record_id is not None else doc_rec.get("record_id"),
+                        sub_folder,
+                        new_role,
+                        fsize,
+                        mtime,
+                        extracted,
+                        ftype,
+                        now_str,
+                        *((content_sig,) if content_sig else ()),
+                        doc_rec["id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE documents
+                    SET category = ?, task_id = ?, archive_id = ?, record_id = ?,
+                        sub_folder = ?, doc_role = ?, updated_at = ?
+                        {sig_set}
+                    WHERE id = ?
+                    """.format(sig_set=", content_hash = ?" if content_sig else ""),
+                    (
+                        cat_name,
+                        task_id if task_id is not None else doc_rec.get("task_id"),
+                        archive_id if archive_id is not None else doc_rec.get("archive_id"),
+                        record_id if record_id is not None else doc_rec.get("record_id"),
+                        sub_folder,
+                        new_role,
+                        now_str,
+                        *((content_sig,) if content_sig else ()),
+                        doc_rec["id"],
+                    ),
+                )
+            doc_rec["category"] = cat_name
+            doc_rec["task_id"] = task_id if task_id is not None else doc_rec.get("task_id")
+            doc_rec["archive_id"] = archive_id if archive_id is not None else doc_rec.get("archive_id")
+            doc_rec["record_id"] = record_id if record_id is not None else doc_rec.get("record_id")
+            doc_rec["sub_folder"] = sub_folder
+            doc_rec["doc_role"] = new_role
+            doc_rec["file_size"] = fsize
+            doc_rec["mtime"] = mtime
+            if content_sig:
+                doc_rec["content_hash"] = content_sig
             _sync_fts_doc(conn, doc_rec["id"])
             stats["updated"] += 1
         return int(doc_rec["id"])
@@ -1202,8 +1437,8 @@ def _upsert_synced_doc(
         adopted = None
         if content_sig:
             cands = conn.execute(
-                "SELECT id, rel_path, task_id, filename, role_locked FROM documents "
-                "WHERE content_hash = ? AND rel_path != ? LIMIT 8",
+                "SELECT id, rel_path, task_id, archive_id, record_id, filename, doc_role, role_locked, sub_folder, content_hash "
+                "FROM documents WHERE content_hash = ? AND rel_path != ? LIMIT 8",
                 (content_sig, rel_file),
             ).fetchall()
             # 只认“原路径已经不在磁盘上”的行，避免把仍在用的同名同内容文件误吞
@@ -1233,39 +1468,59 @@ def _upsert_synced_doc(
                 adopted = cands2[0]
 
         if adopted is not None:
-            extracted, ftype = extract_document_text(sub_file)
+            extracted, ftype = _get_extracted()
             old_rel = adopted["rel_path"]
+            eff_task_id = task_id if task_id is not None else adopted.get("task_id")
+            eff_archive_id = archive_id if archive_id is not None else adopted.get("archive_id")
+            eff_record_id = record_id if record_id is not None else adopted.get("record_id")
+            eff_role = adopted.get("doc_role") or "draft"
+            if sub_folder and not adopted.get("role_locked"):
+                if not fname.strip().startswith(("[来文]", "【来文】", "来文_")):
+                    eff_role = "draft"
+            eff_hash = content_sig or adopted.get("content_hash") or ""
             conn.execute(
                 """
                 UPDATE documents
-                SET filename = ?, rel_path = ?, category = ?, task_id = ?,
+                SET filename = ?, rel_path = ?, category = ?, task_id = ?, archive_id = ?, record_id = ?,
+                    sub_folder = ?, doc_role = ?, content_hash = ?,
                     file_size = ?, mtime = ?, extracted_text = ?, file_type = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (fname, rel_file, cat_name,
-                 task_id if task_id is not None else adopted["task_id"],
-                 fsize, mtime, extracted, ftype, now_str, adopted["id"]),
+                (
+                    fname, rel_file, cat_name, eff_task_id, eff_archive_id, eff_record_id,
+                    sub_folder, eff_role, eff_hash,
+                    fsize, mtime, extracted, ftype, now_str, adopted["id"],
+                ),
             )
             _sync_fts_doc(conn, adopted["id"])
             existing_docs.pop(old_rel, None)
             existing_docs[rel_file] = {
-                "id": adopted["id"], "rel_path": rel_file, "mtime": mtime, "file_size": fsize,
-                "category": cat_name, "task_id": task_id, "content_hash": content_sig,
-                "archive_id": archive_id, "record_id": record_id, "doc_role": "",
+                "id": adopted["id"],
+                "rel_path": rel_file,
+                "mtime": mtime,
+                "file_size": fsize,
+                "category": cat_name,
+                "task_id": eff_task_id,
+                "archive_id": eff_archive_id,
+                "record_id": eff_record_id,
+                "sub_folder": sub_folder,
+                "doc_role": eff_role,
+                "role_locked": adopted.get("role_locked", 0),
+                "content_hash": eff_hash,
             }
             stats["renamed"] = stats.get("renamed", 0) + 1
             return int(adopted["id"])
 
-        extracted, ftype = extract_document_text(sub_file)
-        role = forced_role or infer_doc_role(fname, extracted[:300], in_task_folder=bool(task_id), cat_name=cat_name)
+        extracted, ftype = _get_extracted()
+        role = _resolve_subfolder_doc_role(fname, extracted[:300], task_id, cat_name, sub_folder, forced_role=forced_role)
         tags_list = auto_tags or []
         cur = conn.execute(
             """
             INSERT INTO documents (
-                task_id, archive_id, record_id, filename, rel_path, category, doc_role,
+                task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
                 file_type, file_size, mtime, extracted_text,
                 tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
             (
                 task_id,
@@ -1275,6 +1530,7 @@ def _upsert_synced_doc(
                 rel_file,
                 cat_name,
                 role,
+                sub_folder,
                 ftype,
                 fsize,
                 mtime,
@@ -1287,6 +1543,20 @@ def _upsert_synced_doc(
             ),
         )
         new_id = int(cur.lastrowid)
+        existing_docs[rel_file] = {
+            "id": new_id,
+            "rel_path": rel_file,
+            "mtime": mtime,
+            "file_size": fsize,
+            "category": cat_name,
+            "task_id": task_id,
+            "archive_id": archive_id,
+            "record_id": record_id,
+            "sub_folder": sub_folder,
+            "doc_role": role,
+            "role_locked": 0,
+            "content_hash": content_sig,
+        }
         _sync_fts_doc(conn, new_id)
         stats["added"] += 1
         return new_id
@@ -1294,295 +1564,440 @@ def _upsert_synced_doc(
 
 def sync_filesystem(force: bool = False) -> Dict[str, int]:
     """
-    真·四维双向对等物理文件夹同步引擎（v3.0.0）：
-    1. 同步普通业务分类下的【待办事项】与【公文与材料库】
-    2. 同步 `workspace_files/资料存档/<分类>/<归档包>/` 下的多媒体归档包（支持本地直接建文件夹拖入照片/录音自动成包！）
-    3. 同步 `workspace_files/重要事项记录/<分类>/<条目>/` 下的常备知识条目（支持本地直接放入 Word/PDF/Excel 自动建条目！）
+    真·四维双向对等物理文件夹同步引擎（v3.3.0）：
+    1. 同步普通业务分类下的【待办事项】（含单层子文件夹）与【公文与材料库】
+    2. 同步 `workspace_files/资料存档/<分类>/<归档包>/`（含本地移动同步与磁盘删除孤儿清理）
+    3. 同步 `workspace_files/重要事项记录/<分类>/<条目>/`（含本地移动同步与磁盘删除孤儿清理）
+    4. 重 I/O（文本提取与哈希计算）全部在获取 DB_LOCK 前完成，彻底避免阻塞请求线程
     """
-    global _LAST_SYNC_TIME, _FILE_STAT_SNAPSHOT
+    global _LAST_SYNC_TIME, _FILE_STAT_SNAPSHOT, _LAST_SYNC_STATS
     stats = {"added": 0, "updated": 0, "removed": 0, "moved_tasks": 0, "reverse_synced_tasks": 0, "renamed": 0, "skipped": 0}
     ws_root = get_workspace_root()
     now_ts = time.time()
 
-    if not force and _LAST_SYNC_TIME > 0 and (now_ts - _LAST_SYNC_TIME) < 6.0:
+    with _SYNC_STATE_LOCK:
+        last_t = _LAST_SYNC_TIME
+
+    if not force and last_t > 0 and (now_ts - last_t) < 6.0:
         stats["skipped"] = 1
         return stats
-    current_snap = _collect_fast_file_snapshot(ws_root)
-    if not force and _FILE_STAT_SNAPSHOT and current_snap == _FILE_STAT_SNAPSHOT:
-        _LAST_SYNC_TIME = now_ts
+
+    if not _SYNC_RUNNING_LOCK.acquire(blocking=force):
         stats["skipped"] = 1
         return stats
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    README_NAMES = {"00_事项要求与进展.md", "00_存档说明与纪要.md", "00_重要事项内容.md"}
+    try:
+        current_snap = _collect_fast_file_snapshot(ws_root)
+        with _SYNC_STATE_LOCK:
+            if not force and _FILE_STAT_SNAPSHOT and current_snap == _FILE_STAT_SNAPSHOT:
+                _LAST_SYNC_TIME = time.time()
+                stats["skipped"] = 1
+                return stats
 
-    with DB_LOCK:
-        conn = get_db()
-        existing_docs = {
-            r["rel_path"]: dict(r)
-            for r in conn.execute(
-                "SELECT id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, "
-                "file_size, mtime, content_hash FROM documents"
-            ).fetchall()
-        }
-        seen_rel_paths = set()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        README_NAMES = {"00_事项要求与进展.md", "00_存档说明与纪要.md", "00_重要事项内容.md"}
 
-        # v3.1.1 一次性回填：给待办目录里的既有文件补内容指纹，否则第一次改名认不回来
-        _missing = [r for r in existing_docs.values() if r.get("task_id") and not r.get("content_hash")]
-        for _r in _missing:
-            _sig = _file_content_sig(ws_root / _r["rel_path"])
-            if _sig:
-                conn.execute("UPDATE documents SET content_hash = ? WHERE id = ?", (_sig, _r["id"]))
-                _r["content_hash"] = _sig
+        # Phase 1: 快速读取既有文档索引（微秒级持锁），随后在锁外完成耗时文本解析与指纹计算
+        with DB_LOCK:
+            with db_conn() as conn:
+                snap_docs = {
+                    r["rel_path"]: (float(r["mtime"] or 0.0), int(r["file_size"] or 0), r["content_hash"] or "", r["task_id"])
+                    for r in conn.execute("SELECT rel_path, mtime, file_size, content_hash, task_id FROM documents").fetchall()
+                }
 
-        # ---------- A. 同步【工作台待办】与【公文与材料库】分类目录 ----------
-        tasks = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM tasks").fetchall()}
-        task_folder_map: Dict[str, Dict[str, Any]] = {}
-
-        for cat_dir in sorted(ws_root.iterdir()):
-            if not cat_dir.is_dir() or cat_dir.name.startswith(".") or cat_dir.name in RESERVED_TOP_DIRS:
-                continue
-            cat_name = cat_dir.name
-            for entry in sorted(cat_dir.iterdir()):
-                if entry.is_dir() and not entry.name.startswith("."):
-                    rel_dir = str(entry.relative_to(ws_root)).replace("\\", "/")
-                    readme_f = entry / "00_事项要求与进展.md"
-                    anchored_tid = _extract_anchor_id(readme_f, "gw_task_id")
-                    if anchored_tid and anchored_tid in tasks:
-                        t_obj = tasks[anchored_tid]
-                        if t_obj["folder_rel_path"] != rel_dir or t_obj["category"] != cat_name:
-                            old_rel_prefix = (t_obj["folder_rel_path"] or "").rstrip("/") + "/"
-                            new_rel_prefix = rel_dir.rstrip("/") + "/"
-                            conn.execute(
-                                "UPDATE tasks SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
-                                (rel_dir, cat_name, now_str, anchored_tid),
-                            )
-                            if old_rel_prefix != "/":
-                                moved_docs = conn.execute(
-                                    "SELECT id, rel_path FROM documents WHERE task_id = ?",
-                                    (anchored_tid,),
-                                ).fetchall()
-                                for md in moved_docs:
-                                    old_rp = md["rel_path"] or ""
-                                    if old_rp.startswith(old_rel_prefix):
-                                        new_rp = new_rel_prefix + old_rp[len(old_rel_prefix):]
-                                        conn.execute(
-                                            "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
-                                            (new_rp, cat_name, now_str, md["id"]),
-                                        )
-                                        if old_rp in existing_docs:
-                                            rec_m = existing_docs.pop(old_rp)
-                                            rec_m["rel_path"] = new_rp
-                                            rec_m["category"] = cat_name
-                                            existing_docs[new_rp] = rec_m
-                            t_obj["folder_rel_path"] = rel_dir
-                            t_obj["category"] = cat_name
-                            stats["moved_tasks"] += 1
-
-                        if readme_f.is_file():
-                            disk_rm_mtime = round(readme_f.stat().st_mtime, 2)
-                            db_rm_mtime = float(t_obj.get("readme_mtime") or 0.0)
-                            if db_rm_mtime > 0 and abs(disk_rm_mtime - db_rm_mtime) > 0.5:
-                                if _parse_and_reverse_sync_readme(conn, anchored_tid, readme_f):
-                                    stats["reverse_synced_tasks"] += 1
-                            elif db_rm_mtime == 0:
-                                conn.execute("UPDATE tasks SET readme_mtime = ? WHERE id = ?", (disk_rm_mtime, anchored_tid))
-
-                        task_folder_map[rel_dir] = t_obj
-
-        for tid, t_obj in tasks.items():
-            f_rel = t_obj.get("folder_rel_path") or ""
-            if f_rel and f_rel not in task_folder_map:
-                f_abs = ws_root / f_rel
-                if f_abs.exists() and f_abs.is_dir():
-                    task_folder_map[f_rel] = t_obj
-                    readme_f = f_abs / "00_事项要求与进展.md"
-                    if not readme_f.exists() or _extract_anchor_id(readme_f, "gw_task_id") is None:
-                        write_task_readme_file(conn, tid)
-
-        for cat_dir in sorted(ws_root.iterdir()):
-            if not cat_dir.is_dir() or cat_dir.name.startswith(".") or cat_dir.name in RESERVED_TOP_DIRS:
-                continue
-            cat_name = cat_dir.name
-            for entry in sorted(cat_dir.iterdir()):
-                if entry.name.startswith(".") or entry.name.startswith("~$") or entry.name == ".gitkeep":
+        pre_parsed: Dict[str, Tuple[str, str, str]] = {}
+        try:
+            for top_dir in sorted(ws_root.iterdir()):
+                if top_dir.is_symlink() or not top_dir.is_dir() or top_dir.name.startswith("."):
                     continue
-                if entry.is_dir():
-                    rel_dir = str(entry.relative_to(ws_root)).replace("\\", "/")
-                    task_obj = task_folder_map.get(rel_dir)
-                    for sub_file in sorted(entry.rglob("*")):
-                        if not sub_file.is_file():
-                            continue
-                        if sub_file.name.startswith(".") or sub_file.name.startswith("~$") or sub_file.name == ".gitkeep":
-                            continue
-                        if sub_file.name in README_NAMES:
-                            continue
-                        auto_tags = [entry.name] if (not task_obj and entry.name != cat_name) else []
-                        _upsert_synced_doc(
-                            conn, sub_file, ws_root, existing_docs, seen_rel_paths,
-                            cat_name=cat_name, now_str=now_str, stats=stats,
-                            task_id=task_obj["id"] if task_obj else None,
-                            auto_tags=auto_tags,
-                        )
-                elif entry.is_file():
-                    if entry.name in README_NAMES:
+                for f in top_dir.rglob("*"):
+                    if f.is_symlink() or not f.is_file():
                         continue
-                    _upsert_synced_doc(
-                        conn, entry, ws_root, existing_docs, seen_rel_paths,
-                        cat_name=cat_name, now_str=now_str, stats=stats,
-                    )
-
-        # ---------- B. 同步【📦 资料存档 (archives)】目录 (`workspace_files/资料存档/<分类>/<归档包>/`) ----------
-        arch_root = ws_root / ARCHIVE_ROOT_DIRNAME
-        if arch_root.exists() and arch_root.is_dir():
-            archives_by_id = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM archives").fetchall()}
-            archives_by_rel = {r["folder_rel_path"]: dict(r) for r in archives_by_id.values()}
-            seen_archive_ids = set()
-
-            for acat_dir in sorted(arch_root.iterdir()):
-                if not acat_dir.is_dir() or acat_dir.name.startswith("."):
-                    continue
-                acat_name = acat_dir.name
-                for bundle_dir in sorted(acat_dir.iterdir()):
-                    if bundle_dir.name.startswith(".") or bundle_dir.name.startswith("~$") or bundle_dir.name == ".gitkeep":
+                    if f.name.startswith(".") or f.name.startswith("~$") or f.name == ".gitkeep" or f.name in README_NAMES:
                         continue
-                    if bundle_dir.is_dir():
-                        rel_bundle = str(bundle_dir.relative_to(ws_root)).replace("\\", "/")
-                        rm_path = bundle_dir / "00_存档说明与纪要.md"
-                        aid = _extract_anchor_id(rm_path, "gw_archive_id")
-                        arch_obj = archives_by_id.get(aid) if aid else archives_by_rel.get(rel_bundle)
+                    try:
+                        rel_f = str(f.relative_to(ws_root)).replace("\\", "/")
+                        st_f = f.stat()
+                    except OSError:
+                        continue
+                    f_mtime = round(st_f.st_mtime, 2)
+                    f_size = st_f.st_size
+                    old_meta = snap_docs.get(rel_f)
+                    is_in_task_tree = top_dir.name not in RESERVED_TOP_DIRS
+                    if old_meta is None or abs(old_meta[0] - f_mtime) > 0.5 or old_meta[1] != f_size:
+                        ext_txt, ftype = extract_document_text(f)
+                        csig = _file_content_sig(f) if is_in_task_tree else ""
+                        pre_parsed[rel_f] = (ext_txt, ftype, csig)
+                    elif is_in_task_tree and old_meta[3] and not old_meta[2]:
+                        csig = _file_content_sig(f)
+                        pre_parsed[rel_f] = ("", "", csig)
+        except Exception as e:
+            logger.warning("Pre-parse scan error: %s", e)
 
-                        if arch_obj:
-                            aid = int(arch_obj["id"])
-                            if arch_obj["folder_rel_path"] != rel_bundle or arch_obj["category"] != acat_name:
+        # Phase 2: 持有 DB_LOCK 高速落盘所有变更
+        with DB_LOCK:
+            with db_conn() as conn:
+                existing_docs = {
+                    r["rel_path"]: dict(r)
+                    for r in conn.execute(
+                        "SELECT id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, "
+                        "sub_folder, file_size, mtime, content_hash, role_locked FROM documents"
+                    ).fetchall()
+                }
+                seen_rel_paths = set()
+
+                # 回填待办目录既有文件的内容指纹（优先复用锁外预计算结果）
+                _missing = [r for r in existing_docs.values() if r.get("task_id") and not r.get("content_hash")]
+                for _r in _missing:
+                    _rp = _r["rel_path"]
+                    _sig = pre_parsed[_rp][2] if (_rp in pre_parsed and pre_parsed[_rp][2]) else _file_content_sig(ws_root / _rp)
+                    if _sig:
+                        conn.execute("UPDATE documents SET content_hash = ? WHERE id = ?", (_sig, _r["id"]))
+                        _r["content_hash"] = _sig
+
+                # ---------- A. 同步【工作台待办】与【公文与材料库】分类目录 ----------
+                tasks = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM tasks").fetchall()}
+                task_folder_map: Dict[str, Dict[str, Any]] = {}
+
+                for cat_dir in sorted(ws_root.iterdir()):
+                    if cat_dir.is_symlink() or not cat_dir.is_dir() or cat_dir.name.startswith(".") or cat_dir.name in RESERVED_TOP_DIRS:
+                        continue
+                    cat_name = cat_dir.name
+                    for entry in sorted(cat_dir.iterdir()):
+                        if entry.is_symlink() or not entry.is_dir() or entry.name.startswith("."):
+                            continue
+                        rel_dir = str(entry.relative_to(ws_root)).replace("\\", "/")
+                        readme_f = entry / "00_事项要求与进展.md"
+                        anchored_tid = _extract_anchor_id(readme_f, "gw_task_id")
+                        if anchored_tid and anchored_tid in tasks:
+                            t_obj = tasks[anchored_tid]
+                            if t_obj["folder_rel_path"] != rel_dir or t_obj["category"] != cat_name:
+                                old_rel_prefix = (t_obj["folder_rel_path"] or "").rstrip("/") + "/"
+                                new_rel_prefix = rel_dir.rstrip("/") + "/"
                                 conn.execute(
-                                    "UPDATE archives SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
-                                    (rel_bundle, acat_name, now_str, aid),
+                                    "UPDATE tasks SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                    (rel_dir, cat_name, now_str, anchored_tid),
                                 )
-                            if rm_path.is_file():
-                                disk_mtime = round(rm_path.stat().st_mtime, 2)
-                                db_mtime = float(arch_obj.get("readme_mtime") or 0.0)
-                                if db_mtime > 0 and abs(disk_mtime - db_mtime) > 0.5:
-                                    _parse_and_reverse_sync_archive_readme(conn, aid, rm_path)
-                        else:
-                            # 用户在本地直接新建了子文件夹（如 11.17会议记录），自动识别并创建归档包记录！
-                            folder_title = bundle_dir.name
-                            m_dt = re.match(r"^(\d{4}-\d{2}-\d{2})[_\s]+(.+)$", folder_title)
-                            if m_dt:
-                                arch_date = m_dt.group(1)
-                                clean_title = m_dt.group(2)
-                            else:
-                                m_short = re.match(r"^(\d{1,2})[\.\-](\d{1,2})", folder_title)
-                                if m_short:
-                                    arch_date = f"{datetime.now().year}-{int(m_short.group(1)):02d}-{int(m_short.group(2)):02d}"
-                                else:
-                                    arch_date = datetime.now().strftime("%Y-%m-%d")
-                                clean_title = folder_title
-                            cur_a = conn.execute(
-                                """
-                                INSERT INTO archives (
-                                    title, archive_date, category, notes_md, tags_json,
-                                    is_pinned, folder_rel_path, readme_mtime, created_at, updated_at
-                                ) VALUES (?, ?, ?, '', '[]', 0, ?, 0, ?, ?)
-                                """,
-                                (clean_title, arch_date, acat_name, rel_bundle, now_str, now_str),
-                            )
-                            aid = int(cur_a.lastrowid)
+                                if old_rel_prefix != "/":
+                                    moved_docs = conn.execute(
+                                        "SELECT id, rel_path FROM documents WHERE task_id = ?",
+                                        (anchored_tid,),
+                                    ).fetchall()
+                                    for md in moved_docs:
+                                        old_rp = md["rel_path"] or ""
+                                        if old_rp.startswith(old_rel_prefix):
+                                            new_rp = new_rel_prefix + old_rp[len(old_rel_prefix):]
+                                            conn.execute(
+                                                "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                                (new_rp, cat_name, now_str, md["id"]),
+                                            )
+                                            if old_rp in existing_docs:
+                                                rec_m = existing_docs.pop(old_rp)
+                                                rec_m["rel_path"] = new_rp
+                                                rec_m["category"] = cat_name
+                                                existing_docs[new_rp] = rec_m
+                                t_obj["folder_rel_path"] = rel_dir
+                                t_obj["category"] = cat_name
+                                stats["moved_tasks"] += 1
 
-                        seen_archive_ids.add(aid)
-                        for sub_f in sorted(bundle_dir.rglob("*")):
-                            if not sub_f.is_file() or sub_f.name.startswith(".") or sub_f.name.startswith("~$") or sub_f.name in README_NAMES:
+                            if readme_f.is_file():
+                                disk_rm_mtime = round(readme_f.stat().st_mtime, 2)
+                                db_rm_mtime = float(t_obj.get("readme_mtime") or 0.0)
+                                if db_rm_mtime > 0 and abs(disk_rm_mtime - db_rm_mtime) > 0.5:
+                                    if _parse_and_reverse_sync_readme(conn, anchored_tid, readme_f):
+                                        stats["reverse_synced_tasks"] += 1
+                                elif db_rm_mtime == 0:
+                                    conn.execute("UPDATE tasks SET readme_mtime = ? WHERE id = ?", (disk_rm_mtime, anchored_tid))
+
+                            task_folder_map[rel_dir] = t_obj
+
+                for tid, t_obj in tasks.items():
+                    f_rel = t_obj.get("folder_rel_path") or ""
+                    if f_rel and f_rel not in task_folder_map:
+                        f_abs = ws_root / f_rel
+                        if f_abs.exists() and f_abs.is_dir() and not f_abs.is_symlink():
+                            task_folder_map[f_rel] = t_obj
+                            readme_f = f_abs / "00_事项要求与进展.md"
+                            if not readme_f.exists() or _extract_anchor_id(readme_f, "gw_task_id") is None:
+                                write_task_readme_file(conn, tid)
+
+                dirty_task_readme_ids: Set[int] = set()
+                for cat_dir in sorted(ws_root.iterdir()):
+                    if cat_dir.is_symlink() or not cat_dir.is_dir() or cat_dir.name.startswith(".") or cat_dir.name in RESERVED_TOP_DIRS:
+                        continue
+                    cat_name = cat_dir.name
+                    for entry in sorted(cat_dir.iterdir()):
+                        if entry.is_symlink() or entry.name.startswith(".") or entry.name.startswith("~$") or entry.name == ".gitkeep":
+                            continue
+                        if entry.is_dir():
+                            rel_dir = str(entry.relative_to(ws_root)).replace("\\", "/")
+                            task_obj = task_folder_map.get(rel_dir)
+                            for sub_file in sorted(entry.rglob("*")):
+                                if sub_file.is_symlink() or not sub_file.is_file():
+                                    continue
+                                if sub_file.name.startswith(".") or sub_file.name.startswith("~$") or sub_file.name == ".gitkeep":
+                                    continue
+                                if sub_file.name in README_NAMES:
+                                    continue
+                                rel_to_entry = sub_file.relative_to(entry)
+                                if any(part.startswith(".") for part in rel_to_entry.parts[:-1]):
+                                    continue
+                                sf_name = rel_to_entry.parts[0] if (task_obj and len(rel_to_entry.parts) > 1) else ""
+                                auto_tags = [entry.name] if (not task_obj and entry.name != cat_name) else []
+                                prev_changes = stats["added"] + stats["updated"]
+                                _upsert_synced_doc(
+                                    conn, sub_file, ws_root, existing_docs, seen_rel_paths,
+                                    cat_name=cat_name, now_str=now_str, stats=stats,
+                                    task_id=task_obj["id"] if task_obj else None,
+                                    auto_tags=auto_tags,
+                                    sub_folder=sf_name,
+                                    pre_parsed=pre_parsed,
+                                )
+                                if task_obj and (stats["added"] + stats["updated"]) > prev_changes:
+                                    dirty_task_readme_ids.add(int(task_obj["id"]))
+                        elif entry.is_file():
+                            if entry.name in README_NAMES:
                                 continue
                             _upsert_synced_doc(
-                                conn, sub_f, ws_root, existing_docs, seen_rel_paths,
-                                cat_name=acat_name, now_str=now_str, stats=stats,
-                                archive_id=aid, forced_role="archive",
+                                conn, entry, ws_root, existing_docs, seen_rel_paths,
+                                cat_name=cat_name, now_str=now_str, stats=stats,
+                                pre_parsed=pre_parsed,
                             )
-                        if not rm_path.exists():
-                            write_archive_readme_file(conn, aid)
 
-        # ---------- C. 同步【📌 重要事项记录 (important_records)】目录 (`workspace_files/重要事项记录/<分类>/<条目>/`) ----------
-        rec_root = ws_root / RECORD_ROOT_DIRNAME
-        if rec_root.exists() and rec_root.is_dir():
-            records_by_id = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM important_records").fetchall()}
-            records_by_rel = {r["folder_rel_path"]: dict(r) for r in records_by_id.values()}
-
-            for rcat_dir in sorted(rec_root.iterdir()):
-                if not rcat_dir.is_dir() or rcat_dir.name.startswith("."):
-                    continue
-                rcat_name = rcat_dir.name
-                for item_entry in sorted(rcat_dir.iterdir()):
-                    if item_entry.name.startswith(".") or item_entry.name.startswith("~$") or item_entry.name == ".gitkeep":
-                        continue
-                    if item_entry.is_dir():
-                        rel_rec = str(item_entry.relative_to(ws_root)).replace("\\", "/")
-                        rm_path = item_entry / "00_重要事项内容.md"
-                        rid = _extract_anchor_id(rm_path, "gw_record_id")
-                        rec_obj = records_by_id.get(rid) if rid else records_by_rel.get(rel_rec)
-                        if rec_obj:
-                            rid = int(rec_obj["id"])
-                            if rec_obj["folder_rel_path"] != rel_rec or rec_obj["category"] != rcat_name:
-                                conn.execute(
-                                    "UPDATE important_records SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
-                                    (rel_rec, rcat_name, now_str, rid),
-                                )
-                            if rm_path.is_file():
-                                disk_mtime = round(rm_path.stat().st_mtime, 2)
-                                db_mtime = float(rec_obj.get("readme_mtime") or 0.0)
-                                if db_mtime > 0 and abs(disk_mtime - db_mtime) > 0.5:
-                                    _parse_and_reverse_sync_record_readme(conn, rid, rm_path)
-                        else:
-                            cur_r = conn.execute(
-                                """
-                                INSERT INTO important_records (
-                                    title, category, content_md, tags_json, primary_doc_id,
-                                    is_pinned, sort_order, folder_rel_path, readme_mtime, created_at, updated_at
-                                ) VALUES (?, ?, '', '[]', NULL, 0, 0, ?, 0, ?, ?)
-                                """,
-                                (item_entry.name, rcat_name, rel_rec, now_str, now_str),
-                            )
-                            rid = int(cur_r.lastrowid)
-
-                        first_doc_id = None
-                        for sub_f in sorted(item_entry.rglob("*")):
-                            if not sub_f.is_file() or sub_f.name.startswith(".") or sub_f.name.startswith("~$") or sub_f.name in README_NAMES:
+                # ---------- B. 同步【📦 资料存档 (archives)】目录 ----------
+                archives_by_id = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM archives").fetchall()}
+                archives_by_rel = {r["folder_rel_path"]: dict(r) for r in archives_by_id.values()}
+                arch_root = ws_root / ARCHIVE_ROOT_DIRNAME
+                if arch_root.exists() and arch_root.is_dir() and not arch_root.is_symlink():
+                    for acat_dir in sorted(arch_root.iterdir()):
+                        if acat_dir.is_symlink() or not acat_dir.is_dir() or acat_dir.name.startswith("."):
+                            continue
+                        acat_name = acat_dir.name
+                        for bundle_dir in sorted(acat_dir.iterdir()):
+                            if bundle_dir.is_symlink() or bundle_dir.name.startswith(".") or bundle_dir.name.startswith("~$") or bundle_dir.name == ".gitkeep":
                                 continue
-                            did = _upsert_synced_doc(
-                                conn, sub_f, ws_root, existing_docs, seen_rel_paths,
-                                cat_name=rcat_name, now_str=now_str, stats=stats,
-                                record_id=rid, forced_role="record",
-                            )
-                            if first_doc_id is None:
-                                first_doc_id = did
-                        if first_doc_id is not None:
-                            conn.execute(
-                                "UPDATE important_records SET primary_doc_id = COALESCE(primary_doc_id, ?) WHERE id = ?",
-                                (first_doc_id, rid),
-                            )
-                        if not rm_path.exists():
-                            write_record_readme_file(conn, rid)
+                            if bundle_dir.is_dir():
+                                rel_bundle = str(bundle_dir.relative_to(ws_root)).replace("\\", "/")
+                                rm_path = bundle_dir / "00_存档说明与纪要.md"
+                                aid = _extract_anchor_id(rm_path, "gw_archive_id")
+                                arch_obj = archives_by_id.get(aid) if aid else archives_by_rel.get(rel_bundle)
 
-        # 清理磁盘上已移除的文件索引及孤儿目录记录
-        for rel_p, doc_rec in existing_docs.items():
-            if rel_p not in seen_rel_paths:
-                abs_p = ws_root / rel_p
-                if not abs_p.exists():
-                    conn.execute("DELETE FROM documents WHERE id = ?", (doc_rec["id"],))
-                    conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_rec["id"],))
-                    stats["removed"] += 1
+                                if arch_obj:
+                                    aid = int(arch_obj["id"])
+                                    if arch_obj["folder_rel_path"] != rel_bundle or arch_obj["category"] != acat_name:
+                                        old_rel_prefix = (arch_obj["folder_rel_path"] or "").rstrip("/") + "/"
+                                        new_rel_prefix = rel_bundle.rstrip("/") + "/"
+                                        conn.execute(
+                                            "UPDATE archives SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                            (rel_bundle, acat_name, now_str, aid),
+                                        )
+                                        if old_rel_prefix != "/":
+                                            for md in conn.execute("SELECT id, rel_path FROM documents WHERE archive_id = ?", (aid,)).fetchall():
+                                                old_rp = md["rel_path"] or ""
+                                                if old_rp.startswith(old_rel_prefix):
+                                                    new_rp = new_rel_prefix + old_rp[len(old_rel_prefix):]
+                                                    conn.execute(
+                                                        "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                                        (new_rp, acat_name, now_str, md["id"]),
+                                                    )
+                                                    if old_rp in existing_docs:
+                                                        rec_m = existing_docs.pop(old_rp)
+                                                        rec_m["rel_path"] = new_rp
+                                                        rec_m["category"] = acat_name
+                                                        existing_docs[new_rp] = rec_m
+                                        arch_obj["folder_rel_path"] = rel_bundle
+                                        arch_obj["category"] = acat_name
+                                    if rm_path.is_file():
+                                        disk_mtime = round(rm_path.stat().st_mtime, 2)
+                                        db_mtime = float(arch_obj.get("readme_mtime") or 0.0)
+                                        if db_mtime > 0 and abs(disk_mtime - db_mtime) > 0.5:
+                                            _parse_and_reverse_sync_archive_readme(conn, aid, rm_path)
+                                else:
+                                    folder_title = bundle_dir.name
+                                    m_dt = re.match(r"^(\d{4}-\d{2}-\d{2})[_\s]+(.+)$", folder_title)
+                                    if m_dt:
+                                        arch_date = m_dt.group(1)
+                                        clean_title = m_dt.group(2)
+                                    else:
+                                        m_short = re.match(r"^(\d{1,2})[\.\-](\d{1,2})", folder_title)
+                                        if m_short:
+                                            arch_date = f"{datetime.now().year}-{int(m_short.group(1)):02d}-{int(m_short.group(2)):02d}"
+                                        else:
+                                            arch_date = datetime.now().strftime("%Y-%m-%d")
+                                        clean_title = folder_title
+                                    cur_a = conn.execute(
+                                        """
+                                        INSERT INTO archives (
+                                            title, archive_date, category, notes_md, tags_json,
+                                            is_pinned, folder_rel_path, readme_mtime, created_at, updated_at
+                                        ) VALUES (?, ?, ?, '', '[]', 0, ?, 0, ?, ?)
+                                        """,
+                                        (clean_title, arch_date, acat_name, rel_bundle, now_str, now_str),
+                                    )
+                                    aid = int(cur_a.lastrowid)
 
-        for tid, t_obj in tasks.items():
-            frel = t_obj.get("folder_rel_path") or ""
-            if frel and not (ws_root / frel).exists():
-                conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
-                stats["removed"] += 1
+                                for sub_f in sorted(bundle_dir.rglob("*")):
+                                    if sub_f.is_symlink() or not sub_f.is_file() or sub_f.name.startswith(".") or sub_f.name.startswith("~$") or sub_f.name in README_NAMES:
+                                        continue
+                                    _upsert_synced_doc(
+                                        conn, sub_f, ws_root, existing_docs, seen_rel_paths,
+                                        cat_name=acat_name, now_str=now_str, stats=stats,
+                                        archive_id=aid, forced_role="archive",
+                                        pre_parsed=pre_parsed,
+                                    )
+                                if not rm_path.exists():
+                                    write_archive_readme_file(conn, aid)
 
-        conn.commit()
-        conn.close()
+                # ---------- C. 同步【📌 重要事项记录 (important_records)】目录 ----------
+                records_by_id = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM important_records").fetchall()}
+                records_by_rel = {r["folder_rel_path"]: dict(r) for r in records_by_id.values()}
+                rec_root = ws_root / RECORD_ROOT_DIRNAME
+                if rec_root.exists() and rec_root.is_dir() and not rec_root.is_symlink():
+                    for rcat_dir in sorted(rec_root.iterdir()):
+                        if rcat_dir.is_symlink() or not rcat_dir.is_dir() or rcat_dir.name.startswith("."):
+                            continue
+                        rcat_name = rcat_dir.name
+                        for item_entry in sorted(rcat_dir.iterdir()):
+                            if item_entry.is_symlink() or item_entry.name.startswith(".") or item_entry.name.startswith("~$") or item_entry.name == ".gitkeep":
+                                continue
+                            if item_entry.is_dir():
+                                rel_rec = str(item_entry.relative_to(ws_root)).replace("\\", "/")
+                                rm_path = item_entry / "00_重要事项内容.md"
+                                rid = _extract_anchor_id(rm_path, "gw_record_id")
+                                rec_obj = records_by_id.get(rid) if rid else records_by_rel.get(rel_rec)
+                                if rec_obj:
+                                    rid = int(rec_obj["id"])
+                                    if rec_obj["folder_rel_path"] != rel_rec or rec_obj["category"] != rcat_name:
+                                        old_rel_prefix = (rec_obj["folder_rel_path"] or "").rstrip("/") + "/"
+                                        new_rel_prefix = rel_rec.rstrip("/") + "/"
+                                        conn.execute(
+                                            "UPDATE important_records SET folder_rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                            (rel_rec, rcat_name, now_str, rid),
+                                        )
+                                        if old_rel_prefix != "/":
+                                            for md in conn.execute("SELECT id, rel_path FROM documents WHERE record_id = ?", (rid,)).fetchall():
+                                                old_rp = md["rel_path"] or ""
+                                                if old_rp.startswith(old_rel_prefix):
+                                                    new_rp = new_rel_prefix + old_rp[len(old_rel_prefix):]
+                                                    conn.execute(
+                                                        "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                                        (new_rp, rcat_name, now_str, md["id"]),
+                                                    )
+                                                    if old_rp in existing_docs:
+                                                        rec_m = existing_docs.pop(old_rp)
+                                                        rec_m["rel_path"] = new_rp
+                                                        rec_m["category"] = rcat_name
+                                                        existing_docs[new_rp] = rec_m
+                                        rec_obj["folder_rel_path"] = rel_rec
+                                        rec_obj["category"] = rcat_name
+                                    if rm_path.is_file():
+                                        disk_mtime = round(rm_path.stat().st_mtime, 2)
+                                        db_mtime = float(rec_obj.get("readme_mtime") or 0.0)
+                                        if db_mtime > 0 and abs(disk_mtime - db_mtime) > 0.5:
+                                            _parse_and_reverse_sync_record_readme(conn, rid, rm_path)
+                                else:
+                                    cur_r = conn.execute(
+                                        """
+                                        INSERT INTO important_records (
+                                            title, category, content_md, tags_json, primary_doc_id,
+                                            is_pinned, sort_order, folder_rel_path, readme_mtime, created_at, updated_at
+                                        ) VALUES (?, ?, '', '[]', NULL, 0, 0, ?, 0, ?, ?)
+                                        """,
+                                        (item_entry.name, rcat_name, rel_rec, now_str, now_str),
+                                    )
+                                    rid = int(cur_r.lastrowid)
 
-    _LAST_SYNC_TIME = time.time()
-    _FILE_STAT_SNAPSHOT = _collect_fast_file_snapshot(ws_root)
-    return stats
+                                first_doc_id = None
+                                for sub_f in sorted(item_entry.rglob("*")):
+                                    if sub_f.is_symlink() or not sub_f.is_file() or sub_f.name.startswith(".") or sub_f.name.startswith("~$") or sub_f.name in README_NAMES:
+                                        continue
+                                    did = _upsert_synced_doc(
+                                        conn, sub_f, ws_root, existing_docs, seen_rel_paths,
+                                        cat_name=rcat_name, now_str=now_str, stats=stats,
+                                        record_id=rid, forced_role="record",
+                                        pre_parsed=pre_parsed,
+                                    )
+                                    if first_doc_id is None:
+                                        first_doc_id = did
+                                if first_doc_id is not None:
+                                    conn.execute(
+                                        "UPDATE important_records SET primary_doc_id = COALESCE(primary_doc_id, ?) WHERE id = ?",
+                                        (first_doc_id, rid),
+                                    )
+                                if not rm_path.exists():
+                                    write_record_readme_file(conn, rid)
+
+                # ---------- D. 清理磁盘上已移除的文件索引及孤儿目录记录（含 tasks / archives / important_records） ----------
+                for rel_p, doc_rec in existing_docs.items():
+                    if rel_p not in seen_rel_paths:
+                        abs_p = ws_root / rel_p
+                        if not abs_p.exists():
+                            conn.execute("DELETE FROM documents WHERE id = ?", (doc_rec["id"],))
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_rec["id"],))
+                            stats["removed"] += 1
+
+                for tid, t_obj in tasks.items():
+                    frel = t_obj.get("folder_rel_path") or ""
+                    if frel and not (ws_root / frel).exists():
+                        conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
+                        stats["removed"] += 1
+
+                for aid, a_obj in archives_by_id.items():
+                    frel = a_obj.get("folder_rel_path") or ""
+                    if frel and not (ws_root / frel).exists():
+                        for d_r in conn.execute("SELECT id FROM documents WHERE archive_id = ?", (aid,)).fetchall():
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d_r["id"],))
+                        conn.execute("DELETE FROM documents WHERE archive_id = ?", (aid,))
+                        conn.execute("DELETE FROM archives WHERE id = ?", (aid,))
+                        stats["removed"] += 1
+
+                for rid, r_obj in records_by_id.items():
+                    frel = r_obj.get("folder_rel_path") or ""
+                    if frel and not (ws_root / frel).exists():
+                        for d_r in conn.execute("SELECT id FROM documents WHERE record_id = ?", (rid,)).fetchall():
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d_r["id"],))
+                        conn.execute("DELETE FROM documents WHERE record_id = ?", (rid,))
+                        conn.execute("DELETE FROM important_records WHERE id = ?", (rid,))
+                        stats["removed"] += 1
+
+                for _dirty_tid in sorted(dirty_task_readme_ids):
+                    if (tasks.get(_dirty_tid) or {}).get("folder_rel_path") and (ws_root / tasks[_dirty_tid]["folder_rel_path"]).exists():
+                        try:
+                            write_task_readme_file(conn, _dirty_tid)
+                        except Exception as _rm_err:
+                            logger.warning("刷新任务 %s 说明文档失败: %s", _dirty_tid, _rm_err)
+                conn.commit()
+
+        new_snap = _collect_fast_file_snapshot(ws_root)
+        with _SYNC_STATE_LOCK:
+            _LAST_SYNC_TIME = time.time()
+            _FILE_STAT_SNAPSHOT = new_snap
+            _LAST_SYNC_STATS = dict(stats)
+        return stats
+    finally:
+        _SYNC_RUNNING_LOCK.release()
+
+
+def start_background_sync_thread(interval: float = 15.0) -> threading.Thread:
+    """启动轻量后台守护线程：每 15 秒增量检测磁盘变动并定期检查周期性任务派生，受防重入保护"""
+    def _worker():
+        last_recurring_check = time.time()
+        while not _BG_SYNC_STOP.wait(interval):
+            try:
+                sync_filesystem(force=False)
+            except Exception as e:
+                logger.warning("Background sync_filesystem error: %s", e)
+            now_t = time.time()
+            if now_t - last_recurring_check >= 60.0:
+                last_recurring_check = now_t
+                try:
+                    check_and_spawn_all_recurring()
+                except Exception as e:
+                    logger.warning("Background check_and_spawn_all_recurring error: %s", e)
+
+    t = threading.Thread(target=_worker, name="gw-bg-sync", daemon=True)
+    t.start()
+    return t
 
 
 def _move_task_folder_to_category(
@@ -1788,6 +2203,13 @@ def _get_media_kind(filename: str) -> str:
     return "text"
 
 
+def _fast_abs_path(root: Path, rel_path: str) -> str:
+    """无磁盘 syscall 的绝对路径拼接（root 已在 get_workspace_root() 中 resolve）"""
+    if not rel_path:
+        return ""
+    return os.path.normpath(os.path.join(str(root), *rel_path.replace("\\", "/").split("/")))
+
+
 def serialize_doc_light(row: Any, snippet: str = "", ws_root: Optional[Path] = None) -> Dict[str, Any]:
     d = dict(row)
     preview = d.get("content_preview")
@@ -1800,12 +2222,13 @@ def serialize_doc_light(row: Any, snippet: str = "", ws_root: Optional[Path] = N
     d["tags"] = json.loads(d.pop("tags_json", "[]") or "[]")
     d["is_starred"] = bool(d.get("is_starred", 0))
     d["is_pinned"] = bool(d.get("is_pinned", 0))
+    d["sub_folder"] = d.get("sub_folder") or ""
     d["content_preview"] = preview
     d["snippet"] = snippet or (preview[:180].replace("\n", " ") if preview else "")
     d["media_kind"] = _get_media_kind(d.get("filename", ""))
     d["media_url"] = f"/api/media/{d['id']}"
     root = ws_root or get_workspace_root()
-    d["abs_path"] = str((root / d["rel_path"]).resolve())
+    d["abs_path"] = _fast_abs_path(root, d.get("rel_path") or "")
     return d
 
 
@@ -1848,9 +2271,30 @@ def serialize_task(
 
     t["incoming_files"] = [d for d in task_docs if d["doc_role"] == "incoming"]
     t["drafted_files"] = [d for d in task_docs if d["doc_role"] != "incoming"]
-    t["folder_abs_path"] = str((root / t["folder_rel_path"]).resolve()) if t.get("folder_rel_path") else ""
+    folder_rel = t.get("folder_rel_path") or ""
+    t["folder_abs_path"] = _fast_abs_path(root, folder_rel) if folder_rel else ""
 
-    # 性能优化：仅对非归档事项计算相似旧稿，避免历史事项拖慢 Bootstrap
+    # v3.3.0：「我写的材料」单层子文件夹统计（合并物理一级子目录与 drafted_files 的 sub_folder）
+    folder_counts: Dict[str, int] = {}
+    if folder_rel:
+        f_abs = root / folder_rel
+        try:
+            if f_abs.is_dir() and not f_abs.is_symlink():
+                for child in f_abs.iterdir():
+                    if not child.is_symlink() and child.is_dir() and not child.name.startswith("."):
+                        folder_counts.setdefault(child.name, 0)
+        except OSError:
+            pass
+    for d in t["drafted_files"]:
+        sf = (d.get("sub_folder") or "").strip()
+        if sf:
+            folder_counts[sf] = folder_counts.get(sf, 0) + 1
+    t["material_folders"] = [
+        {"name": name, "file_count": folder_counts[name]}
+        for name in sorted(folder_counts.keys())
+    ]
+
+    # 性能优化：按需计算相似旧稿（/api/bootstrap 默认 include_refs=False，由 /api/tasks/<id>/references 异步拉取）
     if include_refs and t.get("status") != "archived":
         t["reference_docs"] = find_similar_library_docs_fast(
             all_light_docs, t["title"], t.get("summary", ""), exclude_task_id=t["id"], limit=4, category=t.get("category", ""), conn=conn
@@ -1887,7 +2331,7 @@ def serialize_archive(
     a["audios"] = [f for f in files if f.get("media_kind") == "audio"]
     a["videos"] = [f for f in files if f.get("media_kind") == "video"]
     a["other_docs"] = [f for f in files if f.get("media_kind") not in ("image", "audio", "video")]
-    a["folder_abs_path"] = str((root / a["folder_rel_path"]).resolve()) if a.get("folder_rel_path") else ""
+    a["folder_abs_path"] = _fast_abs_path(root, a.get("folder_rel_path") or "") if a.get("folder_rel_path") else ""
     return a
 
 
@@ -1928,7 +2372,7 @@ def serialize_record(
     else:
         rec["files"] = files
 
-    rec["folder_abs_path"] = str((root / rec["folder_rel_path"]).resolve()) if rec.get("folder_rel_path") else ""
+    rec["folder_abs_path"] = _fast_abs_path(root, rec.get("folder_rel_path") or "") if rec.get("folder_rel_path") else ""
     return rec
 
 
@@ -1955,172 +2399,212 @@ def execute_search(
     scope: str = "full",
     category: str = "",
     doc_role: str = "",
+    limit: int = 200,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     四维全库检索：同时返回 (matched_tasks, matched_docs, matched_archives, matched_records)
-    修复 BUG-03：使用子查询 `id IN (SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?)` 消除 999 参数上限！
+    v3.3.0 优化：预建 docs_by_task/archive/record 消除 O(N×M)，默认 LIMIT 200 且截断超大 extracted_text 读取
     """
     q_clean = (query or "").strip()
     keywords = [k for k in re.split(r"\s+", q_clean) if k] if q_clean else []
     ws_root = get_workspace_root()
+    eff_limit = max(1, min(int(limit or 200), 1000))
 
     with DB_LOCK:
-        conn = get_db()
-        all_doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-        preloaded_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_doc_rows]
+        with db_conn() as conn:
+            all_doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+            preloaded_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_doc_rows]
+            docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+            docs_by_archive: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+            docs_by_record: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+            for _d in preloaded_light_docs:
+                if _d.get("task_id"):
+                    docs_by_task[int(_d["task_id"])].append(_d)
+                if _d.get("archive_id"):
+                    docs_by_archive[int(_d["archive_id"])].append(_d)
+                if _d.get("record_id"):
+                    docs_by_record[int(_d["record_id"])].append(_d)
 
-        # 1. 检索工作事项 (tasks)
-        task_rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
-        matched_tasks = []
-        for r in task_rows:
-            if category and r["category"] != category:
-                continue
+            # 1. 检索工作事项 (tasks)
+            task_rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
+            matched_tasks = []
+            for r in task_rows:
+                if category and r["category"] != category:
+                    continue
+                if not keywords:
+                    matched_tasks.append(serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root, docs_by_task=docs_by_task))
+                    if len(matched_tasks) >= eff_limit:
+                        break
+                    continue
+
+                if scope == "title":
+                    haystack = f"{r['title']} {r['doc_number']} {r['issuing_org']}"
+                else:
+                    haystack = (
+                        f"{r['title']} {r['doc_number']} {r['issuing_org']} "
+                        f"{r['summary']} {r['raw_notice_text']} {r['checklist_json']} {r['progress_json']}"
+                    )
+                hay_lower = haystack.lower()
+                if all(kw.lower() in hay_lower for kw in keywords):
+                    t_obj = serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root, docs_by_task=docs_by_task)
+                    t_obj["match_snippet"] = build_highlight_snippet(haystack, keywords)
+                    matched_tasks.append(t_obj)
+                    if len(matched_tasks) >= eff_limit:
+                        break
+
+            # 2. 检索公文与材料文件 (documents)
+            matched_docs = []
             if not keywords:
-                matched_tasks.append(serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root))
-                continue
-
-            if scope == "title":
-                haystack = f"{r['title']} {r['doc_number']} {r['issuing_org']}"
+                for d in preloaded_light_docs:
+                    if category and d["category"] != category:
+                        continue
+                    if doc_role and d["doc_role"] != doc_role:
+                        continue
+                    matched_docs.append(d)
+                    if len(matched_docs) >= eff_limit:
+                        break
+            elif scope == "title":
+                for d in preloaded_light_docs:
+                    if category and d["category"] != category:
+                        continue
+                    if doc_role and d["doc_role"] != doc_role:
+                        continue
+                    haystack = f"{d['filename']} {' '.join(d['tags'])} {d['category']}"
+                    if all(kw.lower() in haystack.lower() for kw in keywords):
+                        d_copy = dict(d)
+                        d_copy["snippet"] = build_highlight_snippet(d["content_preview"] or d["filename"], keywords)
+                        matched_docs.append(d_copy)
+                        if len(matched_docs) >= eff_limit:
+                            break
             else:
-                haystack = (
-                    f"{r['title']} {r['doc_number']} {r['issuing_org']} "
-                    f"{r['summary']} {r['raw_notice_text']} {r['checklist_json']} {r['progress_json']}"
+                match_expr = _build_fts_match_expr(keywords, join_op="AND")
+                select_cols = (
+                    "SELECT id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder, "
+                    "file_type, file_size, mtime, substr(extracted_text, 1, 32768) AS extracted_text, "
+                    "tags_json, is_starred, is_pinned, created_at, updated_at FROM documents WHERE 1=1"
                 )
-            hay_lower = haystack.lower()
-            if all(kw.lower() in hay_lower for kw in keywords):
-                t_obj = serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
-                t_obj["match_snippet"] = build_highlight_snippet(haystack, keywords)
-                matched_tasks.append(t_obj)
-
-        # 2. 检索公文与材料文件 (documents)
-        matched_docs = []
-        if not keywords:
-            for d in preloaded_light_docs:
-                if category and d["category"] != category:
-                    continue
-                if doc_role and d["doc_role"] != doc_role:
-                    continue
-                matched_docs.append(d)
-        elif scope == "title":
-            for d in preloaded_light_docs:
-                if category and d["category"] != category:
-                    continue
-                if doc_role and d["doc_role"] != doc_role:
-                    continue
-                haystack = f"{d['filename']} {' '.join(d['tags'])} {d['category']}"
-                if all(kw.lower() in haystack.lower() for kw in keywords):
-                    d_copy = dict(d)
-                    d_copy["snippet"] = build_highlight_snippet(d["content_preview"] or d["filename"], keywords)
-                    matched_docs.append(d_copy)
-        else:
-            match_expr = _build_fts_match_expr(keywords, join_op="AND")
-            sql = (
-                "SELECT id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, "
-                "file_type, file_size, mtime, extracted_text, tags_json, is_starred, is_pinned, created_at, updated_at "
-                "FROM documents WHERE 1=1"
-            )
-            params: List[Any] = []
-            if match_expr:
-                sql += " AND id IN (SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?)"
-                params.append(match_expr)
-            if category:
-                sql += " AND category = ?"
-                params.append(category)
-            if doc_role:
-                sql += " AND doc_role = ?"
-                params.append(doc_role)
-            for kw in keywords:
-                sql += " AND (filename LIKE ? OR tags_json LIKE ? OR category LIKE ? OR extracted_text LIKE ?)"
-                like_pat = f"%{kw}%"
-                params.extend([like_pat, like_pat, like_pat, like_pat])
-            sql += " ORDER BY is_starred DESC, id DESC"
-            try:
-                rows_found = conn.execute(sql, params).fetchall()
-            except Exception:
-                # 若 FTS 语法极端特殊回退纯 LIKE
-                sql_fb = (
-                    "SELECT id, task_id, archive_id, record_id, filename, rel_path, category, doc_role, "
-                    "file_type, file_size, mtime, extracted_text, tags_json, is_starred, is_pinned, created_at, updated_at "
-                    "FROM documents WHERE 1=1"
-                )
-                params_fb: List[Any] = []
+                sql = select_cols
+                params: List[Any] = []
+                if match_expr:
+                    sql += " AND id IN (SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?)"
+                    params.append(match_expr)
                 if category:
-                    sql_fb += " AND category = ?"
-                    params_fb.append(category)
+                    sql += " AND category = ?"
+                    params.append(category)
                 if doc_role:
-                    sql_fb += " AND doc_role = ?"
-                    params_fb.append(doc_role)
+                    sql += " AND doc_role = ?"
+                    params.append(doc_role)
                 for kw in keywords:
-                    sql_fb += " AND (filename LIKE ? OR tags_json LIKE ? OR category LIKE ? OR extracted_text LIKE ?)"
-                    lp = f"%{kw}%"
-                    params_fb.extend([lp, lp, lp, lp])
-                sql_fb += " ORDER BY is_starred DESC, id DESC"
-                rows_found = conn.execute(sql_fb, params_fb).fetchall()
+                    sql += " AND (filename LIKE ? OR tags_json LIKE ? OR category LIKE ? OR extracted_text LIKE ?)"
+                    like_pat = f"%{kw}%"
+                    params.extend([like_pat, like_pat, like_pat, like_pat])
+                sql += " ORDER BY is_starred DESC, id DESC LIMIT ?"
+                params.append(eff_limit)
+                try:
+                    rows_found = conn.execute(sql, params).fetchall()
+                except Exception:
+                    sql_fb = select_cols
+                    params_fb: List[Any] = []
+                    if category:
+                        sql_fb += " AND category = ?"
+                        params_fb.append(category)
+                    if doc_role:
+                        sql_fb += " AND doc_role = ?"
+                        params_fb.append(doc_role)
+                    for kw in keywords:
+                        sql_fb += " AND (filename LIKE ? OR tags_json LIKE ? OR category LIKE ? OR extracted_text LIKE ?)"
+                        lp = f"%{kw}%"
+                        params_fb.extend([lp, lp, lp, lp])
+                    sql_fb += " ORDER BY is_starred DESC, id DESC LIMIT ?"
+                    params_fb.append(eff_limit)
+                    rows_found = conn.execute(sql_fb, params_fb).fetchall()
 
-            for r in rows_found:
-                snip = build_highlight_snippet(r["extracted_text"] or r["filename"], keywords)
-                matched_docs.append(serialize_doc_light(r, snippet=snip, ws_root=ws_root))
+                for r in rows_found:
+                    snip = build_highlight_snippet(r["extracted_text"] or r["filename"], keywords)
+                    matched_docs.append(serialize_doc_light(r, snippet=snip, ws_root=ws_root))
 
-        matched_doc_archive_ids = {d.get("archive_id") for d in matched_docs if d.get("archive_id")}
-        matched_doc_record_ids = {d.get("record_id") for d in matched_docs if d.get("record_id")}
+            matched_doc_archive_ids = {d.get("archive_id") for d in matched_docs if d.get("archive_id")}
+            matched_doc_record_ids = {d.get("record_id") for d in matched_docs if d.get("record_id")}
 
-        # 3. 检索【📦 资料存档】归档包 (archives)
-        arch_rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
-        matched_archives = []
-        for ar in arch_rows:
-            if category and ar["category"] != category:
-                continue
-            a_obj = serialize_archive(conn, ar, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
-            if not keywords:
-                matched_archives.append(a_obj)
-                continue
-            file_names_str = " ".join(f["filename"] for f in a_obj["files"])
-            if scope == "title":
-                hay = f"{ar['title']} {ar['archive_date']} {ar['category']} {file_names_str}"
-            else:
-                hay = f"{ar['title']} {ar['archive_date']} {ar['category']} {ar['notes_md']} {ar['tags_json']} {file_names_str}"
-            if all(kw.lower() in hay.lower() for kw in keywords) or (ar["id"] in matched_doc_archive_ids):
-                a_obj["match_snippet"] = build_highlight_snippet(hay, keywords)
-                matched_archives.append(a_obj)
+            # 3. 检索【📦 资料存档】归档包 (archives)
+            arch_rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
+            matched_archives = []
+            for ar in arch_rows:
+                if category and ar["category"] != category:
+                    continue
+                a_obj = serialize_archive(conn, ar, preloaded_docs=preloaded_light_docs, ws_root=ws_root, docs_by_archive=docs_by_archive)
+                if not keywords:
+                    matched_archives.append(a_obj)
+                    if len(matched_archives) >= eff_limit:
+                        break
+                    continue
+                file_names_str = " ".join(f["filename"] for f in a_obj["files"])
+                if scope == "title":
+                    hay = f"{ar['title']} {ar['archive_date']} {ar['category']} {file_names_str}"
+                else:
+                    hay = f"{ar['title']} {ar['archive_date']} {ar['category']} {ar['notes_md']} {ar['tags_json']} {file_names_str}"
+                if all(kw.lower() in hay.lower() for kw in keywords) or (ar["id"] in matched_doc_archive_ids):
+                    a_obj["match_snippet"] = build_highlight_snippet(hay, keywords)
+                    matched_archives.append(a_obj)
+                    if len(matched_archives) >= eff_limit:
+                        break
 
-        # 4. 检索【📌 重要事项记录】知识库 (important_records)
-        rec_rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
-        matched_records = []
-        for rr in rec_rows:
-            if category and rr["category"] != category:
-                continue
-            r_obj = serialize_record(conn, rr, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
-            if not keywords:
-                matched_records.append(r_obj)
-                continue
-            file_names_str = " ".join(f["filename"] for f in r_obj["files"])
-            if scope == "title":
-                hay = f"{rr['title']} {rr['category']} {file_names_str}"
-            else:
-                hay = f"{rr['title']} {rr['category']} {rr['content_md']} {rr['tags_json']} {file_names_str}"
-            if all(kw.lower() in hay.lower() for kw in keywords) or (rr["id"] in matched_doc_record_ids):
-                r_obj["match_snippet"] = build_highlight_snippet(hay, keywords)
-                matched_records.append(r_obj)
+            # 4. 检索【📌 重要事项记录】知识库 (important_records)
+            rec_rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
+            matched_records = []
+            for rr in rec_rows:
+                if category and rr["category"] != category:
+                    continue
+                r_obj = serialize_record(conn, rr, preloaded_docs=preloaded_light_docs, ws_root=ws_root, docs_by_record=docs_by_record)
+                if not keywords:
+                    matched_records.append(r_obj)
+                    if len(matched_records) >= eff_limit:
+                        break
+                    continue
+                file_names_str = " ".join(f["filename"] for f in r_obj["files"])
+                if scope == "title":
+                    hay = f"{rr['title']} {rr['category']} {file_names_str}"
+                else:
+                    hay = f"{rr['title']} {rr['category']} {rr['content_md']} {rr['tags_json']} {file_names_str}"
+                if all(kw.lower() in hay.lower() for kw in keywords) or (rr["id"] in matched_doc_record_ids):
+                    r_obj["match_snippet"] = build_highlight_snippet(hay, keywords)
+                    matched_records.append(r_obj)
+                    if len(matched_records) >= eff_limit:
+                        break
 
-        conn.close()
     return matched_tasks, matched_docs, matched_archives, matched_records
 
 
 def _decode_file_item_bytes(fitem: Dict[str, Any], allow_local_path: bool = False) -> Tuple[str, bytes, str]:
     fname = sanitize_filename(fitem.get("filename") or "附件.txt")
-    b64_data = fitem.get("content_base64") or ""
     raw_bytes = b""
-    if b64_data:
-        if "," in b64_data and b64_data.startswith("data:"):
-            b64_data = b64_data.split(",", 1)[1]
-        raw_bytes = base64.b64decode(b64_data)
-    elif fitem.get("local_source_path") and allow_local_path:
-        src_p = Path(fitem["local_source_path"]).expanduser().resolve()
-        if src_p.exists() and src_p.is_file():
-            raw_bytes = src_p.read_bytes()
-            fname = sanitize_filename(src_p.name)
+    if isinstance(fitem.get("raw_bytes"), (bytes, bytearray)):
+        raw_bytes = bytes(fitem["raw_bytes"])
+    else:
+        b64_data = fitem.get("content_base64") or ""
+        if b64_data:
+            if "," in b64_data and b64_data.startswith("data:"):
+                b64_data = b64_data.split(",", 1)[1]
+            raw_bytes = base64.b64decode(b64_data)
+        elif fitem.get("local_source_path") and allow_local_path:
+            src_p = Path(fitem["local_source_path"]).expanduser().resolve()
+            if src_p.exists() and src_p.is_file():
+                raw_bytes = src_p.read_bytes()
+                fname = sanitize_filename(src_p.name)
     role = fitem.get("doc_role") or "incoming"
     return fname, raw_bytes, role
+
+
+def _extract_bytes_in_temp(fname: str, raw_bytes: bytes) -> Tuple[str, str]:
+    """在 DB_LOCK 外利用临时文件完成文本解析，避免长时间占用数据库锁"""
+    suffix = Path(fname).suffix
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+        tf.write(raw_bytes)
+        tmp_p = Path(tf.name)
+    try:
+        return extract_document_text(tmp_p)
+    finally:
+        tmp_p.unlink(missing_ok=True)
 
 
 def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2141,28 +2625,23 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     allow_local = bool(payload.get("_allow_local_path", False))
     first_filename = ""
-    extracted_file_blobs = []
+    extracted_file_blobs: List[Tuple[str, bytes, str, str]] = []
     pre_extracted_cache: Dict[int, Tuple[str, str]] = {}
     for idx_f, fitem in enumerate(uploaded_files):
         fname, raw_bytes, role = _decode_file_item_bytes(fitem, allow_local_path=allow_local)
+        sf_raw = str(fitem.get("sub_folder") or "").strip()
+        sf_clean = sanitize_filename(sf_raw) if sf_raw else ""
         if not first_filename:
             first_filename = fname
-        extracted_file_blobs.append((fname, raw_bytes, role))
+        extracted_file_blobs.append((fname, raw_bytes, role, sf_clean))
 
-    if extracted_file_blobs and auto_ai:
-        for idx_f, (fname, raw_bytes, role) in enumerate(extracted_file_blobs):
-            if raw_bytes and role == "incoming":
-                suffix = Path(fname).suffix
-                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
-                    tf.write(raw_bytes)
-                    tmp_p = Path(tf.name)
-                try:
-                    ext_txt, ftype = extract_document_text(tmp_p)
-                    pre_extracted_cache[idx_f] = (ext_txt, ftype)
-                    if ext_txt and not ext_txt.startswith("【影像图片文件："):
-                        combined_text_parts.append(ext_txt)
-                finally:
-                    tmp_p.unlink(missing_ok=True)
+    # 锁外预解析所有上传文件（既供 AI 抽取，也避免在 DB_LOCK 内执行重解析）
+    for idx_f, (fname, raw_bytes, role, _sf) in enumerate(extracted_file_blobs):
+        if raw_bytes:
+            ext_txt, ftype = _extract_bytes_in_temp(fname, raw_bytes)
+            pre_extracted_cache[idx_f] = (ext_txt, ftype)
+            if auto_ai and role == "incoming" and ext_txt and not ext_txt.startswith("【影像图片文件："):
+                combined_text_parts.append(ext_txt)
 
     full_source_text = "\n\n".join(combined_text_parts).strip()
 
@@ -2203,118 +2682,132 @@ def create_task_record(payload: Dict[str, Any]) -> Dict[str, Any]:
                 })
         checklist = norm_chk
 
-    progress_logs = payload.get("progress_logs") or []
+    progress_logs = list(payload.get("progress_logs") or [])
     if payload.get("initial_progress"):
         progress_logs.insert(0, {
             "time": datetime.now().strftime("%m-%d %H:%M"),
             "text": str(payload["initial_progress"]).strip(),
         })
 
-    cat_dir = ensure_category_dir(ws_root, category, scope="task")
-    folder_base_name = sanitize_filename(f"{date_prefix}_{title}")
-    task_folder = cat_dir / folder_base_name
-    counter = 2
-    while task_folder.exists():
-        task_folder = cat_dir / f"{folder_base_name}_{counter}"
-        counter += 1
-    task_folder.mkdir(parents=True, exist_ok=True)
-    folder_rel_path = str(task_folder.relative_to(ws_root)).replace("\\", "/")
-
+    # 目录查重创建放入 DB_LOCK 内避免 TOCTOU 竞态
     with DB_LOCK:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO tasks (
-                title, source_channel, doc_number, issuing_org, priority,
-                deadline, category, summary, raw_notice_text, checklist_json,
-                progress_json, status, is_pinned, is_collapsed, completed_at,
-                recurring_id, folder_rel_path, readme_mtime, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?)
-            """,
-            (
-                title,
-                source_channel,
-                doc_number,
-                issuing_org,
-                priority,
-                deadline,
-                category,
-                summary,
-                full_source_text,
-                json.dumps(checklist, ensure_ascii=False),
-                json.dumps(progress_logs, ensure_ascii=False),
-                status,
-                1 if payload.get("is_pinned") else 0,
-                completed_at,
-                payload.get("recurring_id"),
-                folder_rel_path,
-                now_str,
-                now_str,
-            ),
-        )
-        task_id = int(cur.lastrowid)
+        cat_dir = ensure_category_dir(ws_root, category, scope="task")
+        folder_base_name = sanitize_filename(f"{date_prefix}_{title}")
+        task_folder = cat_dir / folder_base_name
+        counter = 2
+        while task_folder.exists():
+            task_folder = cat_dir / f"{folder_base_name}_{counter}"
+            counter += 1
+        task_folder.mkdir(parents=True, exist_ok=True)
+        folder_rel_path = str(task_folder.relative_to(ws_root)).replace("\\", "/")
 
-        # 修复 BUG-09：如果是从公文库一键“转待办”，直接物理移动并复用原文档记录，避免冗余双份
-        if reuse_doc_id:
-            old_doc = conn.execute("SELECT * FROM documents WHERE id = ?", (int(reuse_doc_id),)).fetchone()
-            if old_doc:
-                old_abs = ws_root / old_doc["rel_path"]
-                fname = old_doc["filename"]
-                dest_path = resolve_unique_dest_path(task_folder, fname)
-                if old_abs.is_file():
-                    shutil.move(str(old_abs), str(dest_path))
-                    st = dest_path.stat()
-                    rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-                    conn.execute(
-                        """
-                        UPDATE documents
-                        SET task_id = ?, filename = ?, rel_path = ?, category = ?, doc_role = 'incoming', mtime = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (task_id, dest_path.name, rel_file, category, round(st.st_mtime, 2), now_str, int(reuse_doc_id)),
-                    )
-                    _sync_fts_doc(conn, int(reuse_doc_id))
-                    extracted_file_blobs = []
-
-        for idx_f, (fname, raw_bytes, role) in enumerate(extracted_file_blobs):
-            dest_path = resolve_unique_dest_path(task_folder, fname, raw_bytes)
-            dest_path.write_bytes(raw_bytes)
-            st = dest_path.stat()
-            if idx_f in pre_extracted_cache:
-                ext_text, ftype = pre_extracted_cache[idx_f]
-            else:
-                ext_text, ftype = extract_document_text(dest_path)
-            rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-            d_cur = cur.execute(
+        with db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
                 """
-                INSERT INTO documents (
-                    task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                    file_type, file_size, mtime, extracted_text,
-                    tags_json, is_starred, is_pinned, created_at, updated_at
-                ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?)
+                INSERT INTO tasks (
+                    title, source_channel, doc_number, issuing_org, priority,
+                    deadline, category, summary, raw_notice_text, checklist_json,
+                    progress_json, status, is_pinned, is_collapsed, completed_at,
+                    recurring_id, folder_rel_path, readme_mtime, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?)
                 """,
                 (
-                    task_id,
-                    dest_path.name,
-                    rel_file,
+                    title,
+                    source_channel,
+                    doc_number,
+                    issuing_org,
+                    priority,
+                    deadline,
                     category,
-                    role,
-                    ftype,
-                    st.st_size,
-                    round(st.st_mtime, 2),
-                    ext_text,
+                    summary,
+                    full_source_text,
+                    json.dumps(checklist, ensure_ascii=False),
+                    json.dumps(progress_logs, ensure_ascii=False),
+                    status,
+                    1 if payload.get("is_pinned") else 0,
+                    completed_at,
+                    payload.get("recurring_id"),
+                    folder_rel_path,
                     now_str,
                     now_str,
                 ),
             )
-            _sync_fts_doc(conn, int(d_cur.lastrowid))
+            task_id = int(cur.lastrowid)
 
-        write_task_readme_file(conn, task_id)
-        conn.commit()
-        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-        result = serialize_task(conn, row, ws_root=ws_root)
-        conn.close()
+            if reuse_doc_id:
+                old_doc = conn.execute("SELECT * FROM documents WHERE id = ?", (int(reuse_doc_id),)).fetchone()
+                if old_doc:
+                    old_abs = ws_root / old_doc["rel_path"]
+                    fname = old_doc["filename"]
+                    dest_path = resolve_unique_dest_path(task_folder, fname)
+                    if old_abs.is_file():
+                        shutil.move(str(old_abs), str(dest_path))
+                        st = dest_path.stat()
+                        rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                        csig = _file_content_sig(dest_path)
+                        conn.execute(
+                            """
+                            UPDATE documents
+                            SET task_id = ?, filename = ?, rel_path = ?, category = ?, doc_role = 'incoming',
+                                sub_folder = '', content_hash = ?, mtime = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (task_id, dest_path.name, rel_file, category, csig, round(st.st_mtime, 2), now_str, int(reuse_doc_id)),
+                        )
+                        _sync_fts_doc(conn, int(reuse_doc_id))
+                        extracted_file_blobs = []
+
+            for idx_f, (fname, raw_bytes, role, sf_clean) in enumerate(extracted_file_blobs):
+                target_dir = task_folder
+                if sf_clean:
+                    target_dir = task_folder / sf_clean
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    gk = target_dir / ".gitkeep"
+                    if not gk.exists():
+                        try:
+                            gk.write_text("", encoding="utf-8")
+                        except Exception:
+                            pass
+                dest_path = resolve_unique_dest_path(target_dir, fname, raw_bytes)
+                dest_path.write_bytes(raw_bytes)
+                st = dest_path.stat()
+                if idx_f in pre_extracted_cache:
+                    ext_text, ftype = pre_extracted_cache[idx_f]
+                else:
+                    ext_text, ftype = extract_document_text(dest_path)
+                csig = _bytes_content_sig(raw_bytes)
+                rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                d_cur = cur.execute(
+                    """
+                    INSERT INTO documents (
+                        task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                        file_type, file_size, mtime, extracted_text,
+                        tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                    ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        dest_path.name,
+                        rel_file,
+                        category,
+                        role,
+                        sf_clean,
+                        ftype,
+                        st.st_size,
+                        round(st.st_mtime, 2),
+                        ext_text,
+                        now_str,
+                        now_str,
+                        csig,
+                    ),
+                )
+                _sync_fts_doc(conn, int(d_cur.lastrowid))
+
+            write_task_readme_file(conn, task_id)
+            conn.commit()
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            result = serialize_task(conn, row, include_refs=False, ws_root=ws_root)
     return result
 
 
@@ -2337,7 +2830,6 @@ def create_archive_record(payload: Dict[str, Any]) -> Dict[str, Any]:
             raw_title = f"{datetime.now().strftime('%m.%d')}资料存档"
     title = sanitize_filename(raw_title)
 
-    # 智能提取或补齐归档日期
     archive_date = (payload.get("archive_date") or "").strip()
     if not archive_date:
         m_full = re.search(r"(\d{4})[\-\./年](\d{1,2})[\-\./月](\d{1,2})", title)
@@ -2351,7 +2843,6 @@ def create_archive_record(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     category = sanitize_filename(payload.get("category") or "")
     if not category:
-        # 根据标题关键词自动推荐分类
         if any(k in title for k in ("会议", "纪要", "会商", "例会", "座谈")):
             category = "01_会议记录"
         elif any(k in title for k in ("培训", "课件", "宣讲", "学习", "讲义")):
@@ -2370,76 +2861,83 @@ def create_archive_record(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         tags = [str(t).strip() for t in raw_tags if str(t).strip()]
 
-    cat_dir = ensure_category_dir(ws_root, category, scope="archive")
-    folder_base = sanitize_filename(f"{archive_date}_{title}" if not re.match(r"^\d{4}-\d{2}-\d{2}", title) else title)
-    bundle_dir = cat_dir / folder_base
-    counter = 2
-    while bundle_dir.exists():
-        bundle_dir = cat_dir / f"{folder_base}_{counter}"
-        counter += 1
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    folder_rel_path = str(bundle_dir.relative_to(ws_root)).replace("\\", "/")
+    # 锁外解码并提取文本与指纹
+    prepared_files = []
+    for fitem in uploaded_files:
+        fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
+        ext_text, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
+        prepared_files.append((fname, raw_bytes, ext_text, ftype, _bytes_content_sig(raw_bytes)))
 
     with DB_LOCK:
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO archives (
-                title, archive_date, category, notes_md, tags_json,
-                is_pinned, folder_rel_path, readme_mtime, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-            """,
-            (
-                title,
-                archive_date,
-                category,
-                notes_md,
-                json.dumps(tags, ensure_ascii=False),
-                1 if payload.get("is_pinned") else 0,
-                folder_rel_path,
-                now_str,
-                now_str,
-            ),
-        )
-        archive_id = int(cur.lastrowid)
+        cat_dir = ensure_category_dir(ws_root, category, scope="archive")
+        folder_base = sanitize_filename(f"{archive_date}_{title}" if not re.match(r"^\d{4}-\d{2}-\d{2}", title) else title)
+        bundle_dir = cat_dir / folder_base
+        counter = 2
+        while bundle_dir.exists():
+            bundle_dir = cat_dir / f"{folder_base}_{counter}"
+            counter += 1
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        folder_rel_path = str(bundle_dir.relative_to(ws_root)).replace("\\", "/")
 
-        for fitem in uploaded_files:
-            fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
-            dest_path = resolve_unique_dest_path(bundle_dir, fname, raw_bytes)
-            dest_path.write_bytes(raw_bytes)
-            st = dest_path.stat()
-            ext_text, ftype = extract_document_text(dest_path)
-            rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-            d_cur = cur.execute(
+        with db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
                 """
-                INSERT INTO documents (
-                    task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                    file_type, file_size, mtime, extracted_text,
-                    tags_json, is_starred, is_pinned, created_at, updated_at
-                ) VALUES (NULL, ?, NULL, ?, ?, ?, 'archive', ?, ?, ?, ?, ?, 0, 0, ?, ?)
+                INSERT INTO archives (
+                    title, archive_date, category, notes_md, tags_json,
+                    is_pinned, folder_rel_path, readme_mtime, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                 """,
                 (
-                    archive_id,
-                    dest_path.name,
-                    rel_file,
+                    title,
+                    archive_date,
                     category,
-                    ftype,
-                    st.st_size,
-                    round(st.st_mtime, 2),
-                    ext_text,
+                    notes_md,
                     json.dumps(tags, ensure_ascii=False),
+                    1 if payload.get("is_pinned") else 0,
+                    folder_rel_path,
                     now_str,
                     now_str,
                 ),
             )
-            _sync_fts_doc(conn, int(d_cur.lastrowid))
+            archive_id = int(cur.lastrowid)
 
-        write_archive_readme_file(conn, archive_id)
-        conn.commit()
-        row = conn.execute("SELECT * FROM archives WHERE id = ?", (archive_id,)).fetchone()
-        res = serialize_archive(conn, row, ws_root=ws_root)
-        conn.close()
+            for fname, raw_bytes, ext_text, ftype, csig in prepared_files:
+                dest_path = resolve_unique_dest_path(bundle_dir, fname, raw_bytes)
+                dest_path.write_bytes(raw_bytes)
+                st = dest_path.stat()
+                if not ftype:
+                    ext_text, ftype = extract_document_text(dest_path)
+                rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                d_cur = cur.execute(
+                    """
+                    INSERT INTO documents (
+                        task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                        file_type, file_size, mtime, extracted_text,
+                        tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                    ) VALUES (NULL, ?, NULL, ?, ?, ?, 'archive', '', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+                    """,
+                    (
+                        archive_id,
+                        dest_path.name,
+                        rel_file,
+                        category,
+                        ftype,
+                        st.st_size,
+                        round(st.st_mtime, 2),
+                        ext_text,
+                        json.dumps(tags, ensure_ascii=False),
+                        now_str,
+                        now_str,
+                        csig,
+                    ),
+                )
+                _sync_fts_doc(conn, int(d_cur.lastrowid))
+
+            write_archive_readme_file(conn, archive_id)
+            conn.commit()
+            row = conn.execute("SELECT * FROM archives WHERE id = ?", (archive_id,)).fetchone()
+            res = serialize_archive(conn, row, ws_root=ws_root)
     return res
 
 
@@ -2448,65 +2946,71 @@ def append_files_to_archive(archive_id: int, files_list: List[Dict[str, Any]], n
     ws_root = get_workspace_root(cfg)
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    prepared_files = []
+    for fitem in files_list:
+        fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
+        ext_text, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
+        prepared_files.append((fname, raw_bytes, ext_text, ftype, _bytes_content_sig(raw_bytes)))
+
     with DB_LOCK:
-        conn = get_db()
-        a_row = conn.execute("SELECT * FROM archives WHERE id = ?", (archive_id,)).fetchone()
-        if not a_row:
-            conn.close()
-            return None
-        bundle_dir = ws_root / a_row["folder_rel_path"]
-        bundle_dir.mkdir(parents=True, exist_ok=True)
-        tags = json.loads(a_row["tags_json"] or "[]")
+        with db_conn() as conn:
+            a_row = conn.execute("SELECT * FROM archives WHERE id = ?", (archive_id,)).fetchone()
+            if not a_row:
+                return None
+            bundle_dir = ws_root / a_row["folder_rel_path"]
+            bundle_dir.mkdir(parents=True, exist_ok=True)
+            tags = json.loads(a_row["tags_json"] or "[]")
 
-        if notes_append.strip():
-            old_notes = (a_row["notes_md"] or "").strip()
-            new_notes = (old_notes + "\n\n" + notes_append.strip()).strip() if old_notes else notes_append.strip()
-            conn.execute("UPDATE archives SET notes_md = ?, updated_at = ? WHERE id = ?", (new_notes, now_str, archive_id))
+            if notes_append.strip():
+                old_notes = (a_row["notes_md"] or "").strip()
+                new_notes = (old_notes + "\n\n" + notes_append.strip()).strip() if old_notes else notes_append.strip()
+                conn.execute("UPDATE archives SET notes_md = ?, updated_at = ? WHERE id = ?", (new_notes, now_str, archive_id))
 
-        for fitem in files_list:
-            fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
-            dest_path = resolve_unique_dest_path(bundle_dir, fname, raw_bytes)
-            dest_path.write_bytes(raw_bytes)
-            st = dest_path.stat()
-            ext_text, ftype = extract_document_text(dest_path)
-            rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-            d_cur = conn.execute(
-                """
-                INSERT INTO documents (
-                    task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                    file_type, file_size, mtime, extracted_text,
-                    tags_json, is_starred, is_pinned, created_at, updated_at
-                ) VALUES (NULL, ?, NULL, ?, ?, ?, 'archive', ?, ?, ?, ?, ?, 0, 0, ?, ?)
-                ON CONFLICT(rel_path) DO UPDATE SET
-                    file_size=excluded.file_size,
-                    mtime=excluded.mtime,
-                    extracted_text=excluded.extracted_text,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    archive_id,
-                    dest_path.name,
-                    rel_file,
-                    a_row["category"],
-                    ftype,
-                    st.st_size,
-                    round(st.st_mtime, 2),
-                    ext_text,
-                    json.dumps(tags, ensure_ascii=False),
-                    now_str,
-                    now_str,
-                ),
-            )
-            r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
-            if r_doc:
-                _sync_fts_doc(conn, int(r_doc["id"]))
+            for fname, raw_bytes, ext_text, ftype, csig in prepared_files:
+                dest_path = resolve_unique_dest_path(bundle_dir, fname, raw_bytes)
+                dest_path.write_bytes(raw_bytes)
+                st = dest_path.stat()
+                if not ftype:
+                    ext_text, ftype = extract_document_text(dest_path)
+                rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                conn.execute(
+                    """
+                    INSERT INTO documents (
+                        task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                        file_type, file_size, mtime, extracted_text,
+                        tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                    ) VALUES (NULL, ?, NULL, ?, ?, ?, 'archive', '', ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+                    ON CONFLICT(rel_path) DO UPDATE SET
+                        file_size=excluded.file_size,
+                        mtime=excluded.mtime,
+                        extracted_text=excluded.extracted_text,
+                        content_hash=excluded.content_hash,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        archive_id,
+                        dest_path.name,
+                        rel_file,
+                        a_row["category"],
+                        ftype,
+                        st.st_size,
+                        round(st.st_mtime, 2),
+                        ext_text,
+                        json.dumps(tags, ensure_ascii=False),
+                        now_str,
+                        now_str,
+                        csig,
+                    ),
+                )
+                r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                if r_doc:
+                    _sync_fts_doc(conn, int(r_doc["id"]))
 
-        conn.execute("UPDATE archives SET updated_at = ? WHERE id = ?", (now_str, archive_id))
-        write_archive_readme_file(conn, archive_id)
-        conn.commit()
-        u_row = conn.execute("SELECT * FROM archives WHERE id = ?", (archive_id,)).fetchone()
-        res = serialize_archive(conn, u_row, ws_root=ws_root)
-        conn.close()
+            conn.execute("UPDATE archives SET updated_at = ? WHERE id = ?", (now_str, archive_id))
+            write_archive_readme_file(conn, archive_id)
+            conn.commit()
+            u_row = conn.execute("SELECT * FROM archives WHERE id = ?", (archive_id,)).fetchone()
+            res = serialize_archive(conn, u_row, ws_root=ws_root)
     return res
 
 
@@ -2546,156 +3050,166 @@ def upsert_important_record(payload: Dict[str, Any], record_id: Optional[int] = 
     else:
         tags = [str(t).strip() for t in raw_tags if str(t).strip()]
 
+    prepared_files = []
+    for fitem in uploaded_files:
+        fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
+        ext_text, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
+        prepared_files.append((fname, raw_bytes, ext_text, ftype, _bytes_content_sig(raw_bytes)))
+
     with DB_LOCK:
-        conn = get_db()
-        existing_row = None
-        if record_id:
-            existing_row = conn.execute("SELECT * FROM important_records WHERE id = ?", (int(record_id),)).fetchone()
-        elif payload.get("upsert_by_title"):
-            existing_row = conn.execute("SELECT * FROM important_records WHERE title = ?", (title,)).fetchone()
+        with db_conn() as conn:
+            existing_row = None
+            if record_id:
+                existing_row = conn.execute("SELECT * FROM important_records WHERE id = ?", (int(record_id),)).fetchone()
+            elif payload.get("upsert_by_title"):
+                existing_row = conn.execute("SELECT * FROM important_records WHERE title = ?", (title,)).fetchone()
 
-        if existing_row:
-            rid = int(existing_row["id"])
-            old_cat = existing_row["category"]
-            old_title = existing_row["title"]
-            old_rel = existing_row["folder_rel_path"]
-            new_cat = sanitize_filename(payload.get("category") or old_cat)
-            new_title = sanitize_filename(payload.get("title") or old_title)
-            new_content = content_md if content_md is not None else existing_row["content_md"]
-            new_tags = tags if "tags" in payload else json.loads(existing_row["tags_json"] or "[]")
-            new_pinned = 1 if payload.get("is_pinned", bool(existing_row["is_pinned"])) else 0
+            if existing_row:
+                rid = int(existing_row["id"])
+                old_cat = existing_row["category"]
+                old_title = existing_row["title"]
+                old_rel = existing_row["folder_rel_path"]
+                new_cat = sanitize_filename(payload.get("category") or old_cat)
+                new_title = sanitize_filename(payload.get("title") or old_title)
+                new_content = content_md if content_md is not None else existing_row["content_md"]
+                new_tags = tags if "tags" in payload else json.loads(existing_row["tags_json"] or "[]")
+                new_pinned = 1 if payload.get("is_pinned", bool(existing_row["is_pinned"])) else 0
 
-            new_rel = old_rel
-            old_abs = ws_root / old_rel
-            target_cat_dir = ensure_category_dir(ws_root, new_cat, scope="record")
-            new_abs = target_cat_dir / new_title
-            if old_abs.exists() and old_abs.resolve() != new_abs.resolve():
+                new_rel = old_rel
+                old_abs = ws_root / old_rel
+                target_cat_dir = ensure_category_dir(ws_root, new_cat, scope="record")
+                new_abs = target_cat_dir / new_title
+                if old_abs.exists() and old_abs.resolve() != new_abs.resolve():
+                    counter = 2
+                    while new_abs.exists() and new_abs.resolve() != old_abs.resolve():
+                        new_abs = target_cat_dir / f"{new_title}_{counter}"
+                        counter += 1
+                    shutil.move(str(old_abs), str(new_abs))
+                    new_rel = str(new_abs.relative_to(ws_root)).replace("\\", "/")
+                    for dr in conn.execute("SELECT id, rel_path FROM documents WHERE record_id = ?", (rid,)).fetchall():
+                        if dr["rel_path"].startswith(old_rel + "/"):
+                            u_rel = new_rel + dr["rel_path"][len(old_rel):]
+                            conn.execute(
+                                "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                (u_rel, new_cat, now_str, dr["id"]),
+                            )
+                            _sync_fts_doc(conn, int(dr["id"]))
+
+                conn.execute(
+                    """
+                    UPDATE important_records SET
+                        title = ?, category = ?, content_md = ?, tags_json = ?,
+                        is_pinned = ?, folder_rel_path = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_title,
+                        new_cat,
+                        new_content,
+                        json.dumps(new_tags, ensure_ascii=False),
+                        new_pinned,
+                        new_rel,
+                        now_str,
+                        rid,
+                    ),
+                )
+                rec_folder = ws_root / new_rel
+                rec_category = new_cat
+            else:
+                cat_dir = ensure_category_dir(ws_root, category, scope="record")
+                rec_folder = cat_dir / title
                 counter = 2
-                while new_abs.exists() and new_abs.resolve() != old_abs.resolve():
-                    new_abs = target_cat_dir / f"{new_title}_{counter}"
+                while rec_folder.exists():
+                    rec_folder = cat_dir / f"{title}_{counter}"
                     counter += 1
-                shutil.move(str(old_abs), str(new_abs))
-                new_rel = str(new_abs.relative_to(ws_root)).replace("\\", "/")
-                for dr in conn.execute("SELECT id, rel_path FROM documents WHERE record_id = ?", (rid,)).fetchall():
-                    if dr["rel_path"].startswith(old_rel + "/"):
-                        u_rel = new_rel + dr["rel_path"][len(old_rel):]
-                        conn.execute(
-                            "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
-                            (u_rel, new_cat, now_str, dr["id"]),
-                        )
-                        _sync_fts_doc(conn, int(dr["id"]))
+                rec_folder.mkdir(parents=True, exist_ok=True)
+                folder_rel_path = str(rec_folder.relative_to(ws_root)).replace("\\", "/")
+                cur = conn.execute(
+                    """
+                    INSERT INTO important_records (
+                        title, category, content_md, tags_json, primary_doc_id,
+                        is_pinned, sort_order, folder_rel_path, readme_mtime, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, NULL, ?, 0, ?, 0, ?, ?)
+                    """,
+                    (
+                        title,
+                        category,
+                        content_md or "",
+                        json.dumps(tags, ensure_ascii=False),
+                        1 if payload.get("is_pinned") else 0,
+                        folder_rel_path,
+                        now_str,
+                        now_str,
+                    ),
+                )
+                rid = int(cur.lastrowid)
+                rec_category = category
 
-            conn.execute(
-                """
-                UPDATE important_records SET
-                    title = ?, category = ?, content_md = ?, tags_json = ?,
-                    is_pinned = ?, folder_rel_path = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    new_title,
-                    new_cat,
-                    new_content,
-                    json.dumps(new_tags, ensure_ascii=False),
-                    new_pinned,
-                    new_rel,
-                    now_str,
-                    rid,
-                ),
-            )
-            rec_folder = ws_root / new_rel
-            rec_category = new_cat
-        else:
-            cat_dir = ensure_category_dir(ws_root, category, scope="record")
-            rec_folder = cat_dir / title
-            counter = 2
-            while rec_folder.exists():
-                rec_folder = cat_dir / f"{title}_{counter}"
-                counter += 1
-            rec_folder.mkdir(parents=True, exist_ok=True)
-            folder_rel_path = str(rec_folder.relative_to(ws_root)).replace("\\", "/")
-            cur = conn.execute(
-                """
-                INSERT INTO important_records (
-                    title, category, content_md, tags_json, primary_doc_id,
-                    is_pinned, sort_order, folder_rel_path, readme_mtime, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, NULL, ?, 0, ?, 0, ?, ?)
-                """,
-                (
-                    title,
-                    category,
-                    content_md or "",
-                    json.dumps(tags, ensure_ascii=False),
-                    1 if payload.get("is_pinned") else 0,
-                    folder_rel_path,
-                    now_str,
-                    now_str,
-                ),
-            )
-            rid = int(cur.lastrowid)
-            rec_category = category
+            first_new_doc_id = None
+            extracted_texts_for_empty_md = []
+            for fname, raw_bytes, ext_text, ftype, csig in prepared_files:
+                dest_path = resolve_unique_dest_path(rec_folder, fname, raw_bytes)
+                dest_path.write_bytes(raw_bytes)
+                st = dest_path.stat()
+                if not ftype:
+                    ext_text, ftype = extract_document_text(dest_path)
+                if ext_text and not ext_text.startswith("["):
+                    extracted_texts_for_empty_md.append(ext_text)
+                rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                conn.execute(
+                    """
+                    INSERT INTO documents (
+                        task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                        file_type, file_size, mtime, extracted_text,
+                        tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                    ) VALUES (NULL, NULL, ?, ?, ?, ?, 'record', '', ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)
+                    ON CONFLICT(rel_path) DO UPDATE SET
+                        file_size=excluded.file_size,
+                        mtime=excluded.mtime,
+                        extracted_text=excluded.extracted_text,
+                        content_hash=excluded.content_hash,
+                        updated_at=excluded.updated_at
+                    """,
+                    (
+                        rid,
+                        dest_path.name,
+                        rel_file,
+                        rec_category,
+                        ftype,
+                        st.st_size,
+                        round(st.st_mtime, 2),
+                        ext_text,
+                        json.dumps(tags, ensure_ascii=False),
+                        now_str,
+                        now_str,
+                        csig,
+                    ),
+                )
+                r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                if r_doc:
+                    did = int(r_doc["id"])
+                    _sync_fts_doc(conn, did)
+                    if first_new_doc_id is None:
+                        first_new_doc_id = did
 
-        first_new_doc_id = None
-        extracted_texts_for_empty_md = []
-        for fitem in uploaded_files:
-            fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
-            dest_path = resolve_unique_dest_path(rec_folder, fname, raw_bytes)
-            dest_path.write_bytes(raw_bytes)
-            st = dest_path.stat()
-            ext_text, ftype = extract_document_text(dest_path)
-            if ext_text and not ext_text.startswith("["):
-                extracted_texts_for_empty_md.append(ext_text)
-            rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-            conn.execute(
-                """
-                INSERT INTO documents (
-                    task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                    file_type, file_size, mtime, extracted_text,
-                    tags_json, is_starred, is_pinned, created_at, updated_at
-                ) VALUES (NULL, NULL, ?, ?, ?, ?, 'record', ?, ?, ?, ?, ?, 1, 0, ?, ?)
-                ON CONFLICT(rel_path) DO UPDATE SET
-                    file_size=excluded.file_size,
-                    mtime=excluded.mtime,
-                    extracted_text=excluded.extracted_text,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    rid,
-                    dest_path.name,
-                    rel_file,
-                    rec_category,
-                    ftype,
-                    st.st_size,
-                    round(st.st_mtime, 2),
-                    ext_text,
-                    json.dumps(tags, ensure_ascii=False),
-                    now_str,
-                    now_str,
-                ),
-            )
-            r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
-            if r_doc:
-                did = int(r_doc["id"])
-                _sync_fts_doc(conn, did)
-                if first_new_doc_id is None:
-                    first_new_doc_id = did
+            # 仅当 primary_doc_id 为空时才设为首文档，不无条件覆盖
+            if first_new_doc_id is not None:
+                conn.execute(
+                    "UPDATE important_records SET primary_doc_id = COALESCE(primary_doc_id, ?) WHERE id = ?",
+                    (first_new_doc_id, rid),
+                )
 
-        if first_new_doc_id is not None:
-            conn.execute("UPDATE important_records SET primary_doc_id = ? WHERE id = ?", (first_new_doc_id, rid))
+            curr_rec = conn.execute("SELECT content_md FROM important_records WHERE id = ?", (rid,)).fetchone()
+            if curr_rec and not (curr_rec["content_md"] or "").strip() and extracted_texts_for_empty_md:
+                conn.execute(
+                    "UPDATE important_records SET content_md = ? WHERE id = ?",
+                    ("\n\n".join(extracted_texts_for_empty_md)[:8000], rid),
+                )
 
-        # 如果用户只上传了 Word/PDF/Excel 而未手写 content_md，自动将提取的文本摘要填入以便全文搜索
-        curr_rec = conn.execute("SELECT content_md FROM important_records WHERE id = ?", (rid,)).fetchone()
-        if curr_rec and not (curr_rec["content_md"] or "").strip() and extracted_texts_for_empty_md:
-            conn.execute(
-                "UPDATE important_records SET content_md = ? WHERE id = ?",
-                ("\n\n".join(extracted_texts_for_empty_md)[:8000], rid),
-            )
-
-        write_record_readme_file(conn, rid)
-        conn.commit()
-        final_row = conn.execute("SELECT * FROM important_records WHERE id = ?", (rid,)).fetchone()
-        res = serialize_record(conn, final_row, ws_root=ws_root, include_structured_preview=True)
-        conn.close()
+            write_record_readme_file(conn, rid)
+            conn.commit()
+            final_row = conn.execute("SELECT * FROM important_records WHERE id = ?", (rid,)).fetchone()
+            res = serialize_record(conn, final_row, ws_root=ws_root, include_structured_preview=True)
     return res
 
 
@@ -2734,81 +3248,80 @@ def compute_current_period_key(freq_type: str, freq_value: int, today: Optional[
 
 def spawn_task_from_recurring_rule(rule_id: int, force_manual: bool = False) -> Optional[Dict[str, Any]]:
     """
-    修复 BUG-05：全程持有可重入锁 DB_LOCK，彻底杜绝并发请求下重复派生双份事项与文件夹！
+    v3.3.0 修复：全程持有可重入锁 DB_LOCK，先创建任务成功后再更新周期规则占位，避免建任务失败导致误跳过周期
     """
     with DB_LOCK:
-        conn = get_db()
-        rule = conn.execute("SELECT * FROM recurring_rules WHERE id = ?", (rule_id,)).fetchone()
-        if not rule:
-            conn.close()
-            return None
+        with db_conn() as conn:
+            rule = conn.execute("SELECT * FROM recurring_rules WHERE id = ?", (rule_id,)).fetchone()
+            if not rule:
+                return None
 
-        pkey, is_due, base_deadline = compute_current_period_key(rule["freq_type"], rule["freq_value"])
-        if not force_manual and (not rule["enabled"] or not is_due or rule["last_spawned_period"] == pkey):
-            conn.close()
-            return None
+            pkey, is_due, base_deadline = compute_current_period_key(rule["freq_type"], rule["freq_value"])
+            if not force_manual and (not rule["enabled"] or not is_due or rule["last_spawned_period"] == pkey):
+                return None
 
-        actual_pkey = pkey if rule["last_spawned_period"] != pkey else f"{pkey}_{datetime.now().strftime('%m%d%H%M')}"
-        # 先原子更新 last_spawned_period 占位，防止重入
-        conn.execute(
-            "UPDATE recurring_rules SET last_spawned_period = ?, last_spawned_at = ? WHERE id = ?",
-            (actual_pkey, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rule_id),
-        )
-        conn.commit()
+            actual_pkey = pkey if rule["last_spawned_period"] != pkey else f"{pkey}_{datetime.now().strftime('%m%d%H%M')}"
+            rule_dict = dict(rule)
+
+            prev_draft_hint = "周期性工作自动派生"
+            prev_doc = conn.execute(
+                """
+                SELECT d.filename, d.rel_path FROM documents d
+                JOIN tasks t ON d.task_id = t.id
+                WHERE t.recurring_id = ? AND d.doc_role IN ('draft', 'template')
+                ORDER BY d.id DESC LIMIT 1
+                """,
+                (rule_id,),
+            ).fetchone()
+            if prev_doc:
+                prev_draft_hint = f"已由周期规则自动派生，可参考上期定稿《{prev_doc['filename']}》起草本期材料"
 
         title_rendered = (
-            rule["title_template"]
+            rule_dict["title_template"]
             .replace("{period}", pkey)
             .replace("{month}", f"{date.today().month}月")
             .replace("{date}", date.today().strftime("%m-%d"))
         )
-        if pkey not in title_rendered and "{period}" not in rule["title_template"]:
+        if pkey not in title_rendered and "{period}" not in rule_dict["title_template"]:
             title_rendered = f"【{pkey}】{title_rendered}"
 
-        offset_days = int(rule["deadline_offset_days"] or 0)
+        offset_days = int(rule_dict["deadline_offset_days"] or 0)
         try:
             dl_dt = datetime.strptime(base_deadline, "%Y-%m-%d").date() + timedelta(days=offset_days)
             deadline_str = dl_dt.strftime("%Y-%m-%d")
         except Exception:
             deadline_str = base_deadline
 
-        prev_draft_hint = "周期性工作自动派生"
-        prev_doc = conn.execute(
-            """
-            SELECT d.filename, d.rel_path FROM documents d
-            JOIN tasks t ON d.task_id = t.id
-            WHERE t.recurring_id = ? AND d.doc_role IN ('draft', 'template')
-            ORDER BY d.id DESC LIMIT 1
-            """,
-            (rule_id,),
-        ).fetchone()
-        if prev_doc:
-            prev_draft_hint = f"已由周期规则自动派生，可参考上期定稿《{prev_doc['filename']}》起草本期材料"
+        chk_list = json.loads(rule_dict["checklist_json"] or "[]")
 
-        chk_list = json.loads(rule["checklist_json"] or "[]")
-        conn.close()
-
+        # 先创建任务，确认成功后再落盘周期规则占位
         created_task = create_task_record({
             "title": title_rendered,
-            "source_channel": rule["source_channel"] or "周期性工作",
-            "issuing_org": rule["issuing_org"] or "",
-            "priority": rule["priority"] or "重要",
+            "source_channel": rule_dict["source_channel"] or "周期性工作",
+            "issuing_org": rule_dict["issuing_org"] or "",
+            "priority": rule_dict["priority"] or "重要",
             "deadline": deadline_str,
-            "category": rule["category"] or DEFAULT_TASK_CATEGORY,
-            "summary": rule["summary"] or f"周期性常态化工作（周期：{pkey}）",
+            "category": rule_dict["category"] or DEFAULT_TASK_CATEGORY,
+            "summary": rule_dict["summary"] or f"周期性常态化工作（周期：{pkey}）",
             "checklist": chk_list,
             "initial_progress": prev_draft_hint,
             "recurring_id": rule_id,
             "auto_ai": False,
         })
+
+        with db_conn() as conn:
+            conn.execute(
+                "UPDATE recurring_rules SET last_spawned_period = ?, last_spawned_at = ? WHERE id = ?",
+                (actual_pkey, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rule_id),
+            )
+            conn.commit()
         return created_task
 
 
 def check_and_spawn_all_recurring() -> int:
     with DB_LOCK:
-        conn = get_db()
-        rules = conn.execute("SELECT id FROM recurring_rules WHERE enabled = 1").fetchall()
-        conn.close()
+        with db_conn() as conn:
+            rules = conn.execute("SELECT id FROM recurring_rules WHERE enabled = 1").fetchall()
     spawned = 0
     for r in rules:
         if spawn_task_from_recurring_rule(r["id"], force_manual=False):
@@ -2912,73 +3425,71 @@ def seed_demo_data_if_empty() -> None:
     save_config(cfg)
 
     with DB_LOCK:
-        conn = get_db()
-        rec_cnt = conn.execute("SELECT COUNT(*) FROM recurring_rules").fetchone()[0]
-        if rec_cnt == 0:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cur_wk_key, _, _ = compute_current_period_key("weekly", 4)
-            cur_mo_key, _, _ = compute_current_period_key("monthly", 25)
-            conn.execute(
-                """
-                INSERT INTO recurring_rules (
-                    title_template, category, source_channel, issuing_org, priority,
-                    freq_type, freq_value, deadline_offset_days, summary, checklist_json,
-                    enabled, last_spawned_period, last_spawned_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-                """,
-                (
-                    "报送《重点行业领域重大事故隐患排查整治周调度简表》({period})",
-                    "02_省及潍坊来文",
-                    "上级来文",
-                    "县安委办",
-                    "重要",
-                    "weekly",
-                    4,
-                    1,
-                    "每周常态化调度：汇总工贸、危化、非煤矿山等重点领域重大事故隐患排查数据并撰写300字工作亮点。",
-                    json.dumps([
-                        {"id": "chk_1", "text": "汇总各领域本周重大事故隐患排查数据填写周调度简表", "done": False},
-                        {"id": "chk_2", "text": "撰写300字以内本周工作亮点小结报综合科", "done": False},
-                    ], ensure_ascii=False),
-                    cur_wk_key,
-                    now_str,
-                    now_str,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO recurring_rules (
-                    title_template, category, source_channel, issuing_org, priority,
-                    freq_type, freq_value, deadline_offset_days, summary, checklist_json,
-                    enabled, last_spawned_period, last_spawned_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-                """,
-                (
-                    "{month}全县自然灾害风险形势联合会商与月度防灾减灾工作总结",
-                    "02_省及潍坊来文",
-                    "上级来文",
-                    "市应急管理局",
-                    "重要",
-                    "monthly",
-                    25,
-                    3,
-                    "每月底常态化会商：联合气象、水利、自然资源开展下月自然灾害风险研判，并报送本月防灾减灾工作总结。",
-                    json.dumps([
-                        {"id": "chk_1", "text": "收集气象、水利、自然资源、森防部门下月风险研判意见", "done": False},
-                        {"id": "chk_2", "text": "起草月度自然灾害风险形势会商报告与防灾减灾工作总结", "done": False},
-                    ], ensure_ascii=False),
-                    cur_mo_key,
-                    now_str,
-                    now_str,
-                ),
-            )
+        with db_conn() as conn:
+            rec_cnt = conn.execute("SELECT COUNT(*) FROM recurring_rules").fetchone()[0]
+            if rec_cnt == 0:
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cur_wk_key, _, _ = compute_current_period_key("weekly", 4)
+                cur_mo_key, _, _ = compute_current_period_key("monthly", 25)
+                conn.execute(
+                    """
+                    INSERT INTO recurring_rules (
+                        title_template, category, source_channel, issuing_org, priority,
+                        freq_type, freq_value, deadline_offset_days, summary, checklist_json,
+                        enabled, last_spawned_period, last_spawned_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    """,
+                    (
+                        "报送《重点行业领域重大事故隐患排查整治周调度简表》({period})",
+                        "02_省及潍坊来文",
+                        "上级来文",
+                        "县安委办",
+                        "重要",
+                        "weekly",
+                        4,
+                        1,
+                        "每周常态化调度：汇总工贸、危化、非煤矿山等重点领域重大事故隐患排查数据并撰写300字工作亮点。",
+                        json.dumps([
+                            {"id": "chk_1", "text": "汇总各领域本周重大事故隐患排查数据填写周调度简表", "done": False},
+                            {"id": "chk_2", "text": "撰写300字以内本周工作亮点小结报综合科", "done": False},
+                        ], ensure_ascii=False),
+                        cur_wk_key,
+                        now_str,
+                        now_str,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO recurring_rules (
+                        title_template, category, source_channel, issuing_org, priority,
+                        freq_type, freq_value, deadline_offset_days, summary, checklist_json,
+                        enabled, last_spawned_period, last_spawned_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    """,
+                    (
+                        "{month}全县自然灾害风险形势联合会商与月度防灾减灾工作总结",
+                        "02_省及潍坊来文",
+                        "上级来文",
+                        "市应急管理局",
+                        "重要",
+                        "monthly",
+                        25,
+                        3,
+                        "每月底常态化会商：联合气象、水利、自然资源开展下月自然灾害风险研判，并报送本月防灾减灾工作总结。",
+                        json.dumps([
+                            {"id": "chk_1", "text": "收集气象、水利、自然资源、森防部门下月风险研判意见", "done": False},
+                            {"id": "chk_2", "text": "起草月度自然灾害风险形势会商报告与防灾减灾工作总结", "done": False},
+                        ], ensure_ascii=False),
+                        cur_mo_key,
+                        now_str,
+                        now_str,
+                    ),
+                )
 
-        task_cnt = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        arch_cnt = conn.execute("SELECT COUNT(*) FROM archives").fetchone()[0]
-        imp_cnt = conn.execute("SELECT COUNT(*) FROM important_records").fetchone()[0]
-        conn.commit()
-        conn.close()
-
+            task_cnt = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            arch_cnt = conn.execute("SELECT COUNT(*) FROM archives").fetchone()[0]
+            imp_cnt = conn.execute("SELECT COUNT(*) FROM important_records").fetchone()[0]
+            conn.commit()
     # 1. 初始化示例【📦 资料存档】归档包（若为空）
     if arch_cnt == 0:
         pptx_bytes = _build_minimal_pptx_bytes([
@@ -3103,16 +3614,19 @@ def seed_demo_data_if_empty() -> None:
             "   - 汇总各镇街第一轮人员伤亡、房屋倒损情况，按程序向上级报送《震情灾情初报》；\n"
             "   - 全面开放全县 **18 处** 规范化地震应急避难场所（文体公园、市民广场、各中小学操场）。"
         )
-        tmp_docx = Path(tempfile.gettempdir()) / "地震应急预案速查版.docx"
-        build_gb9704_docx(
-            output_path=tmp_docx,
-            raw_text=eq_md,
-            title="全县地震应急预案与黄金一小时处置指南",
-            issuing_org="县抗震救灾指挥部办公室",
-            mode="report",
-        )
-        eq_docx_bytes = tmp_docx.read_bytes()
-        tmp_docx.unlink(missing_ok=True)
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tf_eq:
+            tmp_docx = Path(tf_eq.name)
+        try:
+            build_gb9704_docx(
+                output_path=tmp_docx,
+                raw_text=eq_md,
+                title="全县地震应急预案与黄金一小时处置指南",
+                issuing_org="县抗震救灾指挥部办公室",
+                mode="report",
+            )
+            eq_docx_bytes = tmp_docx.read_bytes()
+        finally:
+            tmp_docx.unlink(missing_ok=True)
 
         upsert_important_record({
             "title": "地震应急预案",
@@ -3180,45 +3694,75 @@ def seed_demo_data_if_empty() -> None:
     })
 
 
+def _reselect_record_primary_doc(conn: sqlite3.Connection, record_id: int, deleted_doc_id: int) -> None:
+    """删除文档时若其为重要事项记录的 primary_doc_id，自动重选剩余首文档或置 NULL"""
+    rec = conn.execute("SELECT primary_doc_id FROM important_records WHERE id = ?", (record_id,)).fetchone()
+    if rec and rec["primary_doc_id"] == deleted_doc_id:
+        nxt = conn.execute(
+            "SELECT id FROM documents WHERE record_id = ? ORDER BY id ASC LIMIT 1",
+            (record_id,),
+        ).fetchone()
+        conn.execute(
+            "UPDATE important_records SET primary_doc_id = ? WHERE id = ?",
+            (int(nxt["id"]) if nxt else None, record_id),
+        )
+
+
+def _remap_rel_path(old_path: str, moved_mappings: List[Tuple[str, str]]) -> str:
+    """根据精确移动映射表 (old_rel, actual_new_rel) 重映射相对路径，解决合并冲突 _2 后缀失配问题"""
+    if not old_path:
+        return old_path
+    for old_p, new_p in moved_mappings:
+        if old_path == old_p:
+            return new_p
+        if old_path.startswith(old_p + "/"):
+            return new_p + old_path[len(old_p):]
+    return old_path
+
+
 class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
     server_version = f"GWWorkbench/{VERSION}"
 
     def log_message(self, format: str, *args: Any) -> None:
         pass
 
+    def _is_localhost(self) -> bool:
+        client_ip = self.client_address[0]
+        return client_ip in ("127.0.0.1", "::1", "localhost")
+
+    def _is_valid_agent_token(self, cfg: Dict[str, Any]) -> bool:
+        agent_tok = self.headers.get("X-Agent-Token", "")
+        cfg_tok = str(cfg.get("agent_token") or "")
+        if not agent_tok or not cfg_tok:
+            return False
+        # 安全红线：默认 Token 仅允许本机使用，绝不允许远程 IP 借默认 Token 绕过 IP 白名单或鉴权
+        if hmac.compare_digest(cfg_tok, DEFAULT_AGENT_TOKEN) and not self._is_localhost():
+            return False
+        return hmac.compare_digest(agent_tok, cfg_tok)
+
     def _guard_ip(self) -> bool:
         """IP 白名单闸门。放行返回 True；拦截返回 False 且请求已被终止。
 
         位于一切业务逻辑之前，覆盖所有 HTTP 路径（页面、API、静态文件、下载）。
         - 127.0.0.1 / ::1 永远放行
-        - 携带正确 X-Agent-Token 的请求放行（本机 MCP 客户端用）
+        - 携带正确非默认（或本机）X-Agent-Token 的请求放行
         - 不在白名单：默认直接断开 TCP 连接，不回任何 HTTP 响应
         """
         cfg = load_config()
-        cfg_key = (str(cfg.get("ip_whitelist") or ""), str(cfg.get("ip_block_mode") or "drop"))
+        client_ip = self.client_address[0]
 
-        # 白名单未变化时复用上次判定结果，避免每个请求都解析一遍规则
-        if getattr(self, "_wl_cache_key", None) == cfg_key:
-            allowed, reason = self._wl_cache_val
+        if self._is_valid_agent_token(cfg):
+            allowed, reason = True, "Agent Token"
         else:
-            client_ip = self.client_address[0]
-            agent_tok = self.headers.get("X-Agent-Token", "")
-            if agent_tok and agent_tok == cfg.get("agent_token"):
-                allowed, reason = True, "Agent Token"
-            else:
-                allowed, reason = ip_allowed(client_ip, cfg)
-            self._wl_cache_key = cfg_key
-            self._wl_cache_val = (allowed, reason)
+            allowed, reason = ip_allowed(client_ip, cfg)
 
         if allowed:
             return True
 
-        client_ip = self.client_address[0]
         record_access(client_ip, urllib.parse.urlparse(self.path).path, self.command, "block", reason)
         print(f"  ⛔ [IP拦截] {client_ip} - {self.command} {self.path[:80]} ({reason})", flush=True)
 
         if str(cfg.get("ip_block_mode") or "drop") == "drop":
-            # 不回任何响应，直接断开 TCP 连接
             self.close_connection = True
             try:
                 self.connection.close()
@@ -3227,16 +3771,11 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self._guard_blocked = True
             return False
 
-        # 备用模式：返回 403，但不透露任何白名单信息
         try:
             self._send_json({"error": "访问受限"}, status=403)
         except Exception:
             pass
         return False
-
-    def _is_localhost(self) -> bool:
-        client_ip = self.client_address[0]
-        return client_ip in ("127.0.0.1", "::1", "localhost")
 
     def _get_cookies(self) -> Dict[str, str]:
         raw_cookie = self.headers.get("Cookie", "")
@@ -3249,19 +3788,48 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _check_auth(self) -> Tuple[bool, bool]:
         cfg = load_config()
-        agent_tok = self.headers.get("X-Agent-Token", "")
-        if self._is_localhost() or (agent_tok and agent_tok == cfg.get("agent_token")):
+        if self._is_localhost() or self._is_valid_agent_token(cfg):
             return True, True
 
         ck = self._get_cookies()
         view_pwd = str(cfg.get("view_password") or "")
         edit_pwd = str(cfg.get("edit_password") or "")
+        client_ip = self.client_address[0]
 
         header_view = self.headers.get("X-View-Password", "")
         header_edit = self.headers.get("X-Edit-Password", "")
 
-        can_view = (not view_pwd) or _verify_cookie_token(ck.get("wb_view_pwd", ""), "view", view_pwd, cfg) or (header_view == view_pwd)
-        can_edit = _verify_cookie_token(ck.get("wb_edit_pwd", ""), "edit", edit_pwd, cfg) or (header_edit == edit_pwd)
+        hdr_view_ok = False
+        hdr_edit_ok = False
+        if header_view or header_edit:
+            if _check_and_prune_rate_limit(client_ip):
+                record_access(client_ip, urllib.parse.urlparse(self.path).path, self.command, "denied", "请求头密码尝试过于频繁")
+            else:
+                any_hdr_ok = False
+                any_hdr_fail = False
+                if header_view:
+                    if view_pwd and hmac.compare_digest(header_view, view_pwd):
+                        hdr_view_ok = True
+                        any_hdr_ok = True
+                    elif edit_pwd and hmac.compare_digest(header_view, edit_pwd):
+                        hdr_view_ok = True
+                        any_hdr_ok = True
+                    else:
+                        any_hdr_fail = True
+                if header_edit:
+                    if edit_pwd and hmac.compare_digest(header_edit, edit_pwd):
+                        hdr_edit_ok = True
+                        any_hdr_ok = True
+                    else:
+                        any_hdr_fail = True
+                if any_hdr_fail:
+                    _record_auth_failure(client_ip)
+                    record_access(client_ip, urllib.parse.urlparse(self.path).path, self.command, "badpwd", "请求头口令不正确")
+                elif any_hdr_ok:
+                    _clear_auth_failures(client_ip)
+
+        can_view = (not view_pwd) or _verify_cookie_token(ck.get("wb_view_pwd", ""), "view", view_pwd, cfg) or hdr_view_ok
+        can_edit = _verify_cookie_token(ck.get("wb_edit_pwd", ""), "edit", edit_pwd, cfg) or hdr_edit_ok
         if can_edit:
             can_view = True
         return can_view, can_edit
@@ -3274,7 +3842,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         clear_cookies: Optional[List[str]] = None,
     ) -> None:
         if getattr(self, "_guard_blocked", False):
-            return  # 连接已被 IP 闸门断开，不再写任何内容
+            return
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -3301,9 +3869,110 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return {}
         raw = self.rfile.read(length)
         try:
-            return json.loads(raw.decode("utf-8"))
+            val = json.loads(raw.decode("utf-8"))
+            return val if isinstance(val, dict) else {}
         except Exception:
             return {}
+
+    def _is_multipart_request(self) -> bool:
+        ctype = (self.headers.get("Content-Type") or "").lower()
+        return ctype.startswith("multipart/form-data")
+
+    def _parse_multipart_form_data(self) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+        """纯标准库流式安全解析 multipart/form-data（不依赖已弃用的 cgi 模块）"""
+        ctype = self.headers.get("Content-Type") or ""
+        m_bnd = re.search(r'boundary=(?:"([^"]+)"|([^;\s]+))', ctype, flags=re.IGNORECASE)
+        if not m_bnd:
+            return {}, []
+        boundary = (m_bnd.group(1) or m_bnd.group(2) or "").encode("utf-8")
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length <= 0 or length > MAX_MULTIPART_BODY_BYTES:
+            return {}, []
+
+        # 使用 SpooledTemporaryFile 承接大文件流式上传，超过 16MB 自动落盘防 OOM
+        with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024) as spooled:
+            remaining = length
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    break
+                spooled.write(chunk)
+                remaining -= len(chunk)
+            spooled.seek(0)
+            raw_body = spooled.read()
+
+        delim = b"--" + boundary
+        parts = raw_body.split(delim)
+        fields: Dict[str, str] = {}
+        files: List[Dict[str, Any]] = []
+
+        for part in parts[1:]:
+            if part.startswith(b"--"):
+                break
+            if part.startswith(b"\r\n"):
+                part = part[2:]
+            elif part.startswith(b"\n"):
+                part = part[1:]
+            if part.endswith(b"\r\n"):
+                part = part[:-2]
+            elif part.endswith(b"\n"):
+                part = part[:-1]
+
+            sep_idx = part.find(b"\r\n\r\n")
+            sep_len = 4
+            if sep_idx == -1:
+                sep_idx = part.find(b"\n\n")
+                sep_len = 2
+            if sep_idx == -1:
+                continue
+
+            header_bytes = part[:sep_idx]
+            payload_bytes = part[sep_idx + sep_len:]
+            msg = BytesParser(policy=email_default_policy).parsebytes(header_bytes + b"\r\n\r\n")
+            cd = msg.get("Content-Disposition") or ""
+            field_name = msg.get_param("name", header="Content-Disposition") or ""
+            fname = msg.get_param("filename", header="Content-Disposition")
+            if isinstance(fname, tuple):
+                # RFC 2231 (charset, lang, value)
+                fname = fname[2]
+            if not fname:
+                m_fn_star = re.search(r"filename\*=UTF-8''([^;\r\n]+)", cd, flags=re.IGNORECASE)
+                if m_fn_star:
+                    fname = urllib.parse.unquote(m_fn_star.group(1).strip().strip('"'))
+                else:
+                    m_fn = re.search(r'filename="([^"]*)"', cd, flags=re.IGNORECASE)
+                    if m_fn:
+                        fname = m_fn.group(1)
+
+            if fname:
+                files.append({
+                    "filename": str(fname),
+                    "raw_bytes": payload_bytes,
+                    "content_type": msg.get_content_type() or "application/octet-stream",
+                })
+            elif field_name:
+                fields[str(field_name)] = payload_bytes.decode("utf-8", errors="replace")
+
+        return fields, files
+
+    def _serve_static_with_etag(self, file_path: Path, content_type: str) -> None:
+        st = file_path.stat()
+        etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+        inm = (self.headers.get("If-None-Match") or "").strip()
+        if inm and (inm == etag or etag in [x.strip() for x in inm.split(",")]):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        content = file_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(content)
 
     def do_GET(self) -> None:
         if not self._guard_ip():
@@ -3319,24 +3988,14 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if path == "/" or path == "/index.html":
             index_file = STATIC_DIR / "index.html"
             if index_file.exists():
-                content = index_file.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
+                self._serve_static_with_etag(index_file, "text/html; charset=utf-8")
                 return
 
         rel_static = path.lstrip("/")
         target_static = (STATIC_DIR / rel_static).resolve()
         if _is_safe_subpath(target_static, STATIC_DIR) and target_static.is_file():
             ctype, _ = mimetypes.guess_type(str(target_static))
-            content = target_static.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", ctype or "application/octet-stream")
-            self.send_header("Content-Length", str(len(content)))
-            self.end_headers()
-            self.wfile.write(content)
+            self._serve_static_with_etag(target_static, ctype or "application/octet-stream")
             return
 
         self.send_error(404, "Not Found")
@@ -3390,26 +4049,25 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
             sig = _demo_signatures()
             with DB_LOCK:
-                conn = get_db()
-                remain = {
-                    "recurring": sum(
-                        conn.execute("SELECT COUNT(*) FROM recurring_rules WHERE title_template = ?", (t,)).fetchone()[0]
-                        for t in sig["recurring_titles"]
-                    ),
-                    "records": sum(
-                        conn.execute("SELECT COUNT(*) FROM important_records WHERE title = ?", (t,)).fetchone()[0]
-                        for t in sig["record_titles"]
-                    ),
-                    "archives": sum(
-                        conn.execute("SELECT COUNT(*) FROM archives WHERE title = ?", (t,)).fetchone()[0]
-                        for t in sig["archive_titles"]
-                    ),
-                    "tasks": sum(
-                        conn.execute("SELECT COUNT(*) FROM tasks WHERE doc_number = ?", (n,)).fetchone()[0]
-                        for n in sig["task_doc_numbers"]
-                    ),
-                }
-                conn.close()
+                with db_conn() as conn:
+                    remain = {
+                        "recurring": sum(
+                            conn.execute("SELECT COUNT(*) FROM recurring_rules WHERE title_template = ?", (t,)).fetchone()[0]
+                            for t in sig["recurring_titles"]
+                        ),
+                        "records": sum(
+                            conn.execute("SELECT COUNT(*) FROM important_records WHERE title = ?", (t,)).fetchone()[0]
+                            for t in sig["record_titles"]
+                        ),
+                        "archives": sum(
+                            conn.execute("SELECT COUNT(*) FROM archives WHERE title = ?", (t,)).fetchone()[0]
+                            for t in sig["archive_titles"]
+                        ),
+                        "tasks": sum(
+                            conn.execute("SELECT COUNT(*) FROM tasks WHERE doc_number = ?", (n,)).fetchone()[0]
+                            for n in sig["task_doc_numbers"]
+                        ),
+                    }
             self._send_json({
                 "ok": True,
                 "remain": remain,
@@ -3420,7 +4078,6 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/access-log":
-            # 仅本机可读，避免把内网访问情况暴露给其他设备
             if not self._is_localhost():
                 self._send_json({"error": "仅本机可查看访问记录"}, status=403)
                 return
@@ -3446,71 +4103,71 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/bootstrap":
-            sync_stats = sync_filesystem(force=False)
-            check_and_spawn_all_recurring()
+            # v3.3.0 性能优化：不再同步阻塞全盘扫描，由后台 15s 守护线程增量同步；相似旧稿按需由 /api/tasks/<id>/references 拉取
+            with _SYNC_STATE_LOCK:
+                sync_stats = dict(_LAST_SYNC_STATS)
             categories = list_physical_categories(scope="task")
             archive_categories = list_physical_categories(scope="archive")
             record_categories = list_physical_categories(scope="record")
             ws_root = get_workspace_root(cfg)
 
             with DB_LOCK:
-                conn = get_db()
-                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
-                docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-                docs_by_archive: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-                docs_by_record: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-                for _d in docs:
-                    if _d.get("task_id"):
-                        docs_by_task[int(_d["task_id"])].append(_d)
-                    if _d.get("archive_id"):
-                        docs_by_archive[int(_d["archive_id"])].append(_d)
-                    if _d.get("record_id"):
-                        docs_by_record[int(_d["record_id"])].append(_d)
+                with db_conn() as conn:
+                    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+                    docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    docs_by_archive: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    docs_by_record: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    for _d in docs:
+                        if _d.get("task_id"):
+                            docs_by_task[int(_d["task_id"])].append(_d)
+                        if _d.get("archive_id"):
+                            docs_by_archive[int(_d["archive_id"])].append(_d)
+                        if _d.get("record_id"):
+                            docs_by_record[int(_d["record_id"])].append(_d)
 
-                rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
-                tasks = [
-                    serialize_task(conn, r, include_refs=True, preloaded_docs=docs, ws_root=ws_root, docs_by_task=docs_by_task)
-                    for r in rows
-                ]
+                    rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
+                    tasks = [
+                        serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root, docs_by_task=docs_by_task)
+                        for r in rows
+                    ]
 
-                def task_sort_key(t: Dict[str, Any]):
-                    status_order = {"in_progress": 0, "pending": 1, "archived": 2}.get(t["status"], 1)
-                    pinned_order = 0 if t["is_pinned"] else 1
-                    if t["status"] == "archived":
-                        comp_ts = t.get("completed_at") or t.get("updated_at") or ""
-                        return (status_order, pinned_order, 0, -int(t["id"]), comp_ts)
-                    days_left = t["deadline_info"]["days_left"]
-                    prio_order = {"紧急": 0, "重要": 1, "普通": 2}.get(t.get("priority", "普通"), 2)
-                    return (status_order, pinned_order, days_left, prio_order, -int(t["id"]))
+                    def task_sort_key(t: Dict[str, Any]):
+                        status_order = {"in_progress": 0, "pending": 1, "archived": 2}.get(t["status"], 1)
+                        pinned_order = 0 if t["is_pinned"] else 1
+                        if t["status"] == "archived":
+                            comp_ts = t.get("completed_at") or t.get("updated_at") or ""
+                            return (status_order, pinned_order, 0, -int(t["id"]), comp_ts)
+                        days_left = t["deadline_info"]["days_left"]
+                        prio_order = {"紧急": 0, "重要": 1, "普通": 2}.get(t.get("priority", "普通"), 2)
+                        return (status_order, pinned_order, days_left, prio_order, -int(t["id"]))
 
-                tasks.sort(key=task_sort_key)
+                    tasks.sort(key=task_sort_key)
 
-                arch_rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
-                archives = [serialize_archive(conn, ar, preloaded_docs=docs, ws_root=ws_root, docs_by_archive=docs_by_archive) for ar in arch_rows]
+                    arch_rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
+                    archives = [serialize_archive(conn, ar, preloaded_docs=docs, ws_root=ws_root, docs_by_archive=docs_by_archive) for ar in arch_rows]
 
-                imp_rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
-                important_records = [serialize_record(conn, ir, preloaded_docs=docs, ws_root=ws_root, include_structured_preview=False, docs_by_record=docs_by_record) for ir in imp_rows]
+                    imp_rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
+                    important_records = [serialize_record(conn, ir, preloaded_docs=docs, ws_root=ws_root, include_structured_preview=False, docs_by_record=docs_by_record) for ir in imp_rows]
 
-                rec_rows = conn.execute("SELECT * FROM recurring_rules ORDER BY id ASC").fetchall()
-                recurring_rules = []
-                for rr in rec_rows:
-                    r_dict = dict(rr)
-                    r_dict["checklist"] = json.loads(r_dict.pop("checklist_json", "[]") or "[]")
-                    r_dict["enabled"] = bool(r_dict.get("enabled", 1))
-                    pkey, is_due, next_dl = compute_current_period_key(r_dict["freq_type"], r_dict["freq_value"])
-                    r_dict["current_period"] = pkey
-                    r_dict["next_deadline"] = next_dl
-                    recurring_rules.append(r_dict)
+                    rec_rows = conn.execute("SELECT * FROM recurring_rules ORDER BY id ASC").fetchall()
+                    recurring_rules = []
+                    for rr in rec_rows:
+                        r_dict = dict(rr)
+                        r_dict["checklist"] = json.loads(r_dict.pop("checklist_json", "[]") or "[]")
+                        r_dict["enabled"] = bool(r_dict.get("enabled", 1))
+                        pkey, is_due, next_dl = compute_current_period_key(r_dict["freq_type"], r_dict["freq_value"])
+                        r_dict["current_period"] = pkey
+                        r_dict["next_deadline"] = next_dl
+                        recurring_rules.append(r_dict)
 
-                conn.close()
-
+            lan_ip_cached = get_lan_ip()
             self._send_json({
                 "version": VERSION,
                 "can_view": can_view,
                 "can_edit": can_edit,
                 "is_localhost": self._is_localhost(),
-                "lan_url": f"http://{get_lan_ip()}:{cfg.get('port', 8090)}",
+                "lan_url": f"http://{lan_ip_cached}:{cfg.get('port', 8090)}",
                 "workspace_root": str(ws_root),
                 "default_org_name": cfg.get("default_org_name", "县应急管理局"),
                 "lan_notice": cfg.get("lan_notice", ""),
@@ -3520,10 +4177,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 "xkl_gw_cli": cfg.get("xkl_gw_cli", ""),
                 "prefix_archived_folder": bool(cfg.get("prefix_archived_folder", False)),
                 "ip_whitelist": cfg.get("ip_whitelist", ""),
-                # 本机修复（v3.1.0 上游回归）：此处原写作 _lan_ip，但该局部变量只在上面的
-                # /api/auth/status 分支内定义，导致 /api/bootstrap 抛 UnboundLocalError、
-                # 首页加载不出任何数据。恢复为直接调用 get_lan_ip()。
-                "my_lan_ip": get_lan_ip(),
+                "my_lan_ip": lan_ip_cached,
                 "categories": categories,
                 "archive_categories": archive_categories,
                 "record_categories": record_categories,
@@ -3541,18 +4195,61 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             cat_filter = (qs.get("category") or [""])[0]
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
-                rows = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
-                tasks = [
-                    serialize_task(conn, r, preloaded_docs=docs, ws_root=ws_root)
-                    for r in rows
-                    if (not status_filter or r["status"] == status_filter)
-                    and (not cat_filter or r["category"] == cat_filter)
-                ]
-                conn.close()
+                with db_conn() as conn:
+                    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+                    docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    for _d in docs:
+                        if _d.get("task_id"):
+                            docs_by_task[int(_d["task_id"])].append(_d)
+                    rows = conn.execute("SELECT * FROM tasks ORDER BY is_pinned DESC, id DESC").fetchall()
+                    tasks = [
+                        serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root, docs_by_task=docs_by_task)
+                        for r in rows
+                        if (not status_filter or r["status"] == status_filter)
+                        and (not cat_filter or r["category"] == cat_filter)
+                    ]
             self._send_json({"tasks": tasks})
+            return
+
+        m_task_refs = re.match(r"^/api/tasks/(\d+)/references$", path)
+        if m_task_refs:
+            task_id = int(m_task_refs.group(1))
+            ws_root = get_workspace_root(cfg)
+            with DB_LOCK:
+                with db_conn() as conn:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not t_row:
+                        self._send_json({"error": "事项不存在"}, status=404)
+                        return
+                    all_rows = conn.execute(
+                        f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC LIMIT 400"
+                    ).fetchall()
+                    all_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_rows]
+                    refs = find_similar_library_docs_fast(
+                        all_light_docs,
+                        t_row["title"],
+                        t_row["summary"] or "",
+                        exclude_task_id=task_id,
+                        limit=4,
+                        category=t_row["category"] or "",
+                        conn=conn,
+                    )
+            self._send_json({"ok": True, "task_id": task_id, "reference_docs": refs})
+            return
+
+        m_task_detail = re.match(r"^/api/tasks/(\d+)$", path)
+        if m_task_detail:
+            task_id = int(m_task_detail.group(1))
+            ws_root = get_workspace_root(cfg)
+            with DB_LOCK:
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not row:
+                        self._send_json({"error": "事项不存在"}, status=404)
+                        return
+                    t_obj = serialize_task(conn, row, include_refs=False, ws_root=ws_root)
+            self._send_json({"ok": True, "task": t_obj})
             return
 
         if path == "/api/archives":
@@ -3560,22 +4257,39 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             q_filter = (qs.get("q") or [""])[0].strip().lower()
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE archive_id IS NOT NULL ORDER BY id ASC").fetchall()
-                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
-                rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
-                archives = []
-                for r in rows:
-                    if cat_filter and r["category"] != cat_filter:
-                        continue
-                    a_obj = serialize_archive(conn, r, preloaded_docs=docs, ws_root=ws_root)
-                    if q_filter:
-                        hay = f"{a_obj['title']} {a_obj['archive_date']} {a_obj['category']} {a_obj['notes_md']} {' '.join(a_obj['tags'])} {' '.join(f['filename'] for f in a_obj['files'])}".lower()
-                        if q_filter not in hay:
+                with db_conn() as conn:
+                    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE archive_id IS NOT NULL ORDER BY id ASC").fetchall()
+                    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+                    docs_by_archive: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    for _d in docs:
+                        if _d.get("archive_id"):
+                            docs_by_archive[int(_d["archive_id"])].append(_d)
+                    rows = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
+                    archives = []
+                    for r in rows:
+                        if cat_filter and r["category"] != cat_filter:
                             continue
-                    archives.append(a_obj)
-                conn.close()
+                        a_obj = serialize_archive(conn, r, preloaded_docs=docs, ws_root=ws_root, docs_by_archive=docs_by_archive)
+                        if q_filter:
+                            hay = f"{a_obj['title']} {a_obj['archive_date']} {a_obj['category']} {a_obj['notes_md']} {' '.join(a_obj['tags'])} {' '.join(f['filename'] for f in a_obj['files'])}".lower()
+                            if q_filter not in hay:
+                                continue
+                        archives.append(a_obj)
             self._send_json({"ok": True, "archives": archives, "categories": list_physical_categories(scope="archive")})
+            return
+
+        m_arch_detail = re.match(r"^/api/archives/(\d+)$", path)
+        if m_arch_detail:
+            aid = int(m_arch_detail.group(1))
+            ws_root = get_workspace_root(cfg)
+            with DB_LOCK:
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
+                    if not row:
+                        self._send_json({"error": "资料存档包不存在"}, status=404)
+                        return
+                    a_obj = serialize_archive(conn, row, ws_root=ws_root)
+            self._send_json({"ok": True, "archive": a_obj})
             return
 
         if path == "/api/records":
@@ -3583,21 +4297,24 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             q_filter = (qs.get("q") or [""])[0].strip().lower()
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE record_id IS NOT NULL ORDER BY id ASC").fetchall()
-                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
-                rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
-                records = []
-                for r in rows:
-                    if cat_filter and r["category"] != cat_filter:
-                        continue
-                    r_obj = serialize_record(conn, r, preloaded_docs=docs, ws_root=ws_root, include_structured_preview=False)
-                    if q_filter:
-                        hay = f"{r_obj['title']} {r_obj['category']} {r_obj['content_md']} {' '.join(r_obj['tags'])} {' '.join(f['filename'] for f in r_obj['files'])}".lower()
-                        if q_filter not in hay:
+                with db_conn() as conn:
+                    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE record_id IS NOT NULL ORDER BY id ASC").fetchall()
+                    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+                    docs_by_record: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    for _d in docs:
+                        if _d.get("record_id"):
+                            docs_by_record[int(_d["record_id"])].append(_d)
+                    rows = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, sort_order ASC, id DESC").fetchall()
+                    records = []
+                    for r in rows:
+                        if cat_filter and r["category"] != cat_filter:
                             continue
-                    records.append(r_obj)
-                conn.close()
+                        r_obj = serialize_record(conn, r, preloaded_docs=docs, ws_root=ws_root, include_structured_preview=False, docs_by_record=docs_by_record)
+                        if q_filter:
+                            hay = f"{r_obj['title']} {r_obj['category']} {r_obj['content_md']} {' '.join(r_obj['tags'])} {' '.join(f['filename'] for f in r_obj['files'])}".lower()
+                            if q_filter not in hay:
+                                continue
+                        records.append(r_obj)
             self._send_json({"ok": True, "important_records": records, "categories": list_physical_categories(scope="record")})
             return
 
@@ -3606,14 +4323,12 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             rid = int(m_rec_detail.group(1))
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM important_records WHERE id = ?", (rid,)).fetchone()
-                if not row:
-                    conn.close()
-                    self._send_json({"error": "重要事项记录不存在"}, status=404)
-                    return
-                r_obj = serialize_record(conn, row, ws_root=ws_root, include_structured_preview=True)
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM important_records WHERE id = ?", (rid,)).fetchone()
+                    if not row:
+                        self._send_json({"error": "重要事项记录不存在"}, status=404)
+                        return
+                    r_obj = serialize_record(conn, row, ws_root=ws_root, include_structured_preview=True)
             self._send_json({"ok": True, "record": r_obj})
             return
 
@@ -3623,32 +4338,30 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             starred_only = (qs.get("starred") or [""])[0] == "1"
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-                docs = []
-                for r in rows:
-                    if cat_filter and r["category"] != cat_filter:
-                        continue
-                    if role_filter and r["doc_role"] != role_filter:
-                        continue
-                    if starred_only and not r["is_starred"]:
-                        continue
-                    docs.append(serialize_doc_light(r, ws_root=ws_root))
-                conn.close()
+                with db_conn() as conn:
+                    rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                    docs = []
+                    for r in rows:
+                        if cat_filter and r["category"] != cat_filter:
+                            continue
+                        if role_filter and r["doc_role"] != role_filter:
+                            continue
+                        if starred_only and not r["is_starred"]:
+                            continue
+                        docs.append(serialize_doc_light(r, ws_root=ws_root))
             self._send_json({"documents": docs})
             return
 
         if path == "/api/recurring":
             with DB_LOCK:
-                conn = get_db()
-                rec_rows = conn.execute("SELECT * FROM recurring_rules ORDER BY id ASC").fetchall()
-                rules = []
-                for rr in rec_rows:
-                    d = dict(rr)
-                    d["checklist"] = json.loads(d.pop("checklist_json", "[]") or "[]")
-                    d["enabled"] = bool(d.get("enabled", 1))
-                    rules.append(d)
-                conn.close()
+                with db_conn() as conn:
+                    rec_rows = conn.execute("SELECT * FROM recurring_rules ORDER BY id ASC").fetchall()
+                    rules = []
+                    for rr in rec_rows:
+                        d = dict(rr)
+                        d["checklist"] = json.loads(d.pop("checklist_json", "[]") or "[]")
+                        d["enabled"] = bool(d.get("enabled", 1))
+                        rules.append(d)
             self._send_json({"recurring_rules": rules})
             return
 
@@ -3657,9 +4370,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             doc_id = int(m_prev.group(1))
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
             if not row:
                 self._send_json({"error": "文件不存在"}, status=404)
                 return
@@ -3670,14 +4382,12 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"document": d})
             return
 
-        # 内联流式媒体/PDF直读接口（支持 HTTP Range 206 Partial Content，支持音频拖动与 PDF 内嵌直读）
         m_media = re.match(r"^/api/media/(\d+)$", path)
         if m_media:
             doc_id = int(m_media.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT filename, rel_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT filename, rel_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
             if not row:
                 self.send_error(404, "Media Not Found")
                 return
@@ -3756,9 +4466,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_dl:
             doc_id = int(m_dl.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
             if not row:
                 self.send_error(404, "File Not Found")
                 return
@@ -3791,17 +4500,20 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             doc_ids = [int(x) for x in ids_raw.split(",") if x.strip().isdigit()]
             ws_root = get_workspace_root(cfg)
             zip_entries: List[Tuple[Path, str]] = []
-            with DB_LOCK:
-                conn = get_db()
-                try:
-                    for did in doc_ids:
-                        r = conn.execute("SELECT filename, rel_path, category FROM documents WHERE id = ?", (did,)).fetchone()
-                        if r:
-                            fp = ws_root / r["rel_path"]
-                            if _is_safe_subpath(fp, ws_root) and fp.is_file():
-                                zip_entries.append((fp, f"{r['category']}/{r['filename']}"))
-                finally:
-                    conn.close()
+            if doc_ids:
+                with DB_LOCK:
+                    with db_conn() as conn:
+                        for i_blk in range(0, len(doc_ids), 500):
+                            chunk_ids = doc_ids[i_blk:i_blk + 500]
+                            placeholders = ",".join("?" for _ in chunk_ids)
+                            rows_z = conn.execute(
+                                f"SELECT filename, rel_path, category FROM documents WHERE id IN ({placeholders})",
+                                chunk_ids,
+                            ).fetchall()
+                            for r in rows_z:
+                                fp = ws_root / r["rel_path"]
+                                if not fp.is_symlink() and _is_safe_subpath(fp, ws_root) and fp.is_file():
+                                    zip_entries.append((fp, f"{r['category']}/{r['filename']}"))
             with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024) as spooled:
                 with zipfile.ZipFile(spooled, "w", zipfile.ZIP_DEFLATED) as zf:
                     for fp, arc in zip_entries:
@@ -3825,64 +4537,90 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_tzip:
             task_id = int(m_tzip.group(1))
             with DB_LOCK:
-                conn = get_db()
-                write_task_readme_file(conn, task_id)
-                conn.commit()
-                row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                conn.close()
+                with db_conn() as conn:
+                    write_task_readme_file(conn, task_id)
+                    conn.commit()
+                    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
             if not row:
                 self.send_error(404, "Task Not Found")
                 return
-            folder_path = get_workspace_root(cfg) / row["folder_rel_path"]
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                if folder_path.exists():
-                    for f in folder_path.rglob("*"):
-                        if f.is_file() and not f.name.startswith("~$") and f.name != ".gitkeep":
-                            zf.write(f, arcname=f.relative_to(folder_path))
-            zip_bytes = buf.getvalue()
-            zip_name = urllib.parse.quote(f"{row['title']}_全套公文与材料.zip")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Length", str(len(zip_bytes)))
-            self.send_header(
-                "Content-Disposition",
-                f"attachment; filename=\"{zip_name}\"; filename*=UTF-8''{zip_name}",
-            )
-            self.end_headers()
-            self.wfile.write(zip_bytes)
+            ws_root = get_workspace_root(cfg)
+            folder_path = ws_root / row["folder_rel_path"]
+            if not row["folder_rel_path"] or not _is_safe_subpath(folder_path, ws_root):
+                self.send_error(403, "Forbidden Path")
+                return
+            with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024) as spooled:
+                with zipfile.ZipFile(spooled, "w", zipfile.ZIP_DEFLATED) as zf:
+                    if folder_path.exists() and folder_path.is_dir():
+                        for f in folder_path.rglob("*"):
+                            if f.is_symlink() or not f.is_file():
+                                continue
+                            if f.name.startswith("~$") or f.name == ".gitkeep":
+                                continue
+                            if not _is_safe_subpath(f, folder_path):
+                                continue
+                            zf.write(f, arcname=str(f.relative_to(folder_path)))
+                zsize = spooled.tell()
+                spooled.seek(0)
+                zip_name = urllib.parse.quote(f"{row['title']}_全套公文与材料.zip")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(zsize))
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{zip_name}\"; filename*=UTF-8''{zip_name}",
+                )
+                self.end_headers()
+                while True:
+                    blk = spooled.read(65536)
+                    if not blk:
+                        break
+                    self.wfile.write(blk)
             return
 
         m_azip = re.match(r"^/api/archives/(\d+)/zip$", path)
         if m_azip:
             aid = int(m_azip.group(1))
             with DB_LOCK:
-                conn = get_db()
-                write_archive_readme_file(conn, aid)
-                conn.commit()
-                row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
-                conn.close()
+                with db_conn() as conn:
+                    write_archive_readme_file(conn, aid)
+                    conn.commit()
+                    row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
             if not row:
                 self.send_error(404, "Archive Not Found")
                 return
-            folder_path = get_workspace_root(cfg) / row["folder_rel_path"]
-            buf = io.BytesIO()
-            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-                if folder_path.exists():
-                    for f in folder_path.rglob("*"):
-                        if f.is_file() and not f.name.startswith("~$") and f.name != ".gitkeep":
-                            zf.write(f, arcname=f.relative_to(folder_path))
-            zip_bytes = buf.getvalue()
-            zip_name = urllib.parse.quote(f"{row['title']}_资料存档包.zip")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Length", str(len(zip_bytes)))
-            self.send_header(
-                "Content-Disposition",
-                f"attachment; filename=\"{zip_name}\"; filename*=UTF-8''{zip_name}",
-            )
-            self.end_headers()
-            self.wfile.write(zip_bytes)
+            ws_root = get_workspace_root(cfg)
+            folder_path = ws_root / row["folder_rel_path"]
+            if not row["folder_rel_path"] or not _is_safe_subpath(folder_path, ws_root):
+                self.send_error(403, "Forbidden Path")
+                return
+            with tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024) as spooled:
+                with zipfile.ZipFile(spooled, "w", zipfile.ZIP_DEFLATED) as zf:
+                    if folder_path.exists() and folder_path.is_dir():
+                        for f in folder_path.rglob("*"):
+                            if f.is_symlink() or not f.is_file():
+                                continue
+                            if f.name.startswith("~$") or f.name == ".gitkeep":
+                                continue
+                            if not _is_safe_subpath(f, folder_path):
+                                continue
+                            zf.write(f, arcname=str(f.relative_to(folder_path)))
+                zsize = spooled.tell()
+                spooled.seek(0)
+                zip_name = urllib.parse.quote(f"{row['title']}_资料存档包.zip")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/zip")
+                self.send_header("Content-Length", str(zsize))
+                self.send_header(
+                    "Content-Disposition",
+                    f"attachment; filename=\"{zip_name}\"; filename*=UTF-8''{zip_name}",
+                )
+                self.end_headers()
+                while True:
+                    blk = spooled.read(65536)
+                    if not blk:
+                        break
+                    self.wfile.write(blk)
             return
 
         if path == "/api/search":
@@ -3890,7 +4628,11 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             scope = (qs.get("scope") or ["full"])[0]
             cat = (qs.get("category") or [""])[0]
             role = (qs.get("doc_role") or [""])[0]
-            tasks, docs, archives, records = execute_search(q, scope=scope, category=cat, doc_role=role)
+            try:
+                limit_val = int((qs.get("limit") or ["200"])[0])
+            except Exception:
+                limit_val = 200
+            tasks, docs, archives, records = execute_search(q, scope=scope, category=cat, doc_role=role, limit=limit_val)
             self._send_json({
                 "query": q,
                 "scope": scope,
@@ -3907,17 +4649,20 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             cat_filter = (qs.get("category") or [""])[0]
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY id ASC").fetchall()
-                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
-                rows = conn.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
-                tasks = [
-                    serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root)
-                    for r in rows
-                    if (not status_filter or r["status"] == status_filter)
-                    and (not cat_filter or r["category"] == cat_filter)
-                ]
-                conn.close()
+                with db_conn() as conn:
+                    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY id ASC").fetchall()
+                    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+                    docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    for _d in docs:
+                        if _d.get("task_id"):
+                            docs_by_task[int(_d["task_id"])].append(_d)
+                    rows = conn.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
+                    tasks = [
+                        serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root, docs_by_task=docs_by_task)
+                        for r in rows
+                        if (not status_filter or r["status"] == status_filter)
+                        and (not cat_filter or r["category"] == cat_filter)
+                    ]
 
             status_cn = {"pending": "待办", "in_progress": "进行中", "archived": "已完成(归档)"}
             if fmt == "md":
@@ -3995,48 +4740,58 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
     # ---------------- API POST ----------------
     def handle_api_post(self, path: str) -> None:
-        body = self._read_json_body()
+        if self._is_multipart_request():
+            mp_fields, mp_files = self._parse_multipart_form_data()
+            body: Dict[str, Any] = dict(mp_fields)
+            body["files"] = mp_files
+        else:
+            body = self._read_json_body()
         cfg = load_config()
 
         if path == "/api/auth/login":
             pwd = str(body.get("password") or "").strip()
             cookies_to_set = {}
             client_ip = self.client_address[0]
-            now_t = time.time()
-            fails = [ts for ts in _LOGIN_FAIL_MAP.get(client_ip, []) if now_t - ts < 300]
-            _LOGIN_FAIL_MAP[client_ip] = fails
-            if len(fails) >= 10 and not self._is_localhost():
+            if _check_and_prune_rate_limit(client_ip) and not self._is_localhost():
                 self._send_json({"ok": False, "error": "密码错误次数过多，请 5 分钟后再试"}, status=429)
                 return
-            if pwd == str(cfg.get("edit_password")):
-                _LOGIN_FAIL_MAP.pop(client_ip, None)
-                cookies_to_set["wb_view_pwd"] = _cookie_sign_token("view", str(cfg.get("view_password")), cfg)
-                cookies_to_set["wb_edit_pwd"] = _cookie_sign_token("edit", str(cfg.get("edit_password")), cfg)
+            edit_pwd_cfg = str(cfg.get("edit_password") or "")
+            view_pwd_cfg = str(cfg.get("view_password") or "")
+            if edit_pwd_cfg and hmac.compare_digest(pwd, edit_pwd_cfg):
+                _clear_auth_failures(client_ip)
+                cookies_to_set["wb_view_pwd"] = _cookie_sign_token("view", view_pwd_cfg, cfg)
+                cookies_to_set["wb_edit_pwd"] = _cookie_sign_token("edit", edit_pwd_cfg, cfg)
                 record_access(client_ip, path, "POST", "allow", "编辑口令登录成功")
                 self._send_json({"ok": True, "can_view": True, "can_edit": True}, set_cookies=cookies_to_set)
                 return
-            elif pwd == str(cfg.get("view_password")):
-                _LOGIN_FAIL_MAP.pop(client_ip, None)
+            elif view_pwd_cfg and hmac.compare_digest(pwd, view_pwd_cfg):
+                _clear_auth_failures(client_ip)
                 cookies_to_set["wb_view_pwd"] = _cookie_sign_token("view", pwd, cfg)
                 record_access(client_ip, path, "POST", "allow", "访问密码登录成功")
                 self._send_json({"ok": True, "can_view": True, "can_edit": False}, set_cookies=cookies_to_set)
                 return
             else:
-                fails.append(now_t)
-                _LOGIN_FAIL_MAP[client_ip] = fails
+                _record_auth_failure(client_ip)
                 record_access(client_ip, path, "POST", "badpwd", "访问密码不正确")
                 self._send_json({"ok": False, "error": "访问密码不正确"}, status=403)
                 return
 
         if path == "/api/auth/unlock-edit":
+            client_ip = self.client_address[0]
+            if _check_and_prune_rate_limit(client_ip) and not self._is_localhost():
+                self._send_json({"ok": False, "error": "口令错误次数过多，请 5 分钟后再试"}, status=429)
+                return
             pwd = str(body.get("password") or "").strip()
-            if pwd == str(cfg.get("edit_password")) or self._is_localhost():
+            edit_pwd_cfg = str(cfg.get("edit_password") or "")
+            if self._is_localhost() or (edit_pwd_cfg and hmac.compare_digest(pwd, edit_pwd_cfg)):
+                _clear_auth_failures(client_ip)
                 self._send_json(
                     {"ok": True, "can_edit": True},
-                    set_cookies={"wb_edit_pwd": _cookie_sign_token("edit", str(cfg.get("edit_password")), cfg)},
+                    set_cookies={"wb_edit_pwd": _cookie_sign_token("edit", edit_pwd_cfg, cfg)},
                 )
             else:
-                record_access(self.client_address[0], path, "POST", "badpwd", "主理人编辑口令不正确")
+                _record_auth_failure(client_ip)
+                record_access(client_ip, path, "POST", "badpwd", "主理人编辑口令不正确")
                 self._send_json({"ok": False, "error": "主理人编辑口令不正确"}, status=403)
             return
 
@@ -4055,85 +4810,90 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             kws = extract_search_keywords(query)
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                all_doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
-                preloaded_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_doc_rows]
+                with db_conn() as conn:
+                    all_doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY is_starred DESC, id DESC").fetchall()
+                    preloaded_light_docs = [serialize_doc_light(r, ws_root=ws_root) for r in all_doc_rows]
+                    docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    docs_by_archive: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    docs_by_record: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    for _d in preloaded_light_docs:
+                        if _d.get("task_id"):
+                            docs_by_task[int(_d["task_id"])].append(_d)
+                        if _d.get("archive_id"):
+                            docs_by_archive[int(_d["archive_id"])].append(_d)
+                        if _d.get("record_id"):
+                            docs_by_record[int(_d["record_id"])].append(_d)
 
-                # 1. 检索待办事项
-                all_tasks = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
-                scored_tasks = []
-                for r in all_tasks:
-                    if category and r["category"] != category:
-                        continue
-                    hay = f"{r['title']} {r['doc_number']} {r['issuing_org']} {r['summary']} {r['raw_notice_text']} {r['progress_json']}".lower()
-                    hits = sum(2 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
-                    if hits > 0:
-                        t_obj = serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
-                        t_obj["match_snippet"] = build_highlight_snippet(hay, kws)
-                        scored_tasks.append((hits, t_obj))
-                scored_tasks.sort(key=lambda x: (-x[0], -x[1]["id"]))
-                top_tasks = [x[1] for x in scored_tasks[:10]]
+                    all_tasks = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
+                    scored_tasks = []
+                    for r in all_tasks:
+                        if category and r["category"] != category:
+                            continue
+                        hay = f"{r['title']} {r['doc_number']} {r['issuing_org']} {r['summary']} {r['raw_notice_text']} {r['progress_json']}".lower()
+                        hits = sum(2 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
+                        if hits > 0:
+                            t_obj = serialize_task(conn, r, include_refs=False, preloaded_docs=preloaded_light_docs, ws_root=ws_root, docs_by_task=docs_by_task)
+                            t_obj["match_snippet"] = build_highlight_snippet(hay, kws)
+                            scored_tasks.append((hits, t_obj))
+                    scored_tasks.sort(key=lambda x: (-x[0], -x[1]["id"]))
+                    top_tasks = [x[1] for x in scored_tasks[:10]]
 
-                # 2. 检索重要事项记录
-                all_recs = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, id DESC").fetchall()
-                scored_records = []
-                for r in all_recs:
-                    if category and r["category"] != category:
-                        continue
-                    hay = f"{r['title']} {r['category']} {r['content_md']} {r['tags_json']}".lower()
-                    hits = sum(3 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
-                    if hits > 0:
-                        r_obj = serialize_record(conn, r, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
-                        r_obj["match_snippet"] = build_highlight_snippet(r["content_md"] or r["title"], kws)
-                        scored_records.append((hits, r_obj))
-                scored_records.sort(key=lambda x: (-x[0], -x[1]["id"]))
-                top_records = [x[1] for x in scored_records[:8]]
+                    all_recs = conn.execute("SELECT * FROM important_records ORDER BY is_pinned DESC, id DESC").fetchall()
+                    scored_records = []
+                    for r in all_recs:
+                        if category and r["category"] != category:
+                            continue
+                        hay = f"{r['title']} {r['category']} {r['content_md']} {r['tags_json']}".lower()
+                        hits = sum(3 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
+                        if hits > 0:
+                            r_obj = serialize_record(conn, r, preloaded_docs=preloaded_light_docs, ws_root=ws_root, docs_by_record=docs_by_record)
+                            r_obj["match_snippet"] = build_highlight_snippet(r["content_md"] or r["title"], kws)
+                            scored_records.append((hits, r_obj))
+                    scored_records.sort(key=lambda x: (-x[0], -x[1]["id"]))
+                    top_records = [x[1] for x in scored_records[:8]]
 
-                # 3. 检索资料存档包
-                all_archs = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
-                scored_archives = []
-                for r in all_archs:
-                    if category and r["category"] != category:
-                        continue
-                    hay = f"{r['title']} {r['archive_date']} {r['category']} {r['notes_md']} {r['tags_json']}".lower()
-                    hits = sum(3 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
-                    if hits > 0:
-                        a_obj = serialize_archive(conn, r, preloaded_docs=preloaded_light_docs, ws_root=ws_root)
-                        a_obj["match_snippet"] = build_highlight_snippet(r["notes_md"] or r["title"], kws)
-                        scored_archives.append((hits, a_obj))
-                scored_archives.sort(key=lambda x: (-x[0], -x[1]["id"]))
-                top_archives = [x[1] for x in scored_archives[:8]]
+                    all_archs = conn.execute("SELECT * FROM archives ORDER BY is_pinned DESC, archive_date DESC, id DESC").fetchall()
+                    scored_archives = []
+                    for r in all_archs:
+                        if category and r["category"] != category:
+                            continue
+                        hay = f"{r['title']} {r['archive_date']} {r['category']} {r['notes_md']} {r['tags_json']}".lower()
+                        hits = sum(3 if kw.lower() in r["title"].lower() else (1 if kw.lower() in hay else 0) for kw in kws)
+                        if hits > 0:
+                            a_obj = serialize_archive(conn, r, preloaded_docs=preloaded_light_docs, ws_root=ws_root, docs_by_archive=docs_by_archive)
+                            a_obj["match_snippet"] = build_highlight_snippet(r["notes_md"] or r["title"], kws)
+                            scored_archives.append((hits, a_obj))
+                    scored_archives.sort(key=lambda x: (-x[0], -x[1]["id"]))
+                    top_archives = [x[1] for x in scored_archives[:8]]
 
-                # 4. 检索文档（优先利用 FTS5 OR 表达式做候选集预筛，避免全表扫描内存暴涨）
-                fts_or_expr = _build_fts_match_expr(kws, join_op="OR")
-                candidate_docs = []
-                if fts_or_expr:
-                    try:
-                        candidate_docs = conn.execute(
-                            "SELECT * FROM documents WHERE id IN (SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?) ORDER BY is_starred DESC, id DESC LIMIT 120",
-                            (fts_or_expr,),
-                        ).fetchall()
-                    except Exception:
-                        candidate_docs = []
-                if not candidate_docs:
-                    candidate_docs = conn.execute("SELECT * FROM documents ORDER BY is_starred DESC, id DESC LIMIT 200").fetchall()
+                    fts_or_expr = _build_fts_match_expr(kws, join_op="OR")
+                    candidate_docs = []
+                    if fts_or_expr:
+                        try:
+                            candidate_docs = conn.execute(
+                                "SELECT * FROM documents WHERE id IN (SELECT doc_id FROM documents_fts WHERE documents_fts MATCH ?) ORDER BY is_starred DESC, id DESC LIMIT 120",
+                                (fts_or_expr,),
+                            ).fetchall()
+                        except Exception:
+                            candidate_docs = []
+                    if not candidate_docs:
+                        candidate_docs = conn.execute("SELECT * FROM documents ORDER BY is_starred DESC, id DESC LIMIT 200").fetchall()
 
-                scored_docs = []
-                for r in candidate_docs:
-                    if category and r["category"] != category:
-                        continue
-                    hay_title = (r["filename"] or "").lower()
-                    hay_body = (r["extracted_text"] or "").lower()
-                    hits = sum(3 if kw.lower() in hay_title else (1 if kw.lower() in hay_body else 0) for kw in kws)
-                    if hits > 0:
-                        snip = build_highlight_snippet(r["extracted_text"] or r["filename"], kws)
-                        d_obj = serialize_doc_light(r, snippet=snip, ws_root=ws_root)
-                        if path == "/api/agent/context-search":
-                            d_obj["extracted_text_chunk"] = (r["extracted_text"] or "")[:2000]
-                        scored_docs.append((hits, d_obj))
-                scored_docs.sort(key=lambda x: (-x[0], -x[1]["id"]))
-                top_docs = [x[1] for x in scored_docs[:15]]
-                conn.close()
+                    scored_docs = []
+                    for r in candidate_docs:
+                        if category and r["category"] != category:
+                            continue
+                        hay_title = (r["filename"] or "").lower()
+                        hay_body = (r["extracted_text"] or "").lower()
+                        hits = sum(3 if kw.lower() in hay_title else (1 if kw.lower() in hay_body else 0) for kw in kws)
+                        if hits > 0:
+                            snip = build_highlight_snippet(r["extracted_text"] or r["filename"], kws)
+                            d_obj = serialize_doc_light(r, snippet=snip, ws_root=ws_root)
+                            if path == "/api/agent/context-search":
+                                d_obj["extracted_text_chunk"] = (r["extracted_text"] or "")[:2000]
+                            scored_docs.append((hits, d_obj))
+                    scored_docs.sort(key=lambda x: (-x[0], -x[1]["id"]))
+                    top_docs = [x[1] for x in scored_docs[:15]]
 
             ai_res = synthesize_ai_search_answer(
                 query, kws, top_tasks, top_docs,
@@ -4178,7 +4938,25 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
 
             launched_cmd = ""
             try:
-                if target_type == "folder" or target_abs.is_dir():
+                if sys.platform == "win32" or os.name == "nt":
+                    if target_type == "folder":
+                        if target_abs.is_file():
+                            subprocess.Popen(["explorer", "/select,", str(target_abs)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            launched_cmd = f"explorer /select, {target_abs}"
+                        else:
+                            os.startfile(str(target_abs))  # type: ignore[attr-defined]
+                            launched_cmd = f"startfile {target_abs}"
+                    else:
+                        os.startfile(str(target_abs))  # type: ignore[attr-defined]
+                        launched_cmd = f"startfile {target_abs}"
+                elif sys.platform == "darwin":
+                    if target_type == "folder" and target_abs.is_file():
+                        subprocess.Popen(["open", "-R", str(target_abs)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        launched_cmd = f"open -R {target_abs}"
+                    else:
+                        subprocess.Popen(["open", str(target_abs)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        launched_cmd = f"open {target_abs}"
+                elif target_type == "folder" or target_abs.is_dir():
                     folder_to_open = target_abs if target_abs.is_dir() else target_abs.parent
                     for fm in ("peony", "caja", "dde-file-manager", "nautilus", "xdg-open"):
                         if shutil.which(fm):
@@ -4217,98 +4995,107 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             doc_id = body.get("doc_id")
             task_id = body.get("task_id")
             content = str(body.get("content") or "")
+            content_bytes = content.encode("utf-8")
+            content_sig = _bytes_content_sig(content_bytes)
             filename = sanitize_filename(body.get("filename") or "新建材料草稿.md")
             if not filename.lower().endswith((".md", ".txt", ".markdown")):
                 filename += ".md"
+            raw_sf = str(body.get("sub_folder") or "").strip()
+            sub_folder_clean = sanitize_filename(raw_sf) if raw_sf else ""
 
             with DB_LOCK:
-                conn = get_db()
-                if doc_id:
-                    d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(doc_id),)).fetchone()
-                    if not d_row:
-                        conn.close()
-                        self._send_json({"error": "文档不存在"}, status=404)
+                with db_conn() as conn:
+                    if doc_id:
+                        d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(doc_id),)).fetchone()
+                        if not d_row:
+                            self._send_json({"error": "文档不存在"}, status=404)
+                            return
+                        dest_path = ws_root / d_row["rel_path"]
+                        if not _is_safe_subpath(dest_path, ws_root):
+                            self._send_json({"error": "非法路径"}, status=403)
+                            return
+                        dest_path.write_bytes(content_bytes)
+                        st = dest_path.stat()
+                        conn.execute(
+                            "UPDATE documents SET file_size = ?, mtime = ?, extracted_text = ?, content_hash = ?, updated_at = ? WHERE id = ?",
+                            (st.st_size, round(st.st_mtime, 2), content, content_sig, now_str, int(doc_id)),
+                        )
+                        _sync_fts_doc(conn, int(doc_id))
+                        u_task = None
+                        if d_row["task_id"]:
+                            write_task_readme_file(conn, d_row["task_id"])
+                            u_task = serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (d_row["task_id"],)).fetchone(), include_refs=False, ws_root=ws_root)
+                        conn.commit()
+                        u_row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(doc_id),)).fetchone()
+                        res_doc = serialize_doc_light(u_row, ws_root=ws_root)
+                        res_doc["extracted_text"] = content
+                        self._send_json({"ok": True, "document": res_doc, "task": u_task})
                         return
-                    dest_path = ws_root / d_row["rel_path"]
-                    if not _is_safe_subpath(dest_path, ws_root):
-                        conn.close()
-                        self._send_json({"error": "非法路径"}, status=403)
+                    elif task_id:
+                        t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (int(task_id),)).fetchone()
+                        if not t_row:
+                            self._send_json({"error": "关联事项不存在"}, status=404)
+                            return
+                        task_folder = ws_root / t_row["folder_rel_path"]
+                        target_dir = (task_folder / sub_folder_clean) if sub_folder_clean else task_folder
+                        if not _is_safe_subpath(target_dir, task_folder):
+                            self._send_json({"error": "非法子文件夹名称"}, status=400)
+                            return
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        if sub_folder_clean:
+                            gk = target_dir / ".gitkeep"
+                            if not gk.exists():
+                                try:
+                                    gk.write_text("", encoding="utf-8")
+                                except Exception:
+                                    pass
+                        dest_path = resolve_unique_dest_path(target_dir, filename, content_bytes)
+                        dest_path.write_bytes(content_bytes)
+                        st = dest_path.stat()
+                        rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                        cur = conn.execute(
+                            """
+                            INSERT INTO documents (
+                                task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                                file_type, file_size, mtime, extracted_text,
+                                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                            ) VALUES (?, NULL, NULL, ?, ?, ?, 'draft', ?, '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                            """,
+                            (int(task_id), dest_path.name, rel_file, t_row["category"], sub_folder_clean, st.st_size, round(st.st_mtime, 2), content, now_str, now_str, content_sig),
+                        )
+                        new_doc_id = int(cur.lastrowid)
+                        _sync_fts_doc(conn, new_doc_id)
+                        write_task_readme_file(conn, int(task_id))
+                        conn.commit()
+                        u_task = serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (int(task_id),)).fetchone(), include_refs=False, ws_root=ws_root)
+                        u_doc = serialize_doc_light(conn.execute("SELECT * FROM documents WHERE id = ?", (new_doc_id,)).fetchone(), ws_root=ws_root)
+                        u_doc["extracted_text"] = content
+                        self._send_json({"ok": True, "document": u_doc, "task": u_task})
                         return
-                    dest_path.write_text(content, encoding="utf-8")
-                    st = dest_path.stat()
-                    conn.execute(
-                        "UPDATE documents SET file_size = ?, mtime = ?, extracted_text = ?, updated_at = ? WHERE id = ?",
-                        (st.st_size, round(st.st_mtime, 2), content, now_str, int(doc_id)),
-                    )
-                    _sync_fts_doc(conn, int(doc_id))
-                    u_task = None
-                    if d_row["task_id"]:
-                        write_task_readme_file(conn, d_row["task_id"])
-                        u_task = serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (d_row["task_id"],)).fetchone(), ws_root=ws_root)
-                    conn.commit()
-                    u_row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(doc_id),)).fetchone()
-                    res_doc = serialize_doc_light(u_row, ws_root=ws_root)
-                    res_doc["extracted_text"] = content
-                    conn.close()
-                    self._send_json({"ok": True, "document": res_doc, "task": u_task})
-                    return
-                elif task_id:
-                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (int(task_id),)).fetchone()
-                    if not t_row:
-                        conn.close()
-                        self._send_json({"error": "关联事项不存在"}, status=404)
+                    else:
+                        cat = sanitize_filename(body.get("category") or DEFAULT_LIBRARY_CATEGORY)
+                        cat_dir = ensure_category_dir(ws_root, cat, scope="task")
+                        dest_path = resolve_unique_dest_path(cat_dir, filename, content_bytes)
+                        dest_path.write_bytes(content_bytes)
+                        st = dest_path.stat()
+                        rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                        cur = conn.execute(
+                            """
+                            INSERT INTO documents (
+                                task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                                file_type, file_size, mtime, extracted_text,
+                                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                            ) VALUES (NULL, NULL, NULL, ?, ?, ?, 'draft', '', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                            """,
+                            (dest_path.name, rel_file, cat, st.st_size, round(st.st_mtime, 2), content, now_str, now_str, content_sig),
+                        )
+                        new_doc_id = int(cur.lastrowid)
+                        _sync_fts_doc(conn, new_doc_id)
+                        conn.commit()
+                        u_doc = serialize_doc_light(conn.execute("SELECT * FROM documents WHERE id = ?", (new_doc_id,)).fetchone(), ws_root=ws_root)
+                        u_doc["extracted_text"] = content
+                        self._send_json({"ok": True, "document": u_doc})
                         return
-                    task_folder = ws_root / t_row["folder_rel_path"]
-                    task_folder.mkdir(parents=True, exist_ok=True)
-                    dest_path = resolve_unique_dest_path(task_folder, filename, content.encode("utf-8"))
-                    dest_path.write_text(content, encoding="utf-8")
-                    st = dest_path.stat()
-                    rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-                    cur = conn.execute(
-                        """
-                        INSERT INTO documents (
-                            task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                            file_type, file_size, mtime, extracted_text,
-                            tags_json, is_starred, is_pinned, created_at, updated_at
-                        ) VALUES (?, NULL, NULL, ?, ?, ?, 'draft', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?)
-                        """,
-                        (int(task_id), dest_path.name, rel_file, t_row["category"], st.st_size, round(st.st_mtime, 2), content, now_str, now_str),
-                    )
-                    new_doc_id = int(cur.lastrowid)
-                    _sync_fts_doc(conn, new_doc_id)
-                    write_task_readme_file(conn, int(task_id))
-                    conn.commit()
-                    u_task = serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (int(task_id),)).fetchone(), ws_root=ws_root)
-                    u_doc = serialize_doc_light(conn.execute("SELECT * FROM documents WHERE id = ?", (new_doc_id,)).fetchone(), ws_root=ws_root)
-                    u_doc["extracted_text"] = content
-                    conn.close()
-                    self._send_json({"ok": True, "document": u_doc, "task": u_task})
-                    return
-                else:
-                    cat = sanitize_filename(body.get("category") or DEFAULT_LIBRARY_CATEGORY)
-                    cat_dir = ensure_category_dir(ws_root, cat, scope="task")
-                    dest_path = resolve_unique_dest_path(cat_dir, filename, content.encode("utf-8"))
-                    dest_path.write_text(content, encoding="utf-8")
-                    st = dest_path.stat()
-                    rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
-                    cur = conn.execute(
-                        """
-                        INSERT INTO documents (
-                            task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                            file_type, file_size, mtime, extracted_text,
-                            tags_json, is_starred, is_pinned, created_at, updated_at
-                        ) VALUES (NULL, NULL, NULL, ?, ?, ?, 'draft', '文本/Markdown', ?, ?, ?, '[]', 0, 0, ?, ?)
-                        """,
-                        (dest_path.name, rel_file, cat, st.st_size, round(st.st_mtime, 2), content, now_str, now_str),
-                    )
-                    new_doc_id = int(cur.lastrowid)
-                    _sync_fts_doc(conn, new_doc_id)
-                    conn.commit()
-                    u_doc = serialize_doc_light(conn.execute("SELECT * FROM documents WHERE id = ?", (new_doc_id,)).fetchone(), ws_root=ws_root)
-                    u_doc["extracted_text"] = content
-                    conn.close()
-                    self._send_json({"ok": True, "document": u_doc})
-                    return
 
         m_fmt = re.match(r"^/api/docs/(\d+)/format-gw$", path)
         if m_fmt:
@@ -4321,8 +5108,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             with DB_LOCK:
-                conn = get_db()
-                try:
+                with db_conn() as conn:
                     d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
                     if not d_row:
                         self._send_json({"error": "原文档不存在"}, status=404)
@@ -4330,8 +5116,6 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     d_dict = dict(d_row)
                     t_row = conn.execute("SELECT doc_number FROM tasks WHERE id = ?", (d_dict["task_id"],)).fetchone() if d_dict["task_id"] else None
                     t_doc_num = (t_row["doc_number"] or "") if t_row else ""
-                finally:
-                    conn.close()
 
             src_abs = ws_root / d_dict["rel_path"]
             stem = re.sub(r"^(\[材料\]_|\[来文\]_|【材料】_|【来文】_)+", "", Path(d_dict["filename"]).stem)
@@ -4355,53 +5139,56 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             )
             st = out_abs.stat()
             ext_text, ftype = extract_document_text(out_abs)
+            csig = _file_content_sig(out_abs)
             rel_file = str(out_abs.relative_to(ws_root)).replace("\\", "/")
+            sf_val = d_dict.get("sub_folder") or ""
 
             with DB_LOCK:
-                conn = get_db()
-                d_row = d_dict
-                conn.execute(
-                    """
-                    INSERT INTO documents (
-                        task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                        file_type, file_size, mtime, extracted_text,
-                        tags_json, is_starred, is_pinned, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, 0, 0, ?, ?)
-                    ON CONFLICT(rel_path) DO UPDATE SET
-                        file_size=excluded.file_size,
-                        mtime=excluded.mtime,
-                        extracted_text=excluded.extracted_text,
-                        updated_at=excluded.updated_at
-                    """,
-                    (
-                        d_row["task_id"],
-                        d_row["archive_id"],
-                        d_row["record_id"],
-                        out_abs.name,
-                        rel_file,
-                        d_row["category"],
-                        ftype,
-                        st.st_size,
-                        round(st.st_mtime, 2),
-                        ext_text,
-                        json.dumps(["国标公文", "GB/T9704"], ensure_ascii=False),
-                        now_str,
-                        now_str,
-                    ),
-                )
-                row_new = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
-                if row_new:
-                    _sync_fts_doc(conn, row_new["id"])
-                if d_row["task_id"]:
-                    write_task_readme_file(conn, d_row["task_id"])
-                conn.commit()
-                res_doc = serialize_doc_light(row_new, ws_root=ws_root)
-                res_task = (
-                    serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (d_row["task_id"],)).fetchone(), ws_root=ws_root)
-                    if d_row["task_id"]
-                    else None
-                )
-                conn.close()
+                with db_conn() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO documents (
+                            task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                            file_type, file_size, mtime, extracted_text,
+                            tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+                        ON CONFLICT(rel_path) DO UPDATE SET
+                            file_size=excluded.file_size,
+                            mtime=excluded.mtime,
+                            extracted_text=excluded.extracted_text,
+                            content_hash=excluded.content_hash,
+                            updated_at=excluded.updated_at
+                        """,
+                        (
+                            d_dict["task_id"],
+                            d_dict["archive_id"],
+                            d_dict["record_id"],
+                            out_abs.name,
+                            rel_file,
+                            d_dict["category"],
+                            sf_val,
+                            ftype,
+                            st.st_size,
+                            round(st.st_mtime, 2),
+                            ext_text,
+                            json.dumps(["国标公文", "GB/T9704"], ensure_ascii=False),
+                            now_str,
+                            now_str,
+                            csig,
+                        ),
+                    )
+                    row_new = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                    if row_new:
+                        _sync_fts_doc(conn, row_new["id"])
+                    if d_dict["task_id"]:
+                        write_task_readme_file(conn, d_dict["task_id"])
+                    conn.commit()
+                    res_doc = serialize_doc_light(row_new, ws_root=ws_root)
+                    res_task = (
+                        serialize_task(conn, conn.execute("SELECT * FROM tasks WHERE id = ?", (d_dict["task_id"],)).fetchone(), include_refs=False, ws_root=ws_root)
+                        if d_dict["task_id"]
+                        else None
+                    )
 
             self._send_json({"ok": True, "document": res_doc, "task": res_task})
             return
@@ -4414,15 +5201,9 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 if "," in b64 and b64.startswith("data:"):
                     b64 = b64.split(",", 1)[1]
                 raw_bytes = base64.b64decode(b64)
-                with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tf:
-                    tf.write(raw_bytes)
-                    tmp_p = Path(tf.name)
-                try:
-                    ext_txt, _ = extract_document_text(tmp_p)
-                    if ext_txt and not ext_txt.startswith("【影像图片文件："):
-                        text = (text + "\n\n" + ext_txt).strip()
-                finally:
-                    tmp_p.unlink(missing_ok=True)
+                ext_txt, _ = _extract_bytes_in_temp(filename, raw_bytes)
+                if ext_txt and not ext_txt.startswith("【影像图片文件："):
+                    text = (text + "\n\n" + ext_txt).strip()
 
             parsed = parse_incoming_content(
                 text,
@@ -4472,66 +5253,214 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "record": updated_rec})
             return
 
+        # v3.3.0: 创建任务「我写的材料」单层子文件夹
+        m_tfolders = re.match(r"^/api/tasks/(\d+)/folders$", path)
+        if m_tfolders:
+            task_id = int(m_tfolders.group(1))
+            raw_name = str(body.get("name") or "").strip()
+            if not raw_name or raw_name.startswith("."):
+                self._send_json({"error": "子文件夹名称不能为空或以点号开头"}, status=400)
+                return
+            safe_name = sanitize_filename(raw_name)
+            ws_root = get_workspace_root(cfg)
+            with DB_LOCK:
+                with db_conn() as conn:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not t_row:
+                        self._send_json({"error": "事项不存在"}, status=404)
+                        return
+                    task_folder = ws_root / t_row["folder_rel_path"]
+                    sub_dir = task_folder / safe_name
+                    if not _is_safe_subpath(sub_dir, task_folder):
+                        self._send_json({"error": "非法子文件夹路径"}, status=400)
+                        return
+                    sub_dir.mkdir(parents=True, exist_ok=True)
+                    gk = sub_dir / ".gitkeep"
+                    if not gk.exists():
+                        try:
+                            gk.write_text("", encoding="utf-8")
+                        except Exception:
+                            pass
+                    res_task = serialize_task(conn, t_row, include_refs=False, ws_root=ws_root)
+            self._send_json({"ok": True, "folder": safe_name, "task": res_task})
+            return
+
+        # v3.3.0: 一键复制旧稿/范文到当前待办
+        m_tcopy = re.match(r"^/api/tasks/(\d+)/copy-doc$", path)
+        if m_tcopy:
+            task_id = int(m_tcopy.group(1))
+            src_doc_id = body.get("source_doc_id")
+            if not src_doc_id or not str(src_doc_id).isdigit():
+                self._send_json({"error": "请指定有效的 source_doc_id"}, status=400)
+                return
+            raw_sf = str(body.get("sub_folder") or "").strip()
+            sub_folder_clean = sanitize_filename(raw_sf) if raw_sf else ""
+            target_role = str(body.get("role") or body.get("doc_role") or "draft").strip() or "draft"
+            ws_root = get_workspace_root(cfg)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            with DB_LOCK:
+                with db_conn() as conn:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not t_row:
+                        self._send_json({"error": "目标事项不存在"}, status=404)
+                        return
+                    src_row = conn.execute("SELECT * FROM documents WHERE id = ?", (int(src_doc_id),)).fetchone()
+                    if not src_row:
+                        self._send_json({"error": "源文档不存在"}, status=404)
+                        return
+                    src_abs = ws_root / src_row["rel_path"]
+                    if not _is_safe_subpath(src_abs, ws_root) or not src_abs.is_file():
+                        self._send_json({"error": "源物理文件不存在"}, status=404)
+                        return
+                    task_folder = ws_root / t_row["folder_rel_path"]
+                    target_dir = (task_folder / sub_folder_clean) if sub_folder_clean else task_folder
+                    if not _is_safe_subpath(target_dir, task_folder):
+                        self._send_json({"error": "非法子文件夹名称"}, status=400)
+                        return
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    if sub_folder_clean:
+                        gk = target_dir / ".gitkeep"
+                        if not gk.exists():
+                            try:
+                                gk.write_text("", encoding="utf-8")
+                            except Exception:
+                                pass
+                    raw_bytes = src_abs.read_bytes()
+                    dest_path = resolve_unique_dest_path(target_dir, src_row["filename"], raw_bytes)
+                    shutil.copy2(str(src_abs), str(dest_path))
+                    st = dest_path.stat()
+                    csig = _bytes_content_sig(raw_bytes)
+                    rel_file = str(dest_path.relative_to(ws_root)).replace("\\", "/")
+                    d_cur = conn.execute(
+                        """
+                        INSERT INTO documents (
+                            task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                            file_type, file_size, mtime, extracted_text,
+                            tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                        ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?)
+                        """,
+                        (
+                            task_id,
+                            dest_path.name,
+                            rel_file,
+                            t_row["category"],
+                            target_role,
+                            sub_folder_clean,
+                            src_row["file_type"] or "",
+                            st.st_size,
+                            round(st.st_mtime, 2),
+                            src_row["extracted_text"] or "",
+                            src_row["tags_json"] or "[]",
+                            now_str,
+                            now_str,
+                            csig,
+                        ),
+                    )
+                    new_did = int(d_cur.lastrowid)
+                    _sync_fts_doc(conn, new_did)
+                    write_task_readme_file(conn, task_id)
+                    conn.commit()
+                    u_doc = serialize_doc_light(
+                        conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE id = ?", (new_did,)).fetchone(),
+                        ws_root=ws_root,
+                    )
+                    u_task = serialize_task(
+                        conn,
+                        conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone(),
+                        include_refs=False,
+                        ws_root=ws_root,
+                    )
+            self._send_json({"ok": True, "document": u_doc, "task": u_task})
+            return
+
         m_tfiles = re.match(r"^/api/tasks/(\d+)/files$", path)
         if m_tfiles:
             task_id = int(m_tfiles.group(1))
             files_list = body.get("files") or []
-            doc_role = body.get("doc_role") or "draft"
+            doc_role_req = str(body.get("doc_role") or "").strip()
+            raw_sf = str(body.get("sub_folder") or "").strip()
+            sub_folder_clean = sanitize_filename(raw_sf) if raw_sf else ""
             ws_root = get_workspace_root(cfg)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            allow_loc = self._is_localhost()
+
+            # 锁外解码与提取文本/指纹
+            prepared = []
+            for fitem in files_list:
+                fname, raw_bytes, f_role = _decode_file_item_bytes(fitem, allow_local_path=allow_loc)
+                item_sf_raw = str(fitem.get("sub_folder") or "").strip()
+                item_sf = sanitize_filename(item_sf_raw) if item_sf_raw else sub_folder_clean
+                role = fitem.get("doc_role") or doc_role_req or ("draft" if item_sf else "draft")
+                ext_txt, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
+                csig = _bytes_content_sig(raw_bytes)
+                prepared.append((fname, raw_bytes, role, item_sf, ext_txt, ftype, csig))
+
             with DB_LOCK:
-                conn = get_db()
-                t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                if not t_row:
-                    conn.close()
-                    self._send_json({"error": "事项不存在"}, status=404)
-                    return
-                task_folder = ws_root / t_row["folder_rel_path"]
-                task_folder.mkdir(parents=True, exist_ok=True)
-                allow_loc = self._is_localhost()
-                for fitem in files_list:
-                    fname, raw_bytes, f_role = _decode_file_item_bytes(fitem, allow_local_path=allow_loc)
-                    role = fitem.get("doc_role") or doc_role or f_role
-                    dest = resolve_unique_dest_path(task_folder, fname, raw_bytes)
-                    dest.write_bytes(raw_bytes)
-                    st = dest.stat()
-                    ext_txt, ftype = extract_document_text(dest)
-                    rel_file = str(dest.relative_to(ws_root)).replace("\\", "/")
-                    conn.execute(
-                        """
-                        INSERT INTO documents (
-                            task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                            file_type, file_size, mtime, extracted_text,
-                            tags_json, is_starred, is_pinned, created_at, updated_at
-                        ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?)
-                        ON CONFLICT(rel_path) DO UPDATE SET
-                            file_size=excluded.file_size,
-                            mtime=excluded.mtime,
-                            extracted_text=excluded.extracted_text,
-                            updated_at=excluded.updated_at
-                        """,
-                        (
-                            task_id,
-                            dest.name,
-                            rel_file,
-                            t_row["category"],
-                            role,
-                            ftype,
-                            st.st_size,
-                            round(st.st_mtime, 2),
-                            ext_txt,
-                            now_str,
-                            now_str,
-                        ),
-                    )
-                    r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
-                    if r_doc:
-                        _sync_fts_doc(conn, r_doc["id"])
-                write_task_readme_file(conn, task_id)
-                conn.commit()
-                updated_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                res_task = serialize_task(conn, updated_row, ws_root=ws_root)
-                conn.close()
+                with db_conn() as conn:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not t_row:
+                        self._send_json({"error": "事项不存在"}, status=404)
+                        return
+                    task_folder = ws_root / t_row["folder_rel_path"]
+                    task_folder.mkdir(parents=True, exist_ok=True)
+                    for fname, raw_bytes, role, item_sf, ext_txt, ftype, csig in prepared:
+                        target_dir = (task_folder / item_sf) if item_sf else task_folder
+                        if not _is_safe_subpath(target_dir, task_folder):
+                            self._send_json({"error": "非法子文件夹名称"}, status=400)
+                            return
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        if item_sf:
+                            gk = target_dir / ".gitkeep"
+                            if not gk.exists():
+                                try:
+                                    gk.write_text("", encoding="utf-8")
+                                except Exception:
+                                    pass
+                        dest = resolve_unique_dest_path(target_dir, fname, raw_bytes)
+                        dest.write_bytes(raw_bytes)
+                        st = dest.stat()
+                        if not ftype:
+                            ext_txt, ftype = extract_document_text(dest)
+                        rel_file = str(dest.relative_to(ws_root)).replace("\\", "/")
+                        conn.execute(
+                            """
+                            INSERT INTO documents (
+                                task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                                file_type, file_size, mtime, extracted_text,
+                                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                            ) VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0, 0, ?, ?, ?)
+                            ON CONFLICT(rel_path) DO UPDATE SET
+                                sub_folder=excluded.sub_folder,
+                                file_size=excluded.file_size,
+                                mtime=excluded.mtime,
+                                extracted_text=excluded.extracted_text,
+                                content_hash=excluded.content_hash,
+                                updated_at=excluded.updated_at
+                            """,
+                            (
+                                task_id,
+                                dest.name,
+                                rel_file,
+                                t_row["category"],
+                                role,
+                                item_sf,
+                                ftype,
+                                st.st_size,
+                                round(st.st_mtime, 2),
+                                ext_txt,
+                                now_str,
+                                now_str,
+                                csig,
+                            ),
+                        )
+                        r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                        if r_doc:
+                            _sync_fts_doc(conn, r_doc["id"])
+                    write_task_readme_file(conn, task_id)
+                    conn.commit()
+                    updated_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    res_task = serialize_task(conn, updated_row, include_refs=False, ws_root=ws_root)
             self._send_json({"ok": True, "task": res_task})
             return
 
@@ -4543,56 +5472,64 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             ws_root = get_workspace_root(cfg)
             cat_dir = ensure_category_dir(ws_root, category, scope="task")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            prepared = []
+            for fitem in files_list:
+                fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
+                ext_txt, ftype = _extract_bytes_in_temp(fname, raw_bytes) if raw_bytes else ("", "")
+                prepared.append((fname, raw_bytes, ext_txt, ftype, _bytes_content_sig(raw_bytes)))
+
             added_docs = []
             with DB_LOCK:
-                conn = get_db()
-                for fitem in files_list:
-                    fname, raw_bytes, _ = _decode_file_item_bytes(fitem)
-                    dest = resolve_unique_dest_path(cat_dir, fname, raw_bytes)
-                    dest.write_bytes(raw_bytes)
-                    st = dest.stat()
-                    ext_txt, ftype = extract_document_text(dest)
-                    rel_file = str(dest.relative_to(ws_root)).replace("\\", "/")
-                    conn.execute(
-                        """
-                        INSERT INTO documents (
-                            task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                            file_type, file_size, mtime, extracted_text,
-                            tags_json, is_starred, is_pinned, created_at, updated_at
-                        ) VALUES (NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-                        ON CONFLICT(rel_path) DO UPDATE SET
-                            doc_role=excluded.doc_role,
-                            file_size=excluded.file_size,
-                            mtime=excluded.mtime,
-                            extracted_text=excluded.extracted_text,
-                            updated_at=excluded.updated_at
-                        """,
-                        (
-                            dest.name,
-                            rel_file,
-                            category,
-                            doc_role,
-                            ftype,
-                            st.st_size,
-                            round(st.st_mtime, 2),
-                            ext_txt,
-                            json.dumps(tags, ensure_ascii=False),
-                            1 if body.get("is_starred") else 0,
-                            now_str,
-                            now_str,
-                        ),
-                    )
-                    row = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
-                    if row:
-                        _sync_fts_doc(conn, row["id"])
-                        added_docs.append(serialize_doc_light(row, ws_root=ws_root))
-                conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    for fname, raw_bytes, ext_txt, ftype, csig in prepared:
+                        dest = resolve_unique_dest_path(cat_dir, fname, raw_bytes)
+                        dest.write_bytes(raw_bytes)
+                        st = dest.stat()
+                        if not ftype:
+                            ext_txt, ftype = extract_document_text(dest)
+                        rel_file = str(dest.relative_to(ws_root)).replace("\\", "/")
+                        conn.execute(
+                            """
+                            INSERT INTO documents (
+                                task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                                file_type, file_size, mtime, extracted_text,
+                                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                            ) VALUES (NULL, NULL, NULL, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                            ON CONFLICT(rel_path) DO UPDATE SET
+                                doc_role=excluded.doc_role,
+                                file_size=excluded.file_size,
+                                mtime=excluded.mtime,
+                                extracted_text=excluded.extracted_text,
+                                content_hash=excluded.content_hash,
+                                updated_at=excluded.updated_at
+                            """,
+                            (
+                                dest.name,
+                                rel_file,
+                                category,
+                                doc_role,
+                                ftype,
+                                st.st_size,
+                                round(st.st_mtime, 2),
+                                ext_txt,
+                                json.dumps(tags, ensure_ascii=False),
+                                1 if body.get("is_starred") else 0,
+                                now_str,
+                                now_str,
+                                csig,
+                            ),
+                        )
+                        row = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                        if row:
+                            _sync_fts_doc(conn, row["id"])
+                            added_docs.append(serialize_doc_light(row, ws_root=ws_root))
+                    conn.commit()
             self._send_json({"ok": True, "documents": added_docs})
             return
 
         if path == "/api/tasks/batch":
-            task_ids = [int(x) for x in (body.get("task_ids") or []) if str(x).isdigit()]
+            task_ids = [int(x) for x in (body.get("task_ids") or body.get("ids") or []) if str(x).isdigit()]
             action = str(body.get("action") or "").strip()
             if not task_ids:
                 self._send_json({"error": "请选择至少一条待办事项"}, status=400)
@@ -4601,8 +5538,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             updated = 0
             with DB_LOCK:
-                conn = get_db()
-                try:
+                with db_conn() as conn:
                     for tid in task_ids:
                         t = conn.execute("SELECT * FROM tasks WHERE id = ?", (tid,)).fetchone()
                         if not t:
@@ -4642,14 +5578,40 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                                 )
                                 write_task_readme_file(conn, tid)
                                 updated += 1
+                        elif action == "pin":
+                            conn.execute("UPDATE tasks SET is_pinned = 1, updated_at = ? WHERE id = ?", (now_str, tid))
+                            updated += 1
+                        elif action == "unpin":
+                            conn.execute("UPDATE tasks SET is_pinned = 0, updated_at = ? WHERE id = ?", (now_str, tid))
+                            updated += 1
+                        elif action == "set_priority":
+                            prio = str(body.get("priority") or "").strip()
+                            if prio in ("普通", "重要", "紧急"):
+                                conn.execute("UPDATE tasks SET priority = ?, updated_at = ? WHERE id = ?", (prio, now_str, tid))
+                                write_task_readme_file(conn, tid)
+                                updated += 1
+                        elif action == "delete":
+                            del_disk = bool(body.get("delete_disk", False))
+                            folder_abs = ws_root / t["folder_rel_path"] if t["folder_rel_path"] else None
+                            if del_disk and folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                                shutil.rmtree(folder_abs, ignore_errors=True)
+                                for d_r in conn.execute("SELECT id FROM documents WHERE task_id = ?", (tid,)).fetchall():
+                                    conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d_r["id"],))
+                                conn.execute("DELETE FROM documents WHERE task_id = ?", (tid,))
+                            else:
+                                if folder_abs and folder_abs.is_dir():
+                                    rm_f = folder_abs / "00_事项要求与进展.md"
+                                    if rm_f.is_file():
+                                        rm_f.unlink(missing_ok=True)
+                                conn.execute("UPDATE documents SET task_id = NULL, sub_folder = '' WHERE task_id = ?", (tid,))
+                            conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
+                            updated += 1
                     conn.commit()
-                finally:
-                    conn.close()
             self._send_json({"ok": True, "updated_count": updated})
             return
 
         if path == "/api/docs/batch":
-            doc_ids = [int(x) for x in (body.get("doc_ids") or []) if str(x).isdigit()]
+            doc_ids = [int(x) for x in (body.get("doc_ids") or body.get("ids") or []) if str(x).isdigit()]
             action = str(body.get("action") or "").strip()
             ws_root = get_workspace_root(cfg)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -4658,72 +5620,135 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             updated_count = 0
+            affected_task_ids = set()
+            affected_archive_ids = set()
+            affected_record_ids = set()
             with DB_LOCK:
-                conn = get_db()
-                for did in doc_ids:
-                    row = conn.execute("SELECT * FROM documents WHERE id = ?", (did,)).fetchone()
-                    if not row:
-                        continue
-                    if action == "move_category":
-                        target_cat = sanitize_filename(body.get("category") or row["category"])
-                        if target_cat != row["category"]:
-                            if row["task_id"] is not None:
-                                new_cat_val, new_rel_folder = _move_task_folder_to_category(
-                                    conn, ws_root, int(row["task_id"]), target_cat, prefix_archived=bool(cfg.get("prefix_archived_folder"))
-                                )
-                                conn.execute(
-                                    "UPDATE tasks SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?",
-                                    (new_cat_val, new_rel_folder, now_str, int(row["task_id"])),
-                                )
-                                write_task_readme_file(conn, int(row["task_id"]))
-                            else:
-                                target_dir = ensure_category_dir(ws_root, target_cat, scope="task")
-                                old_abs = ws_root / row["rel_path"]
-                                new_rel = row["rel_path"]
-                                if old_abs.is_file():
-                                    new_abs = resolve_unique_dest_path(target_dir, row["filename"])
-                                    shutil.move(str(old_abs), str(new_abs))
-                                    new_rel = str(new_abs.relative_to(ws_root)).replace("\\", "/")
-                                conn.execute(
-                                    "UPDATE documents SET category = ?, rel_path = ?, filename = ?, updated_at = ? WHERE id = ?",
-                                    (target_cat, new_rel, Path(new_rel).name, now_str, did),
-                                )
-                                _sync_fts_doc(conn, did)
+                with db_conn() as conn:
+                    for did in doc_ids:
+                        row = conn.execute("SELECT * FROM documents WHERE id = ?", (did,)).fetchone()
+                        if not row:
+                            continue
+                        if action == "move_category":
+                            target_cat = sanitize_filename(body.get("category") or row["category"])
+                            if target_cat != row["category"]:
+                                if row["task_id"] is not None:
+                                    new_cat_val, new_rel_folder = _move_task_folder_to_category(
+                                        conn, ws_root, int(row["task_id"]), target_cat, prefix_archived=bool(cfg.get("prefix_archived_folder"))
+                                    )
+                                    conn.execute(
+                                        "UPDATE tasks SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?",
+                                        (new_cat_val, new_rel_folder, now_str, int(row["task_id"])),
+                                    )
+                                    affected_task_ids.add(int(row["task_id"]))
+                                else:
+                                    target_dir = ensure_category_dir(ws_root, target_cat, scope="task")
+                                    old_abs = ws_root / row["rel_path"]
+                                    new_rel = row["rel_path"]
+                                    if old_abs.is_file():
+                                        new_abs = resolve_unique_dest_path(target_dir, row["filename"])
+                                        shutil.move(str(old_abs), str(new_abs))
+                                        new_rel = str(new_abs.relative_to(ws_root)).replace("\\", "/")
+                                    conn.execute(
+                                        "UPDATE documents SET category = ?, rel_path = ?, filename = ?, updated_at = ? WHERE id = ?",
+                                        (target_cat, new_rel, Path(new_rel).name, now_str, did),
+                                    )
+                                    _sync_fts_doc(conn, did)
+                                updated_count += 1
+                        elif action == "move_to_folder":
+                            if row["task_id"] is None:
+                                continue
+                            t_row = conn.execute("SELECT folder_rel_path FROM tasks WHERE id = ?", (int(row["task_id"]),)).fetchone()
+                            if not t_row or not t_row["folder_rel_path"]:
+                                continue
+                            raw_sf = str(body.get("sub_folder") or "").strip()
+                            target_sf = sanitize_filename(raw_sf) if raw_sf else ""
+                            task_folder = ws_root / t_row["folder_rel_path"]
+                            target_dir = (task_folder / target_sf) if target_sf else task_folder
+                            if not _is_safe_subpath(target_dir, task_folder):
+                                continue
+                            target_dir.mkdir(parents=True, exist_ok=True)
+                            if target_sf:
+                                gk = target_dir / ".gitkeep"
+                                if not gk.exists():
+                                    try:
+                                        gk.write_text("", encoding="utf-8")
+                                    except Exception:
+                                        pass
+                            old_abs = ws_root / row["rel_path"]
+                            new_rel = row["rel_path"]
+                            new_fname = row["filename"]
+                            if old_abs.is_file() and old_abs.parent.resolve() != target_dir.resolve():
+                                dest_abs = resolve_unique_dest_path(target_dir, row["filename"])
+                                shutil.move(str(old_abs), str(dest_abs))
+                                new_fname = dest_abs.name
+                                new_rel = str(dest_abs.relative_to(ws_root)).replace("\\", "/")
+                            new_role = "draft" if target_sf else row["doc_role"]
+                            conn.execute(
+                                "UPDATE documents SET filename = ?, rel_path = ?, sub_folder = ?, doc_role = ?, updated_at = ? WHERE id = ?",
+                                (new_fname, new_rel, target_sf, new_role, now_str, did),
+                            )
+                            _sync_fts_doc(conn, did)
+                            affected_task_ids.add(int(row["task_id"]))
                             updated_count += 1
-                    elif action == "add_tags":
-                        new_tags_in = [t.strip() for t in (body.get("tags") or []) if str(t).strip()]
-                        curr_tags = json.loads(row["tags_json"] or "[]")
-                        for nt in new_tags_in:
-                            if nt not in curr_tags:
-                                curr_tags.append(nt)
-                        conn.execute(
-                            "UPDATE documents SET tags_json = ?, updated_at = ? WHERE id = ?",
-                            (json.dumps(curr_tags, ensure_ascii=False), now_str, did),
-                        )
-                        _sync_fts_doc(conn, did)
-                        updated_count += 1
-                    elif action == "star":
-                        val = 1 if body.get("value", True) else 0
-                        conn.execute("UPDATE documents SET is_starred = ?, updated_at = ? WHERE id = ?", (val, now_str, did))
-                        updated_count += 1
-                    elif action == "change_role":
-                        new_role = body.get("doc_role") or "draft"
-                        # v3.1.1：手动改过的角色一律锁定，之后改名/重扫不再被启发式覆盖
-                        conn.execute(
-                            "UPDATE documents SET doc_role = ?, role_locked = 1, updated_at = ? WHERE id = ?",
-                            (new_role, now_str, did),
-                        )
-                        updated_count += 1
-                    elif action == "delete":
-                        if body.get("delete_disk") and row["rel_path"]:
-                            f_abs = ws_root / row["rel_path"]
-                            if f_abs.is_file() and _is_safe_subpath(f_abs, ws_root):
-                                f_abs.unlink(missing_ok=True)
-                        conn.execute("DELETE FROM documents WHERE id = ?", (did,))
-                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
-                        updated_count += 1
-                conn.commit()
-                conn.close()
+                        elif action == "add_tags":
+                            new_tags_in = [str(t).strip() for t in (body.get("tags") or []) if str(t).strip()]
+                            curr_tags = json.loads(row["tags_json"] or "[]")
+                            for nt in new_tags_in:
+                                if nt not in curr_tags:
+                                    curr_tags.append(nt)
+                            conn.execute(
+                                "UPDATE documents SET tags_json = ?, updated_at = ? WHERE id = ?",
+                                (json.dumps(curr_tags, ensure_ascii=False), now_str, did),
+                            )
+                            _sync_fts_doc(conn, did)
+                            updated_count += 1
+                        elif action == "remove_tags":
+                            rem_set = {str(t).strip() for t in (body.get("tags") or []) if str(t).strip()}
+                            curr_tags = json.loads(row["tags_json"] or "[]")
+                            new_tags = [t for t in curr_tags if t not in rem_set]
+                            conn.execute(
+                                "UPDATE documents SET tags_json = ?, updated_at = ? WHERE id = ?",
+                                (json.dumps(new_tags, ensure_ascii=False), now_str, did),
+                            )
+                            _sync_fts_doc(conn, did)
+                            updated_count += 1
+                        elif action == "star":
+                            val = 1 if body.get("value", True) else 0
+                            conn.execute("UPDATE documents SET is_starred = ?, updated_at = ? WHERE id = ?", (val, now_str, did))
+                            updated_count += 1
+                        elif action in ("change_role", "set_role"):
+                            new_role = body.get("doc_role") or body.get("role") or "draft"
+                            conn.execute(
+                                "UPDATE documents SET doc_role = ?, role_locked = 1, updated_at = ? WHERE id = ?",
+                                (new_role, now_str, did),
+                            )
+                            if row["task_id"]:
+                                affected_task_ids.add(int(row["task_id"]))
+                            updated_count += 1
+                        elif action == "delete":
+                            if body.get("delete_disk") and row["rel_path"]:
+                                f_abs = ws_root / row["rel_path"]
+                                if f_abs.is_file() and _is_safe_subpath(f_abs, ws_root):
+                                    f_abs.unlink(missing_ok=True)
+                            conn.execute("DELETE FROM documents WHERE id = ?", (did,))
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
+                            if row["task_id"]:
+                                affected_task_ids.add(int(row["task_id"]))
+                            if row["archive_id"]:
+                                affected_archive_ids.add(int(row["archive_id"]))
+                            if row["record_id"]:
+                                _reselect_record_primary_doc(conn, int(row["record_id"]), did)
+                                affected_record_ids.add(int(row["record_id"]))
+                            updated_count += 1
+
+                    for tid_a in affected_task_ids:
+                        write_task_readme_file(conn, tid_a)
+                    for aid_a in affected_archive_ids:
+                        write_archive_readme_file(conn, aid_a)
+                    for rid_a in affected_record_ids:
+                        write_record_readme_file(conn, rid_a)
+                    conn.commit()
             self._send_json({"ok": True, "updated_count": updated_count})
             return
 
@@ -4746,60 +5771,71 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             avail_cats = list_physical_categories(scope="task")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             allowed_exts = {".docx", ".doc", ".wps", ".ofd", ".pdf", ".txt", ".md", ".xlsx", ".xls", ".csv", ".pptx", ".ppt", ".et", ".dps"}
+
+            # 锁外扫描与提取文本（跳过符号链接防逃逸/死循环）
+            scanned_items = []
+            for f in sorted(src_dir.rglob("*")):
+                if f.is_symlink() or not f.is_file() or f.name.startswith(".") or f.name.startswith("~$"):
+                    continue
+                if f.suffix.lower() not in allowed_exts:
+                    continue
+                try:
+                    raw_bytes = f.read_bytes()
+                    ext_txt, ftype = extract_document_text(f)
+                    csig = _bytes_content_sig(raw_bytes)
+                    rel_parts = list(f.relative_to(src_dir).parts[:-1])
+                    sub_tags = [pt for pt in rel_parts if pt and not pt.startswith(".")]
+                    chosen_cat = match_best_category(f"{f.name} {ext_txt[:400]}", avail_cats) if smart_auto_cat else target_cat
+                    scanned_items.append((f, raw_bytes, ext_txt, ftype, csig, sub_tags, chosen_cat))
+                except Exception as e:
+                    logger.warning("scan-local-dir failed on %s: %s", f, e)
+
             imported_count = 0
-
             with DB_LOCK:
-                conn = get_db()
-                for f in sorted(src_dir.rglob("*")):
-                    if f.is_file() and not f.name.startswith(".") and not f.name.startswith("~$"):
-                        if f.suffix.lower() in allowed_exts:
-                            raw_bytes = f.read_bytes()
-                            ext_txt, ftype = extract_document_text(f)
-                            rel_parts = list(f.relative_to(src_dir).parts[:-1])
-                            sub_tags = [p for p in rel_parts if p and not p.startswith(".")]
+                with db_conn() as conn:
+                    for f, raw_bytes, ext_txt, ftype, csig, sub_tags, chosen_cat in scanned_items:
+                        dest_cat_dir = ensure_category_dir(ws_root, chosen_cat, scope="task")
+                        target_f = resolve_unique_dest_path(dest_cat_dir, f.name, raw_bytes)
+                        if target_f.resolve() != f.resolve():
+                            shutil.copy2(f, target_f)
+                        st = target_f.stat()
+                        rel_file = str(target_f.relative_to(ws_root)).replace("\\", "/")
+                        role = infer_doc_role(target_f.name, ext_txt[:300], in_task_folder=False, cat_name=chosen_cat)
 
-                            chosen_cat = match_best_category(f"{f.name} {ext_txt[:400]}", avail_cats) if smart_auto_cat else target_cat
-                            dest_cat_dir = ensure_category_dir(ws_root, chosen_cat, scope="task")
-                            target_f = resolve_unique_dest_path(dest_cat_dir, f.name, raw_bytes)
-                            if target_f.resolve() != f.resolve():
-                                shutil.copy2(f, target_f)
-                            st = target_f.stat()
-                            rel_file = str(target_f.relative_to(ws_root)).replace("\\", "/")
-                            role = infer_doc_role(target_f.name, ext_txt[:300], in_task_folder=False, cat_name=chosen_cat)
-
-                            conn.execute(
-                                """
-                                INSERT INTO documents (
-                                    task_id, archive_id, record_id, filename, rel_path, category, doc_role,
-                                    file_type, file_size, mtime, extracted_text,
-                                    tags_json, is_starred, is_pinned, created_at, updated_at
-                                ) VALUES (NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
-                                ON CONFLICT(rel_path) DO UPDATE SET
-                                    tags_json=excluded.tags_json,
-                                    extracted_text=excluded.extracted_text,
-                                    updated_at=excluded.updated_at
-                                """,
-                                (
-                                    target_f.name,
-                                    rel_file,
-                                    chosen_cat,
-                                    role,
-                                    ftype,
-                                    st.st_size,
-                                    round(st.st_mtime, 2),
-                                    ext_txt,
-                                    json.dumps(sub_tags, ensure_ascii=False),
-                                    1 if role == "template" else 0,
-                                    now_str,
-                                    now_str,
-                                ),
-                            )
-                            r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
-                            if r_doc:
-                                _sync_fts_doc(conn, r_doc["id"])
-                            imported_count += 1
-                conn.commit()
-                conn.close()
+                        conn.execute(
+                            """
+                            INSERT INTO documents (
+                                task_id, archive_id, record_id, filename, rel_path, category, doc_role, sub_folder,
+                                file_type, file_size, mtime, extracted_text,
+                                tags_json, is_starred, is_pinned, created_at, updated_at, content_hash
+                            ) VALUES (NULL, NULL, NULL, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                            ON CONFLICT(rel_path) DO UPDATE SET
+                                tags_json=excluded.tags_json,
+                                extracted_text=excluded.extracted_text,
+                                content_hash=excluded.content_hash,
+                                updated_at=excluded.updated_at
+                            """,
+                            (
+                                target_f.name,
+                                rel_file,
+                                chosen_cat,
+                                role,
+                                ftype,
+                                st.st_size,
+                                round(st.st_mtime, 2),
+                                ext_txt,
+                                json.dumps(sub_tags, ensure_ascii=False),
+                                1 if role == "template" else 0,
+                                now_str,
+                                now_str,
+                                csig,
+                            ),
+                        )
+                        r_doc = conn.execute("SELECT id FROM documents WHERE rel_path = ?", (rel_file,)).fetchone()
+                        if r_doc:
+                            _sync_fts_doc(conn, r_doc["id"])
+                        imported_count += 1
+                    conn.commit()
 
             sync_stats = sync_filesystem(force=True)
             self._send_json({
@@ -4814,9 +5850,8 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_totask:
             doc_id = int(m_totask.group(1))
             with DB_LOCK:
-                conn = get_db()
-                d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                conn.close()
+                with db_conn() as conn:
+                    d_row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
             if not d_row:
                 self._send_json({"error": "文件不存在"}, status=404)
                 return
@@ -4835,6 +5870,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                         "doc_role": "incoming",
                     }
                 ],
+                "_allow_local_path": True,
             })
             self._send_json({"ok": True, "task": task_obj})
             return
@@ -4868,33 +5904,32 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                     norm_chk.append({"id": f"chk_{idx+1}", "text": str(item["text"]).strip(), "done": False})
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with DB_LOCK:
-                conn = get_db()
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    INSERT INTO recurring_rules (
-                        title_template, category, source_channel, issuing_org, priority,
-                        freq_type, freq_value, deadline_offset_days, summary, checklist_json,
-                        enabled, last_spawned_period, last_spawned_at, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', '', ?)
-                    """,
-                    (
-                        title_tpl,
-                        sanitize_filename(body.get("category") or DEFAULT_TASK_CATEGORY),
-                        body.get("source_channel") or "上级来文",
-                        body.get("issuing_org") or "",
-                        body.get("priority") or "重要",
-                        body.get("freq_type") or "weekly",
-                        int(body.get("freq_value") or 4),
-                        int(body.get("deadline_offset_days") or 1),
-                        body.get("summary") or "",
-                        json.dumps(norm_chk, ensure_ascii=False),
-                        now_str,
-                    ),
-                )
-                rid = cur.lastrowid
-                conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        INSERT INTO recurring_rules (
+                            title_template, category, source_channel, issuing_org, priority,
+                            freq_type, freq_value, deadline_offset_days, summary, checklist_json,
+                            enabled, last_spawned_period, last_spawned_at, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, '', '', ?)
+                        """,
+                        (
+                            title_tpl,
+                            sanitize_filename(body.get("category") or DEFAULT_TASK_CATEGORY),
+                            body.get("source_channel") or "上级来文",
+                            body.get("issuing_org") or "",
+                            body.get("priority") or "重要",
+                            body.get("freq_type") or "weekly",
+                            int(body.get("freq_value") or 4),
+                            int(body.get("deadline_offset_days") or 1),
+                            body.get("summary") or "",
+                            json.dumps(norm_chk, ensure_ascii=False),
+                            now_str,
+                        ),
+                    )
+                    rid = cur.lastrowid
+                    conn.commit()
             self._send_json({"ok": True, "id": rid})
             return
 
@@ -4913,18 +5948,24 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             category_filter = str(body.get("category") or "").strip()
             ws_root = get_workspace_root(cfg)
             with DB_LOCK:
-                conn = get_db()
-                doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY id ASC").fetchall()
-                docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
-                t_rows = conn.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
-                tasks = [
-                    serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root)
-                    for r in t_rows
-                    if (not category_filter or r["category"] == category_filter)
-                ]
-                arch_rows = conn.execute("SELECT * FROM archives ORDER BY archive_date DESC").fetchall()
-                archives = [serialize_archive(conn, ar, preloaded_docs=docs, ws_root=ws_root) for ar in arch_rows]
-                conn.close()
+                with db_conn() as conn:
+                    doc_rows = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents ORDER BY id ASC").fetchall()
+                    docs = [serialize_doc_light(r, ws_root=ws_root) for r in doc_rows]
+                    docs_by_task: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    docs_by_archive: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+                    for _d in docs:
+                        if _d.get("task_id"):
+                            docs_by_task[int(_d["task_id"])].append(_d)
+                        if _d.get("archive_id"):
+                            docs_by_archive[int(_d["archive_id"])].append(_d)
+                    t_rows = conn.execute("SELECT * FROM tasks ORDER BY created_at DESC").fetchall()
+                    tasks = [
+                        serialize_task(conn, r, include_refs=False, preloaded_docs=docs, ws_root=ws_root, docs_by_task=docs_by_task)
+                        for r in t_rows
+                        if (not category_filter or r["category"] == category_filter)
+                    ]
+                    arch_rows = conn.execute("SELECT * FROM archives ORDER BY archive_date DESC").fetchall()
+                    archives = [serialize_archive(conn, ar, preloaded_docs=docs, ws_root=ws_root, docs_by_archive=docs_by_archive) for ar in arch_rows]
 
             completed = [t for t in tasks if t["status"] == "archived"]
             ongoing = [t for t in tasks if t["status"] != "archived"]
@@ -5009,9 +6050,27 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/settings":
-            for k in ("workspace_root", "default_org_name", "prefix_archived_folder", "ai_api_base", "ai_model", "lan_notice", "xkl_gw_cli", "ip_whitelist"):
+            # 安全红线：workspace_root、xkl_gw_cli、agent_token 仅允许本机修改
+            if not self._is_localhost():
+                for restricted_k in ("workspace_root", "xkl_gw_cli", "agent_token"):
+                    if restricted_k in body and body[restricted_k] is not None:
+                        incoming_v = str(body[restricted_k]).strip()
+                        current_v = str(cfg.get(restricted_k) or "").strip()
+                        if (restricted_k == "agent_token" and incoming_v) or (restricted_k != "agent_token" and incoming_v != current_v):
+                            self._send_json({"error": f"安全限制：仅本机可修改 {restricted_k}"}, status=403)
+                            return
+
+            allowed_general = ("default_org_name", "prefix_archived_folder", "ai_api_base", "ai_model", "lan_notice", "ip_whitelist")
+            for k in allowed_general:
                 if k in body and body[k] is not None:
                     cfg[k] = body[k]
+            if self._is_localhost():
+                for k in ("workspace_root", "xkl_gw_cli"):
+                    if k in body and body[k] is not None:
+                        cfg[k] = body[k]
+                new_agent_tok = str(body.get("agent_token") or "").strip()
+                if new_agent_tok:
+                    cfg["agent_token"] = new_agent_tok
             for pwd_key in ("view_password", "edit_password", "ai_api_key"):
                 val = str(body.get(pwd_key) or "").strip()
                 if val:
@@ -5022,14 +6081,12 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/demo/purge":
-            # 只允许主理人操作；仅本机或已开启编辑模式
             can_view2, can_edit2 = self._check_auth()
             if not can_edit2:
                 self._send_json({"error": "需要开启【主理人编辑模式】"}, status=403)
                 return
             delete_disk = bool(body.get("delete_disk", True))
             stats = purge_demo_data(delete_disk=delete_disk)
-            # 无论是否清理到内容，都把一次性闸门关上，从此不再灌示例
             cfg2 = load_config()
             cfg2["seed_demo_done"] = True
             cfg2["demo_data_enabled"] = False
@@ -5077,145 +6134,184 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             with DB_LOCK:
-                conn = get_db()
-                if not new_dir.exists():
-                    shutil.move(str(old_dir), str(new_dir))
-                else:
-                    for item in list(old_dir.iterdir()):
-                        if item.name == ".gitkeep":
-                            continue
-                        if item.is_file():
-                            dest_item = resolve_unique_dest_path(new_dir, item.name, item.read_bytes())
-                        else:
-                            dest_item = new_dir / item.name
-                            c_idx = 2
-                            while dest_item.exists():
-                                dest_item = new_dir / f"{item.name}_{c_idx}"
-                                c_idx += 1
-                        shutil.move(str(item), str(dest_item))
-                    remaining = [x for x in old_dir.iterdir() if x.name != ".gitkeep"]
-                    if not remaining:
-                        shutil.rmtree(old_dir, ignore_errors=True)
-                ensure_category_dir(ws_root, new_name, scope=scope)
+                with db_conn() as conn:
+                    # 精确记录每个被移动项的 (old_rel, actual_new_rel)，彻底修复合并冲突追加 _2 后缀导致 SQL 前缀失配的 Bug
+                    moved_mappings: List[Tuple[str, str]] = []
+                    if not new_dir.exists():
+                        old_cat_rel = str(old_dir.relative_to(ws_root)).replace("\\", "/")
+                        shutil.move(str(old_dir), str(new_dir))
+                        new_cat_rel = str(new_dir.relative_to(ws_root)).replace("\\", "/")
+                        moved_mappings.append((old_cat_rel, new_cat_rel))
+                    else:
+                        for item in list(old_dir.iterdir()):
+                            if item.name == ".gitkeep":
+                                continue
+                            old_item_rel = str(item.relative_to(ws_root)).replace("\\", "/")
+                            if item.is_file():
+                                dest_item = resolve_unique_dest_path(new_dir, item.name, item.read_bytes())
+                            else:
+                                dest_item = new_dir / item.name
+                                c_idx = 2
+                                while dest_item.exists():
+                                    dest_item = new_dir / f"{item.name}_{c_idx}"
+                                    c_idx += 1
+                            shutil.move(str(item), str(dest_item))
+                            actual_new_rel = str(dest_item.relative_to(ws_root)).replace("\\", "/")
+                            moved_mappings.append((old_item_rel, actual_new_rel))
+                        remaining = [x for x in old_dir.iterdir() if x.name != ".gitkeep"]
+                        if not remaining:
+                            shutil.rmtree(old_dir, ignore_errors=True)
+                    ensure_category_dir(ws_root, new_name, scope=scope)
+                    moved_mappings.sort(key=lambda pair: -len(pair[0]))
 
-                if scope == "archive":
-                    old_prefix = f"{ARCHIVE_ROOT_DIRNAME}/{old_name}/"
-                    new_prefix = f"{ARCHIVE_ROOT_DIRNAME}/{new_name}/"
-                    for ar in conn.execute("SELECT id, folder_rel_path FROM archives WHERE category = ?", (old_name,)).fetchall():
-                        orel = ar["folder_rel_path"] or ""
-                        nrel = (new_prefix + orel[len(old_prefix):]) if orel.startswith(old_prefix) else orel
-                        conn.execute("UPDATE archives SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?", (new_name, nrel, now_str, ar["id"]))
-                    for dr in conn.execute("SELECT id, rel_path FROM documents WHERE archive_id IS NOT NULL AND category = ?", (old_name,)).fetchall():
-                        orel = dr["rel_path"] or ""
-                        nrel = (new_prefix + orel[len(old_prefix):]) if orel.startswith(old_prefix) else orel
-                        conn.execute("UPDATE documents SET category = ?, rel_path = ?, updated_at = ? WHERE id = ?", (new_name, nrel, now_str, dr["id"]))
-                        _sync_fts_doc(conn, dr["id"])
-                elif scope == "record":
-                    old_prefix = f"{RECORD_ROOT_DIRNAME}/{old_name}/"
-                    new_prefix = f"{RECORD_ROOT_DIRNAME}/{new_name}/"
-                    for rr in conn.execute("SELECT id, folder_rel_path FROM important_records WHERE category = ?", (old_name,)).fetchall():
-                        orel = rr["folder_rel_path"] or ""
-                        nrel = (new_prefix + orel[len(old_prefix):]) if orel.startswith(old_prefix) else orel
-                        conn.execute("UPDATE important_records SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?", (new_name, nrel, now_str, rr["id"]))
-                    for dr in conn.execute("SELECT id, rel_path FROM documents WHERE record_id IS NOT NULL AND category = ?", (old_name,)).fetchall():
-                        orel = dr["rel_path"] or ""
-                        nrel = (new_prefix + orel[len(old_prefix):]) if orel.startswith(old_prefix) else orel
-                        conn.execute("UPDATE documents SET category = ?, rel_path = ?, updated_at = ? WHERE id = ?", (new_name, nrel, now_str, dr["id"]))
-                        _sync_fts_doc(conn, dr["id"])
-                else:
-                    t_rows = conn.execute("SELECT id, folder_rel_path FROM tasks WHERE category = ?", (old_name,)).fetchall()
-                    for tr in t_rows:
-                        old_rel = tr["folder_rel_path"] or ""
-                        new_rel = (new_name + old_rel[len(old_name):]) if old_rel.startswith(old_name + "/") else old_rel
-                        conn.execute(
-                            "UPDATE tasks SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?",
-                            (new_name, new_rel, now_str, tr["id"]),
-                        )
-
-                    d_rows = conn.execute("SELECT id, rel_path FROM documents WHERE archive_id IS NULL AND record_id IS NULL AND category = ?", (old_name,)).fetchall()
-                    for dr in d_rows:
-                        old_rel = dr["rel_path"] or ""
-                        new_rel = (new_name + old_rel[len(old_name):]) if old_rel.startswith(old_name + "/") else old_rel
-                        conn.execute(
-                            "UPDATE documents SET category = ?, rel_path = ?, updated_at = ? WHERE id = ?",
-                            (new_name, new_rel, now_str, dr["id"]),
-                        )
-                        _sync_fts_doc(conn, dr["id"])
-
-                    conn.execute("UPDATE recurring_rules SET category = ? WHERE category = ?", (new_name, old_name))
-                conn.commit()
-                conn.close()
+                    if scope == "archive":
+                        for ar in conn.execute("SELECT id, folder_rel_path FROM archives WHERE category = ?", (old_name,)).fetchall():
+                            nrel = _remap_rel_path(ar["folder_rel_path"] or "", moved_mappings)
+                            conn.execute("UPDATE archives SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?", (new_name, nrel, now_str, ar["id"]))
+                        for dr in conn.execute("SELECT id, filename, rel_path FROM documents WHERE archive_id IS NOT NULL AND category = ?", (old_name,)).fetchall():
+                            nrel = _remap_rel_path(dr["rel_path"] or "", moved_mappings)
+                            nfname = Path(nrel).name if nrel else dr["filename"]
+                            conn.execute("UPDATE documents SET category = ?, rel_path = ?, filename = ?, updated_at = ? WHERE id = ?", (new_name, nrel, nfname, now_str, dr["id"]))
+                            _sync_fts_doc(conn, dr["id"])
+                    elif scope == "record":
+                        for rr in conn.execute("SELECT id, folder_rel_path FROM important_records WHERE category = ?", (old_name,)).fetchall():
+                            nrel = _remap_rel_path(rr["folder_rel_path"] or "", moved_mappings)
+                            conn.execute("UPDATE important_records SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?", (new_name, nrel, now_str, rr["id"]))
+                        for dr in conn.execute("SELECT id, filename, rel_path FROM documents WHERE record_id IS NOT NULL AND category = ?", (old_name,)).fetchall():
+                            nrel = _remap_rel_path(dr["rel_path"] or "", moved_mappings)
+                            nfname = Path(nrel).name if nrel else dr["filename"]
+                            conn.execute("UPDATE documents SET category = ?, rel_path = ?, filename = ?, updated_at = ? WHERE id = ?", (new_name, nrel, nfname, now_str, dr["id"]))
+                            _sync_fts_doc(conn, dr["id"])
+                    else:
+                        for tr in conn.execute("SELECT id, folder_rel_path FROM tasks WHERE category = ?", (old_name,)).fetchall():
+                            nrel = _remap_rel_path(tr["folder_rel_path"] or "", moved_mappings)
+                            conn.execute("UPDATE tasks SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?", (new_name, nrel, now_str, tr["id"]))
+                        for dr in conn.execute("SELECT id, filename, rel_path FROM documents WHERE archive_id IS NULL AND record_id IS NULL AND category = ?", (old_name,)).fetchall():
+                            nrel = _remap_rel_path(dr["rel_path"] or "", moved_mappings)
+                            nfname = Path(nrel).name if nrel else dr["filename"]
+                            conn.execute("UPDATE documents SET category = ?, rel_path = ?, filename = ?, updated_at = ? WHERE id = ?", (new_name, nrel, nfname, now_str, dr["id"]))
+                            _sync_fts_doc(conn, dr["id"])
+                        conn.execute("UPDATE recurring_rules SET category = ? WHERE category = ?", (new_name, old_name))
+                    conn.commit()
             self._send_json({"ok": True, "scope": scope, "categories": list_physical_categories(scope=scope)})
+            return
+
+        # v3.3.0: 重命名任务「我写的材料」单层子文件夹
+        m_tfolders_put = re.match(r"^/api/tasks/(\d+)/folders$", path)
+        if m_tfolders_put:
+            task_id = int(m_tfolders_put.group(1))
+            old_raw = str(body.get("old_name") or "").strip()
+            new_raw = str(body.get("new_name") or "").strip()
+            if not old_raw or not new_raw or old_raw.startswith(".") or new_raw.startswith("."):
+                self._send_json({"error": "请输入有效的原/新子文件夹名称"}, status=400)
+                return
+            old_sf = sanitize_filename(old_raw)
+            new_sf = sanitize_filename(new_raw)
+            if old_sf == new_sf:
+                self._send_json({"error": "新旧子文件夹名称相同"}, status=400)
+                return
+            with DB_LOCK:
+                with db_conn() as conn:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not t_row:
+                        self._send_json({"error": "事项不存在"}, status=404)
+                        return
+                    task_folder = ws_root / t_row["folder_rel_path"]
+                    old_dir = task_folder / old_sf
+                    new_dir = task_folder / new_sf
+                    if not _is_safe_subpath(old_dir, task_folder) or not _is_safe_subpath(new_dir, task_folder):
+                        self._send_json({"error": "非法子文件夹路径"}, status=400)
+                        return
+                    if not old_dir.exists() or not old_dir.is_dir():
+                        self._send_json({"error": f"子文件夹【{old_sf}】不存在"}, status=404)
+                        return
+                    if new_dir.exists():
+                        self._send_json({"error": f"目标子文件夹【{new_sf}】已存在"}, status=409)
+                        return
+                    shutil.move(str(old_dir), str(new_dir))
+                    old_prefix = f"{t_row['folder_rel_path'].rstrip('/')}/{old_sf}/"
+                    new_prefix = f"{t_row['folder_rel_path'].rstrip('/')}/{new_sf}/"
+                    for dr in conn.execute("SELECT id, rel_path FROM documents WHERE task_id = ? AND sub_folder = ?", (task_id, old_sf)).fetchall():
+                        orp = dr["rel_path"] or ""
+                        nrp = (new_prefix + orp[len(old_prefix):]) if orp.startswith(old_prefix) else orp
+                        conn.execute(
+                            "UPDATE documents SET rel_path = ?, sub_folder = ?, updated_at = ? WHERE id = ?",
+                            (nrp, new_sf, now_str, dr["id"]),
+                        )
+                        _sync_fts_doc(conn, dr["id"])
+                    write_task_readme_file(conn, task_id)
+                    conn.commit()
+                    u_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    res_task = serialize_task(conn, u_row, include_refs=False, ws_root=ws_root)
+            self._send_json({"ok": True, "old_name": old_sf, "new_name": new_sf, "task": res_task})
             return
 
         m_arch = re.match(r"^/api/archives/(\d+)$", path)
         if m_arch:
             aid = int(m_arch.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
-                if not row:
-                    conn.close()
-                    self._send_json({"error": "资料存档包不存在"}, status=404)
-                    return
-                a = dict(row)
-                new_title = sanitize_filename(body.get("title") if body.get("title") is not None else a["title"])
-                new_date = str(body.get("archive_date") if body.get("archive_date") is not None else a["archive_date"]).strip()
-                new_cat = sanitize_filename(body.get("category") if body.get("category") is not None else a["category"])
-                new_notes = str(body.get("notes_md") if body.get("notes_md") is not None else a["notes_md"])
-                new_pinned = 1 if body.get("is_pinned", bool(a["is_pinned"])) else 0
-                if "tags" in body:
-                    raw_t = body["tags"]
-                    new_tags = [t.strip() for t in re.split(r"[\s,，、;；]+", raw_t) if t.strip()] if isinstance(raw_t, str) else [str(t).strip() for t in (raw_t or []) if str(t).strip()]
-                else:
-                    new_tags = json.loads(a["tags_json"] or "[]")
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
+                    if not row:
+                        self._send_json({"error": "资料存档包不存在"}, status=404)
+                        return
+                    a = dict(row)
+                    new_title = sanitize_filename(body.get("title") if body.get("title") is not None else a["title"])
+                    new_date = str(body.get("archive_date") if body.get("archive_date") is not None else a["archive_date"]).strip()
+                    new_cat = sanitize_filename(body.get("category") if body.get("category") is not None else a["category"])
+                    new_notes = str(body.get("notes_md") if body.get("notes_md") is not None else a["notes_md"])
+                    new_pinned = 1 if body.get("is_pinned", bool(a["is_pinned"])) else 0
+                    if "tags" in body:
+                        raw_t = body["tags"]
+                        new_tags = [t.strip() for t in re.split(r"[\s,，、;；]+", raw_t) if t.strip()] if isinstance(raw_t, str) else [str(t).strip() for t in (raw_t or []) if str(t).strip()]
+                    else:
+                        new_tags = json.loads(a["tags_json"] or "[]")
 
-                old_rel = a["folder_rel_path"]
-                new_rel = old_rel
-                old_abs = ws_root / old_rel
-                target_cat_dir = ensure_category_dir(ws_root, new_cat, scope="archive")
-                folder_leaf = sanitize_filename(f"{new_date}_{new_title}" if not re.match(r"^\d{4}-\d{2}-\d{2}", new_title) else new_title)
-                new_abs = target_cat_dir / folder_leaf
-                if old_abs.exists() and old_abs.resolve() != new_abs.resolve():
-                    counter = 2
-                    while new_abs.exists() and new_abs.resolve() != old_abs.resolve():
-                        new_abs = target_cat_dir / f"{folder_leaf}_{counter}"
-                        counter += 1
-                    shutil.move(str(old_abs), str(new_abs))
-                    new_rel = str(new_abs.relative_to(ws_root)).replace("\\", "/")
-                    for dr in conn.execute("SELECT id, rel_path FROM documents WHERE archive_id = ?", (aid,)).fetchall():
-                        if dr["rel_path"].startswith(old_rel + "/"):
-                            u_rel = new_rel + dr["rel_path"][len(old_rel):]
-                            conn.execute(
-                                "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
-                                (u_rel, new_cat, now_str, dr["id"]),
-                            )
-                            _sync_fts_doc(conn, int(dr["id"]))
+                    old_rel = a["folder_rel_path"]
+                    new_rel = old_rel
+                    old_abs = ws_root / old_rel
+                    target_cat_dir = ensure_category_dir(ws_root, new_cat, scope="archive")
+                    folder_leaf = sanitize_filename(f"{new_date}_{new_title}" if not re.match(r"^\d{4}-\d{2}-\d{2}", new_title) else new_title)
+                    new_abs = target_cat_dir / folder_leaf
+                    if old_abs.exists() and old_abs.resolve() != new_abs.resolve():
+                        counter = 2
+                        while new_abs.exists() and new_abs.resolve() != old_abs.resolve():
+                            new_abs = target_cat_dir / f"{folder_leaf}_{counter}"
+                            counter += 1
+                        shutil.move(str(old_abs), str(new_abs))
+                        new_rel = str(new_abs.relative_to(ws_root)).replace("\\", "/")
+                        for dr in conn.execute("SELECT id, rel_path FROM documents WHERE archive_id = ?", (aid,)).fetchall():
+                            if dr["rel_path"].startswith(old_rel + "/"):
+                                u_rel = new_rel + dr["rel_path"][len(old_rel):]
+                                conn.execute(
+                                    "UPDATE documents SET rel_path = ?, category = ?, updated_at = ? WHERE id = ?",
+                                    (u_rel, new_cat, now_str, dr["id"]),
+                                )
+                                _sync_fts_doc(conn, int(dr["id"]))
 
-                conn.execute(
-                    """
-                    UPDATE archives SET
-                        title = ?, archive_date = ?, category = ?, notes_md = ?,
-                        tags_json = ?, is_pinned = ?, folder_rel_path = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        new_title,
-                        new_date,
-                        new_cat,
-                        new_notes,
-                        json.dumps(new_tags, ensure_ascii=False),
-                        new_pinned,
-                        new_rel,
-                        now_str,
-                        aid,
-                    ),
-                )
-                write_archive_readme_file(conn, aid)
-                conn.commit()
-                u_row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
-                res_arch = serialize_archive(conn, u_row, ws_root=ws_root)
-                conn.close()
+                    conn.execute(
+                        """
+                        UPDATE archives SET
+                            title = ?, archive_date = ?, category = ?, notes_md = ?,
+                            tags_json = ?, is_pinned = ?, folder_rel_path = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            new_title,
+                            new_date,
+                            new_cat,
+                            new_notes,
+                            json.dumps(new_tags, ensure_ascii=False),
+                            new_pinned,
+                            new_rel,
+                            now_str,
+                            aid,
+                        ),
+                    )
+                    write_archive_readme_file(conn, aid)
+                    conn.commit()
+                    u_row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
+                    res_arch = serialize_archive(conn, u_row, ws_root=ws_root)
             self._send_json({"ok": True, "archive": res_arch})
             return
 
@@ -5230,49 +6326,53 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_rec:
             rid = int(m_rec.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM recurring_rules WHERE id = ?", (rid,)).fetchone()
-                if not row:
-                    conn.close()
-                    self._send_json({"error": "规则不存在"}, status=404)
-                    return
-                r_curr = dict(row)
-                enabled_val = 1 if body.get("enabled", bool(r_curr["enabled"])) else 0
-                chk_json = r_curr["checklist_json"]
-                if "checklist" in body and isinstance(body["checklist"], list):
-                    norm_chk = [
-                        {"id": f"chk_{i+1}", "text": (x.get("text") if isinstance(x, dict) else str(x)).strip(), "done": False}
-                        for i, x in enumerate(body["checklist"])
-                        if (x.get("text") if isinstance(x, dict) else str(x)).strip()
-                    ]
-                    chk_json = json.dumps(norm_chk, ensure_ascii=False)
-                conn.execute(
-                    """
-                    UPDATE recurring_rules SET
-                        title_template = ?,
-                        category = ?,
-                        issuing_org = ?,
-                        freq_type = ?,
-                        freq_value = ?,
-                        summary = ?,
-                        checklist_json = ?,
-                        enabled = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        body.get("title_template") or r_curr["title_template"],
-                        sanitize_filename(body.get("category") or r_curr["category"]),
-                        body.get("issuing_org", r_curr["issuing_org"]),
-                        body.get("freq_type") or r_curr["freq_type"],
-                        int(body.get("freq_value") or r_curr["freq_value"]),
-                        body.get("summary", r_curr["summary"]),
-                        chk_json,
-                        enabled_val,
-                        rid,
-                    ),
-                )
-                conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM recurring_rules WHERE id = ?", (rid,)).fetchone()
+                    if not row:
+                        self._send_json({"error": "规则不存在"}, status=404)
+                        return
+                    r_curr = dict(row)
+                    enabled_val = 1 if body.get("enabled", bool(r_curr["enabled"])) else 0
+                    chk_json = r_curr["checklist_json"]
+                    if "checklist" in body and isinstance(body["checklist"], list):
+                        norm_chk = [
+                            {"id": f"chk_{i+1}", "text": (x.get("text") if isinstance(x, dict) else str(x)).strip(), "done": False}
+                            for i, x in enumerate(body["checklist"])
+                            if (x.get("text") if isinstance(x, dict) else str(x)).strip()
+                        ]
+                        chk_json = json.dumps(norm_chk, ensure_ascii=False)
+                    conn.execute(
+                        """
+                        UPDATE recurring_rules SET
+                            title_template = ?,
+                            category = ?,
+                            source_channel = ?,
+                            issuing_org = ?,
+                            priority = ?,
+                            freq_type = ?,
+                            freq_value = ?,
+                            deadline_offset_days = ?,
+                            summary = ?,
+                            checklist_json = ?,
+                            enabled = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            body.get("title_template") or r_curr["title_template"],
+                            sanitize_filename(body.get("category") or r_curr["category"]),
+                            body.get("source_channel", r_curr["source_channel"]),
+                            body.get("issuing_org", r_curr["issuing_org"]),
+                            body.get("priority", r_curr["priority"]),
+                            body.get("freq_type") or r_curr["freq_type"],
+                            int(body.get("freq_value") if body.get("freq_value") is not None else r_curr["freq_value"]),
+                            int(body.get("deadline_offset_days") if body.get("deadline_offset_days") is not None else r_curr["deadline_offset_days"]),
+                            body.get("summary", r_curr["summary"]),
+                            chk_json,
+                            enabled_val,
+                            rid,
+                        ),
+                    )
+                    conn.commit()
             self._send_json({"ok": True})
             return
 
@@ -5280,137 +6380,145 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_task:
             task_id = int(m_task.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                if not row:
-                    conn.close()
-                    self._send_json({"error": "事项不存在"}, status=404)
-                    return
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not row:
+                        self._send_json({"error": "事项不存在"}, status=404)
+                        return
 
-                t = dict(row)
-                new_title = sanitize_filename(body.get("title") if body.get("title") is not None else t["title"])
-                new_cat = sanitize_filename(body.get("category") if body.get("category") is not None else t["category"])
-                new_status = body.get("status") if body.get("status") is not None else t["status"]
-                new_collapsed = 1 if body.get("is_collapsed", bool(t.get("is_collapsed", 0))) else 0
+                    t = dict(row)
+                    new_title = sanitize_filename(body.get("title") if body.get("title") is not None else t["title"])
+                    new_cat = sanitize_filename(body.get("category") if body.get("category") is not None else t["category"])
+                    new_status = body.get("status") if body.get("status") is not None else t["status"]
+                    new_collapsed = 1 if body.get("is_collapsed", bool(t.get("is_collapsed", 0))) else 0
 
-                completed_at = t.get("completed_at") or ""
-                if new_status == "archived" and t["status"] != "archived":
-                    completed_at = now_str
-                elif new_status != "archived":
-                    completed_at = ""
+                    completed_at = t.get("completed_at") or ""
+                    if new_status == "archived" and t["status"] != "archived":
+                        completed_at = now_str
+                    elif new_status != "archived":
+                        completed_at = ""
 
-                progress_list = json.loads(t["progress_json"] or "[]")
-                if body.get("append_progress"):
-                    progress_list.insert(0, {
-                        "time": datetime.now().strftime("%m-%d %H:%M"),
-                        "text": str(body["append_progress"]).strip(),
-                    })
-                elif body.get("progress_logs") is not None:
-                    progress_list = body["progress_logs"]
+                    progress_list = json.loads(t["progress_json"] or "[]")
+                    if body.get("append_progress"):
+                        progress_list.insert(0, {
+                            "time": datetime.now().strftime("%m-%d %H:%M"),
+                            "text": str(body["append_progress"]).strip(),
+                        })
+                    elif body.get("edit_progress") and isinstance(body["edit_progress"], dict):
+                        ep = body["edit_progress"]
+                        ep_idx = ep.get("index")
+                        ep_txt = str(ep.get("text") or "").strip()
+                        if isinstance(ep_idx, int) and 0 <= ep_idx < len(progress_list) and ep_txt:
+                            progress_list[ep_idx]["text"] = ep_txt
+                    elif body.get("delete_progress") is not None:
+                        dp_idx = body.get("delete_progress")
+                        if isinstance(dp_idx, int) and 0 <= dp_idx < len(progress_list):
+                            progress_list.pop(dp_idx)
+                    elif body.get("progress_logs") is not None:
+                        progress_list = body["progress_logs"]
 
-                checklist = json.loads(t["checklist_json"] or "[]")
-                if body.get("toggle_check_id"):
-                    cid = body["toggle_check_id"]
-                    for item in checklist:
-                        if item.get("id") == cid:
-                            item["done"] = not bool(item.get("done"))
-                elif body.get("edit_check_item") and isinstance(body["edit_check_item"], dict):
-                    ec = body["edit_check_item"]
-                    cid = ec.get("id")
-                    new_txt = str(ec.get("text") or "").strip()
-                    if cid and new_txt:
+                    checklist = json.loads(t["checklist_json"] or "[]")
+                    if body.get("toggle_check_id"):
+                        cid = body["toggle_check_id"]
                         for item in checklist:
                             if item.get("id") == cid:
-                                item["text"] = new_txt
-                elif body.get("delete_check_id"):
-                    dcid = body["delete_check_id"]
-                    checklist = [item for item in checklist if item.get("id") != dcid]
-                elif body.get("append_check_text"):
-                    checklist.append({
-                        "id": f"chk_{int(time.time()*1000)}",
-                        "text": str(body["append_check_text"]).strip(),
-                        "done": False,
-                    })
-                elif body.get("clear_checklist"):
-                    checklist = []
-                elif body.get("clear_done_checklist"):
-                    checklist = [item for item in checklist if not item.get("done")]
-                elif isinstance(body.get("batch_delete_check_ids"), list):
-                    del_set = set(str(x) for x in body["batch_delete_check_ids"])
-                    checklist = [item for item in checklist if str(item.get("id")) not in del_set]
-                elif body.get("checklist") is not None:
-                    raw_chk = body["checklist"]
-                    if isinstance(raw_chk, list):
-                        norm_chk = []
-                        for idx_c, c_it in enumerate(raw_chk):
-                            if isinstance(c_it, dict) and str(c_it.get("text") or "").strip():
-                                norm_chk.append({
-                                    "id": str(c_it.get("id") or f"chk_{idx_c+1}"),
-                                    "text": str(c_it["text"]).strip(),
-                                    "done": bool(c_it.get("done", False)),
-                                })
-                            elif isinstance(c_it, str) and c_it.strip():
-                                norm_chk.append({"id": f"chk_{idx_c+1}", "text": c_it.strip(), "done": False})
-                        checklist = norm_chk
+                                item["done"] = not bool(item.get("done"))
+                    elif body.get("edit_check_item") and isinstance(body["edit_check_item"], dict):
+                        ec = body["edit_check_item"]
+                        cid = ec.get("id")
+                        new_txt = str(ec.get("text") or "").strip()
+                        if cid and new_txt:
+                            for item in checklist:
+                                if item.get("id") == cid:
+                                    item["text"] = new_txt
+                    elif body.get("delete_check_id"):
+                        dcid = body["delete_check_id"]
+                        checklist = [item for item in checklist if item.get("id") != dcid]
+                    elif body.get("append_check_text"):
+                        checklist.append({
+                            "id": f"chk_{int(time.time()*1000)}",
+                            "text": str(body["append_check_text"]).strip(),
+                            "done": False,
+                        })
+                    elif body.get("clear_checklist"):
+                        checklist = []
+                    elif body.get("clear_done_checklist"):
+                        checklist = [item for item in checklist if not item.get("done")]
+                    elif isinstance(body.get("batch_delete_check_ids"), list):
+                        del_set = set(str(x) for x in body["batch_delete_check_ids"])
+                        checklist = [item for item in checklist if str(item.get("id")) not in del_set]
+                    elif body.get("checklist") is not None:
+                        raw_chk = body["checklist"]
+                        if isinstance(raw_chk, list):
+                            norm_chk = []
+                            for idx_c, c_it in enumerate(raw_chk):
+                                if isinstance(c_it, dict) and str(c_it.get("text") or "").strip():
+                                    norm_chk.append({
+                                        "id": str(c_it.get("id") or f"chk_{idx_c+1}"),
+                                        "text": str(c_it["text"]).strip(),
+                                        "done": bool(c_it.get("done", False)),
+                                    })
+                                elif isinstance(c_it, str) and c_it.strip():
+                                    norm_chk.append({"id": f"chk_{idx_c+1}", "text": c_it.strip(), "done": False})
+                            checklist = norm_chk
 
-                new_cat, new_rel_folder = _move_task_folder_to_category(
-                    conn,
-                    ws_root,
-                    task_id,
-                    new_cat,
-                    new_title=new_title,
-                    new_status=new_status,
-                    prefix_archived=bool(cfg.get("prefix_archived_folder")),
-                )
-
-                conn.execute(
-                    """
-                    UPDATE tasks SET
-                        title = ?,
-                        source_channel = ?,
-                        doc_number = ?,
-                        issuing_org = ?,
-                        priority = ?,
-                        deadline = ?,
-                        category = ?,
-                        summary = ?,
-                        raw_notice_text = ?,
-                        checklist_json = ?,
-                        progress_json = ?,
-                        status = ?,
-                        is_pinned = ?,
-                        is_collapsed = ?,
-                        completed_at = ?,
-                        folder_rel_path = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        new_title,
-                        body.get("source_channel", t["source_channel"]),
-                        body.get("doc_number", t["doc_number"]),
-                        body.get("issuing_org", t["issuing_org"]),
-                        body.get("priority", t["priority"]),
-                        body.get("deadline", t["deadline"]),
-                        new_cat,
-                        body.get("summary", t["summary"]),
-                        body.get("raw_notice_text", t["raw_notice_text"]),
-                        json.dumps(checklist, ensure_ascii=False),
-                        json.dumps(progress_list, ensure_ascii=False),
-                        new_status,
-                        1 if body.get("is_pinned", bool(t["is_pinned"])) else 0,
-                        new_collapsed,
-                        completed_at,
-                        new_rel_folder,
-                        now_str,
+                    new_cat, new_rel_folder = _move_task_folder_to_category(
+                        conn,
+                        ws_root,
                         task_id,
-                    ),
-                )
-                write_task_readme_file(conn, task_id)
-                conn.commit()
-                updated_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                res_task = serialize_task(conn, updated_row, ws_root=ws_root)
-                conn.close()
+                        new_cat,
+                        new_title=new_title,
+                        new_status=new_status,
+                        prefix_archived=bool(cfg.get("prefix_archived_folder")),
+                    )
+
+                    conn.execute(
+                        """
+                        UPDATE tasks SET
+                            title = ?,
+                            source_channel = ?,
+                            doc_number = ?,
+                            issuing_org = ?,
+                            priority = ?,
+                            deadline = ?,
+                            category = ?,
+                            summary = ?,
+                            raw_notice_text = ?,
+                            checklist_json = ?,
+                            progress_json = ?,
+                            status = ?,
+                            is_pinned = ?,
+                            is_collapsed = ?,
+                            completed_at = ?,
+                            folder_rel_path = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            new_title,
+                            body.get("source_channel", t["source_channel"]),
+                            body.get("doc_number", t["doc_number"]),
+                            body.get("issuing_org", t["issuing_org"]),
+                            body.get("priority", t["priority"]),
+                            body.get("deadline", t["deadline"]),
+                            new_cat,
+                            body.get("summary", t["summary"]),
+                            body.get("raw_notice_text", t["raw_notice_text"]),
+                            json.dumps(checklist, ensure_ascii=False),
+                            json.dumps(progress_list, ensure_ascii=False),
+                            new_status,
+                            1 if body.get("is_pinned", bool(t["is_pinned"])) else 0,
+                            new_collapsed,
+                            completed_at,
+                            new_rel_folder,
+                            now_str,
+                            task_id,
+                        ),
+                    )
+                    write_task_readme_file(conn, task_id)
+                    conn.commit()
+                    updated_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    res_task = serialize_task(conn, updated_row, include_refs=False, ws_root=ws_root)
             self._send_json({"ok": True, "task": res_task})
             return
 
@@ -5418,93 +6526,122 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_doc:
             doc_id = int(m_doc.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                if not row:
-                    conn.close()
-                    self._send_json({"error": "文件不存在"}, status=404)
-                    return
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    if not row:
+                        self._send_json({"error": "文件不存在"}, status=404)
+                        return
 
-                d = dict(row)
-                old_abs = ws_root / d["rel_path"]
-                new_filename = sanitize_filename(body.get("filename") or d["filename"])
-                new_cat = sanitize_filename(body.get("category") or d["category"])
-                new_role = body.get("doc_role") or d["doc_role"]
-                new_tags = body.get("tags") if body.get("tags") is not None else json.loads(d["tags_json"] or "[]")
-                new_starred = 1 if body.get("is_starred", bool(d["is_starred"])) else 0
-                new_pinned = 1 if body.get("is_pinned", bool(d["is_pinned"])) else 0
+                    d = dict(row)
+                    old_abs = ws_root / d["rel_path"]
+                    new_filename = sanitize_filename(body.get("filename") or d["filename"])
+                    new_cat = sanitize_filename(body.get("category") or d["category"])
+                    new_role = body.get("doc_role") or d["doc_role"]
+                    new_tags = body.get("tags") if body.get("tags") is not None else json.loads(d["tags_json"] or "[]")
+                    new_starred = 1 if body.get("is_starred", bool(d["is_starred"])) else 0
+                    new_pinned = 1 if body.get("is_pinned", bool(d["is_pinned"])) else 0
+                    new_sub_folder = d.get("sub_folder") or ""
+                    sf_requested = "sub_folder" in body
+                    if sf_requested:
+                        raw_sf = str(body.get("sub_folder") or "").strip()
+                        new_sub_folder = sanitize_filename(raw_sf) if raw_sf else ""
 
-                # v3.1.0: 切换文件角色仅更新元数据与事项说明清单，不再自动添加 [来文]_/[材料]_ 物理前缀
+                    if d["task_id"] is not None and new_cat != d["category"]:
+                        moved_cat, moved_rel_folder = _move_task_folder_to_category(
+                            conn, ws_root, int(d["task_id"]), new_cat, prefix_archived=bool(cfg.get("prefix_archived_folder"))
+                        )
+                        conn.execute(
+                            "UPDATE tasks SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?",
+                            (moved_cat, moved_rel_folder, now_str, int(d["task_id"])),
+                        )
+                        row_refreshed = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                        if row_refreshed:
+                            d = dict(row_refreshed)
+                            old_abs = ws_root / d["rel_path"]
 
-                if d["task_id"] is not None and new_cat != d["category"]:
-                    moved_cat, moved_rel_folder = _move_task_folder_to_category(
-                        conn, ws_root, int(d["task_id"]), new_cat, prefix_archived=bool(cfg.get("prefix_archived_folder"))
-                    )
+                    new_rel_path = d["rel_path"]
+                    if d["task_id"] is not None and sf_requested:
+                        t_row_sf = conn.execute("SELECT folder_rel_path FROM tasks WHERE id = ?", (int(d["task_id"]),)).fetchone()
+                        if t_row_sf and t_row_sf["folder_rel_path"]:
+                            task_folder = ws_root / t_row_sf["folder_rel_path"]
+                            target_dir = (task_folder / new_sub_folder) if new_sub_folder else task_folder
+                            if not _is_safe_subpath(target_dir, task_folder):
+                                self._send_json({"error": "非法子文件夹名称"}, status=400)
+                                return
+                            target_dir.mkdir(parents=True, exist_ok=True)
+                            if new_sub_folder:
+                                gk = target_dir / ".gitkeep"
+                                if not gk.exists():
+                                    try:
+                                        gk.write_text("", encoding="utf-8")
+                                    except Exception:
+                                        pass
+                            if old_abs.exists():
+                                target_abs = target_dir / new_filename
+                                if old_abs.resolve() != target_abs.resolve():
+                                    target_abs = resolve_unique_dest_path(target_dir, new_filename)
+                                    shutil.move(str(old_abs), str(target_abs))
+                                    new_filename = target_abs.name
+                                    new_rel_path = str(target_abs.relative_to(ws_root)).replace("\\", "/")
+                            if new_sub_folder and "doc_role" not in body:
+                                new_role = "draft"
+                    elif old_abs.exists():
+                        if d["task_id"] is None and d["archive_id"] is None and d["record_id"] is None and (new_cat != d["category"] or new_filename != d["filename"]):
+                            target_dir = ensure_category_dir(ws_root, new_cat, scope="task")
+                            new_abs = target_dir / new_filename
+                            if old_abs.resolve() != new_abs.resolve():
+                                new_abs = resolve_unique_dest_path(target_dir, new_filename)
+                                shutil.move(str(old_abs), str(new_abs))
+                                new_filename = new_abs.name
+                                new_rel_path = str(new_abs.relative_to(ws_root)).replace("\\", "/")
+                        elif new_filename != d["filename"]:
+                            new_abs = old_abs.parent / new_filename
+                            if old_abs.resolve() != new_abs.resolve():
+                                new_abs = resolve_unique_dest_path(old_abs.parent, new_filename)
+                                shutil.move(str(old_abs), str(new_abs))
+                                new_filename = new_abs.name
+                                new_rel_path = str(new_abs.relative_to(ws_root)).replace("\\", "/")
+
+                    role_changed_explicitly = ("doc_role" in body) and (new_role != d["doc_role"])
                     conn.execute(
-                        "UPDATE tasks SET category = ?, folder_rel_path = ?, updated_at = ? WHERE id = ?",
-                        (moved_cat, moved_rel_folder, now_str, int(d["task_id"])),
+                        """
+                        UPDATE documents SET
+                            filename = ?,
+                            rel_path = ?,
+                            category = ?,
+                            doc_role = ?,
+                            sub_folder = ?,
+                            role_locked = CASE WHEN ? THEN 1 ELSE role_locked END,
+                            tags_json = ?,
+                            is_starred = ?,
+                            is_pinned = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            new_filename,
+                            new_rel_path,
+                            new_cat,
+                            new_role,
+                            new_sub_folder,
+                            1 if role_changed_explicitly else 0,
+                            json.dumps(new_tags, ensure_ascii=False),
+                            new_starred,
+                            new_pinned,
+                            now_str,
+                            doc_id,
+                        ),
                     )
-                    row_refreshed = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                    if row_refreshed:
-                        d = dict(row_refreshed)
-                        old_abs = ws_root / d["rel_path"]
-
-                new_rel_path = d["rel_path"]
-                if old_abs.exists():
-                    if d["task_id"] is None and d["archive_id"] is None and d["record_id"] is None and (new_cat != d["category"] or new_filename != d["filename"]):
-                        target_dir = ensure_category_dir(ws_root, new_cat, scope="task")
-                        new_abs = target_dir / new_filename
-                        if old_abs.resolve() != new_abs.resolve():
-                            new_abs = resolve_unique_dest_path(target_dir, new_filename)
-                            shutil.move(str(old_abs), str(new_abs))
-                            new_filename = new_abs.name
-                            new_rel_path = str(new_abs.relative_to(ws_root)).replace("\\", "/")
-                    elif new_filename != d["filename"]:
-                        new_abs = old_abs.parent / new_filename
-                        if old_abs.resolve() != new_abs.resolve():
-                            new_abs = resolve_unique_dest_path(old_abs.parent, new_filename)
-                            shutil.move(str(old_abs), str(new_abs))
-                            new_filename = new_abs.name
-                            new_rel_path = str(new_abs.relative_to(ws_root)).replace("\\", "/")
-
-                conn.execute(
-                    """
-                    UPDATE documents SET
-                        filename = ?,
-                        rel_path = ?,
-                        category = ?,
-                        doc_role = ?,
-                        role_locked = CASE WHEN ? THEN 1 ELSE role_locked END,
-                        tags_json = ?,
-                        is_starred = ?,
-                        is_pinned = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        new_filename,
-                        new_rel_path,
-                        new_cat,
-                        new_role,
-                        1 if new_role != d["doc_role"] else 0,
-                        json.dumps(new_tags, ensure_ascii=False),
-                        new_starred,
-                        new_pinned,
-                        now_str,
-                        doc_id,
-                    ),
-                )
-                _sync_fts_doc(conn, doc_id)
-                updated_task = None
-                if d["task_id"]:
-                    write_task_readme_file(conn, d["task_id"])
-                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (d["task_id"],)).fetchone()
-                    if t_row:
-                        updated_task = serialize_task(conn, t_row, ws_root=ws_root)
-                conn.commit()
-                u_row = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                res_doc = serialize_doc_light(u_row, ws_root=ws_root)
-                conn.close()
+                    _sync_fts_doc(conn, doc_id)
+                    updated_task = None
+                    if d["task_id"]:
+                        write_task_readme_file(conn, d["task_id"])
+                        t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (d["task_id"],)).fetchone()
+                        if t_row:
+                            updated_task = serialize_task(conn, t_row, include_refs=False, ws_root=ws_root)
+                    conn.commit()
+                    u_row = conn.execute(f"SELECT {DOC_LIGHT_COLS} FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    res_doc = serialize_doc_light(u_row, ws_root=ws_root)
             self._send_json({"ok": True, "document": res_doc, "task": updated_task})
             return
 
@@ -5521,6 +6658,7 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed_url.query)
         delete_disk = (qs.get("delete_disk") or ["0"])[0] == "1"
         ws_root = get_workspace_root()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if path == "/api/categories":
             cat_name = sanitize_filename((qs.get("name") or [""])[0])
@@ -5530,43 +6668,107 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
                 return
 
             with DB_LOCK:
-                conn = get_db()
-                if scope == "archive":
-                    cnt = conn.execute("SELECT COUNT(*) FROM archives WHERE category = ?", (cat_name,)).fetchone()[0]
-                    cat_dir = ws_root / ARCHIVE_ROOT_DIRNAME / cat_name
-                    if cnt > 0:
-                        conn.close()
-                        self._send_json({"error": f"分类【{cat_name}】下仍有 {cnt} 个存档包，请先移入其他分类后再删除"}, status=400)
-                        return
-                elif scope == "record":
-                    cnt = conn.execute("SELECT COUNT(*) FROM important_records WHERE category = ?", (cat_name,)).fetchone()[0]
-                    cat_dir = ws_root / RECORD_ROOT_DIRNAME / cat_name
-                    if cnt > 0:
-                        conn.close()
-                        self._send_json({"error": f"分类【{cat_name}】下仍有 {cnt} 条重要事项记录，请先移入其他分类后再删除"}, status=400)
-                        return
-                else:
-                    t_cnt = conn.execute("SELECT COUNT(*) FROM tasks WHERE category = ?", (cat_name,)).fetchone()[0]
-                    d_cnt = conn.execute("SELECT COUNT(*) FROM documents WHERE archive_id IS NULL AND record_id IS NULL AND category = ?", (cat_name,)).fetchone()[0]
-                    cat_dir = ws_root / cat_name
-                    if t_cnt > 0 or d_cnt > 0:
-                        conn.close()
-                        self._send_json({"error": f"分类【{cat_name}】下仍有 {t_cnt} 项工作和 {d_cnt} 份文件，请先点击【重命名/合并】将其归入其他目录后再删除"}, status=400)
-                        return
-                conn.close()
+                with db_conn() as conn:
+                    if scope == "archive":
+                        cnt = conn.execute("SELECT COUNT(*) FROM archives WHERE category = ?", (cat_name,)).fetchone()[0]
+                        cat_dir = ws_root / ARCHIVE_ROOT_DIRNAME / cat_name
+                        if cnt > 0:
+                            self._send_json({"error": f"分类【{cat_name}】下仍有 {cnt} 个存档包，请先移入其他分类后再删除"}, status=400)
+                            return
+                    elif scope == "record":
+                        cnt = conn.execute("SELECT COUNT(*) FROM important_records WHERE category = ?", (cat_name,)).fetchone()[0]
+                        cat_dir = ws_root / RECORD_ROOT_DIRNAME / cat_name
+                        if cnt > 0:
+                            self._send_json({"error": f"分类【{cat_name}】下仍有 {cnt} 条重要事项记录，请先移入其他分类后再删除"}, status=400)
+                            return
+                    else:
+                        t_cnt = conn.execute("SELECT COUNT(*) FROM tasks WHERE category = ?", (cat_name,)).fetchone()[0]
+                        d_cnt = conn.execute("SELECT COUNT(*) FROM documents WHERE archive_id IS NULL AND record_id IS NULL AND category = ?", (cat_name,)).fetchone()[0]
+                        cat_dir = ws_root / cat_name
+                        if t_cnt > 0 or d_cnt > 0:
+                            self._send_json({"error": f"分类【{cat_name}】下仍有 {t_cnt} 项工作和 {d_cnt} 份文件，请先点击【重命名/合并】将其归入其他目录后再删除"}, status=400)
+                            return
             if cat_dir.exists() and cat_dir.is_dir() and _is_safe_subpath(cat_dir, ws_root):
                 shutil.rmtree(cat_dir, ignore_errors=True)
             self._send_json({"ok": True, "scope": scope, "categories": list_physical_categories(scope=scope)})
+            return
+
+        # v3.3.0: 删除任务「我写的材料」单层子文件夹（默认将内部文件安全移回任务根目录）
+        m_tfolders_del = re.match(r"^/api/tasks/(\d+)/folders$", path)
+        if m_tfolders_del:
+            task_id = int(m_tfolders_del.group(1))
+            del_body = self._read_json_body()
+            raw_name = str(del_body.get("name") or (qs.get("name") or [""])[0]).strip()
+            delete_files = bool(del_body.get("delete_files", (qs.get("delete_files") or ["0"])[0] == "1"))
+            if not raw_name or raw_name.startswith("."):
+                self._send_json({"error": "子文件夹名称不能为空"}, status=400)
+                return
+            sf_name = sanitize_filename(raw_name)
+            with DB_LOCK:
+                with db_conn() as conn:
+                    t_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if not t_row:
+                        self._send_json({"error": "事项不存在"}, status=404)
+                        return
+                    task_folder = ws_root / t_row["folder_rel_path"]
+                    sub_dir = task_folder / sf_name
+                    if not _is_safe_subpath(sub_dir, task_folder):
+                        self._send_json({"error": "非法子文件夹路径"}, status=400)
+                        return
+                    if not sub_dir.exists() or not sub_dir.is_dir():
+                        self._send_json({"error": f"子文件夹【{sf_name}】不存在"}, status=404)
+                        return
+
+                    sub_docs = conn.execute(
+                        "SELECT id, filename, rel_path FROM documents WHERE task_id = ? AND sub_folder = ?",
+                        (task_id, sf_name),
+                    ).fetchall()
+                    doc_by_rel = {dr["rel_path"]: dr for dr in sub_docs}
+
+                    if delete_files:
+                        for dr in sub_docs:
+                            conn.execute("DELETE FROM documents WHERE id = ?", (dr["id"],))
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (dr["id"],))
+                        shutil.rmtree(sub_dir, ignore_errors=True)
+                    else:
+                        # 安全将子目录内全部文件移回任务根目录
+                        for f in sorted(sub_dir.rglob("*")):
+                            if f.is_symlink() or not f.is_file():
+                                continue
+                            if f.name == ".gitkeep" or f.name.startswith("~$"):
+                                continue
+                            old_rel = str(f.relative_to(ws_root)).replace("\\", "/")
+                            dest_abs = resolve_unique_dest_path(task_folder, f.name)
+                            shutil.move(str(f), str(dest_abs))
+                            new_rel = str(dest_abs.relative_to(ws_root)).replace("\\", "/")
+                            dr = doc_by_rel.get(old_rel)
+                            if dr:
+                                conn.execute(
+                                    "UPDATE documents SET filename = ?, rel_path = ?, sub_folder = '', updated_at = ? WHERE id = ?",
+                                    (dest_abs.name, new_rel, now_str, dr["id"]),
+                                )
+                                _sync_fts_doc(conn, dr["id"])
+                        # 清理可能残留未匹配到磁盘文件的 sub_folder 字段
+                        conn.execute(
+                            "UPDATE documents SET sub_folder = '', updated_at = ? WHERE task_id = ? AND sub_folder = ?",
+                            (now_str, task_id, sf_name),
+                        )
+                        shutil.rmtree(sub_dir, ignore_errors=True)
+
+                    write_task_readme_file(conn, task_id)
+                    conn.commit()
+                    u_row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    res_task = serialize_task(conn, u_row, include_refs=False, ws_root=ws_root)
+            self._send_json({"ok": True, "task": res_task})
             return
 
         m_rec = re.match(r"^/api/recurring/(\d+)$", path)
         if m_rec:
             rid = int(m_rec.group(1))
             with DB_LOCK:
-                conn = get_db()
-                conn.execute("DELETE FROM recurring_rules WHERE id = ?", (rid,))
-                conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    conn.execute("DELETE FROM recurring_rules WHERE id = ?", (rid,))
+                    conn.commit()
             self._send_json({"ok": True})
             return
 
@@ -5574,23 +6776,22 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_arch:
             aid = int(m_arch.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
-                if row:
-                    folder_abs = ws_root / row["folder_rel_path"]
-                    if delete_disk and row["folder_rel_path"] and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
-                        shutil.rmtree(folder_abs, ignore_errors=True)
-                    else:
-                        rm_f = folder_abs / "00_存档说明与纪要.md"
-                        if rm_f.is_file():
-                            rm_f.unlink(missing_ok=True)
-                    doc_ids = [r["id"] for r in conn.execute("SELECT id FROM documents WHERE archive_id = ?", (aid,)).fetchall()]
-                    for did in doc_ids:
-                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
-                    conn.execute("DELETE FROM documents WHERE archive_id = ?", (aid,))
-                    conn.execute("DELETE FROM archives WHERE id = ?", (aid,))
-                    conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM archives WHERE id = ?", (aid,)).fetchone()
+                    if row:
+                        folder_abs = ws_root / row["folder_rel_path"]
+                        if delete_disk and row["folder_rel_path"] and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                            shutil.rmtree(folder_abs, ignore_errors=True)
+                        else:
+                            rm_f = folder_abs / "00_存档说明与纪要.md"
+                            if rm_f.is_file():
+                                rm_f.unlink(missing_ok=True)
+                        doc_ids = [r["id"] for r in conn.execute("SELECT id FROM documents WHERE archive_id = ?", (aid,)).fetchall()]
+                        for did in doc_ids:
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
+                        conn.execute("DELETE FROM documents WHERE archive_id = ?", (aid,))
+                        conn.execute("DELETE FROM archives WHERE id = ?", (aid,))
+                        conn.commit()
             self._send_json({"ok": True})
             return
 
@@ -5598,23 +6799,22 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_imp:
             rid = int(m_imp.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM important_records WHERE id = ?", (rid,)).fetchone()
-                if row:
-                    folder_abs = ws_root / row["folder_rel_path"]
-                    if delete_disk and row["folder_rel_path"] and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
-                        shutil.rmtree(folder_abs, ignore_errors=True)
-                    else:
-                        rm_f = folder_abs / "00_重要事项内容.md"
-                        if rm_f.is_file():
-                            rm_f.unlink(missing_ok=True)
-                    doc_ids = [r["id"] for r in conn.execute("SELECT id FROM documents WHERE record_id = ?", (rid,)).fetchall()]
-                    for did in doc_ids:
-                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
-                    conn.execute("DELETE FROM documents WHERE record_id = ?", (rid,))
-                    conn.execute("DELETE FROM important_records WHERE id = ?", (rid,))
-                    conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM important_records WHERE id = ?", (rid,)).fetchone()
+                    if row:
+                        folder_abs = ws_root / row["folder_rel_path"]
+                        if delete_disk and row["folder_rel_path"] and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                            shutil.rmtree(folder_abs, ignore_errors=True)
+                        else:
+                            rm_f = folder_abs / "00_重要事项内容.md"
+                            if rm_f.is_file():
+                                rm_f.unlink(missing_ok=True)
+                        doc_ids = [r["id"] for r in conn.execute("SELECT id FROM documents WHERE record_id = ?", (rid,)).fetchall()]
+                        for did in doc_ids:
+                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
+                        conn.execute("DELETE FROM documents WHERE record_id = ?", (rid,))
+                        conn.execute("DELETE FROM important_records WHERE id = ?", (rid,))
+                        conn.commit()
             self._send_json({"ok": True})
             return
 
@@ -5622,26 +6822,24 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_task:
             task_id = int(m_task.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-                if row:
-                    folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
-                    if delete_disk and folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
-                        shutil.rmtree(folder_abs, ignore_errors=True)
-                        doc_ids = [r["id"] for r in conn.execute("SELECT id FROM documents WHERE task_id = ?", (task_id,)).fetchall()]
-                        for did in doc_ids:
-                            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
-                        conn.execute("DELETE FROM documents WHERE task_id = ?", (task_id,))
-                    else:
-                        # 修复 BUG-10：未勾选删盘时，清理 00_事项要求与进展.md 锚点，使内部文件转为独立归档材料
-                        if folder_abs and folder_abs.is_dir():
-                            rm_f = folder_abs / "00_事项要求与进展.md"
-                            if rm_f.is_file():
-                                rm_f.unlink(missing_ok=True)
-                        conn.execute("UPDATE documents SET task_id = NULL WHERE task_id = ?", (task_id,))
-                    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-                    conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+                    if row:
+                        folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
+                        if delete_disk and folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                            shutil.rmtree(folder_abs, ignore_errors=True)
+                            doc_ids = [r["id"] for r in conn.execute("SELECT id FROM documents WHERE task_id = ?", (task_id,)).fetchall()]
+                            for did in doc_ids:
+                                conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (did,))
+                            conn.execute("DELETE FROM documents WHERE task_id = ?", (task_id,))
+                        else:
+                            if folder_abs and folder_abs.is_dir():
+                                rm_f = folder_abs / "00_事项要求与进展.md"
+                                if rm_f.is_file():
+                                    rm_f.unlink(missing_ok=True)
+                            conn.execute("UPDATE documents SET task_id = NULL, sub_folder = '' WHERE task_id = ?", (task_id,))
+                        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+                        conn.commit()
             self._send_json({"ok": True})
             return
 
@@ -5649,23 +6847,23 @@ class WorkbenchHTTPRequestHandler(BaseHTTPRequestHandler):
         if m_doc:
             doc_id = int(m_doc.group(1))
             with DB_LOCK:
-                conn = get_db()
-                row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
-                if row:
-                    if delete_disk and row["rel_path"]:
-                        f_abs = ws_root / row["rel_path"]
-                        if f_abs.exists() and f_abs.is_file() and _is_safe_subpath(f_abs, ws_root):
-                            f_abs.unlink(missing_ok=True)
-                    conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
-                    conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_id,))
-                    if row["task_id"]:
-                        write_task_readme_file(conn, row["task_id"])
-                    if row["archive_id"]:
-                        write_archive_readme_file(conn, row["archive_id"])
-                    if row["record_id"]:
-                        write_record_readme_file(conn, row["record_id"])
-                    conn.commit()
-                conn.close()
+                with db_conn() as conn:
+                    row = conn.execute("SELECT * FROM documents WHERE id = ?", (doc_id,)).fetchone()
+                    if row:
+                        if delete_disk and row["rel_path"]:
+                            f_abs = ws_root / row["rel_path"]
+                            if f_abs.exists() and f_abs.is_file() and _is_safe_subpath(f_abs, ws_root):
+                                f_abs.unlink(missing_ok=True)
+                        conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (doc_id,))
+                        if row["task_id"]:
+                            write_task_readme_file(conn, row["task_id"])
+                        if row["archive_id"]:
+                            write_archive_readme_file(conn, row["archive_id"])
+                        if row["record_id"]:
+                            _reselect_record_primary_doc(conn, int(row["record_id"]), doc_id)
+                            write_record_readme_file(conn, row["record_id"])
+                        conn.commit()
             self._send_json({"ok": True})
             return
 
@@ -5696,6 +6894,7 @@ def purge_demo_data(delete_disk: bool = True) -> Dict[str, int]:
     """清除由示例种子函数生成的示例数据（数据库行 + 对应磁盘文件夹）。
 
     识别依据是标题/文号的精确匹配，不做模糊删除，避免误伤用户真实数据。
+    v3.3.0 修复：改用 .fetchall() 清理全部残留示例副本。
     """
     sig = _demo_signatures()
     stats = {"recurring": 0, "records": 0, "archives": 0, "tasks": 0}
@@ -5703,83 +6902,75 @@ def purge_demo_data(delete_disk: bool = True) -> Dict[str, int]:
     ws_root = get_workspace_root(cfg)
 
     with DB_LOCK:
-        conn = get_db()
+        with db_conn() as conn:
+            # 1) 周期规则（纯数据库行，无磁盘文件）
+            for title in sig["recurring_titles"]:
+                cur = conn.execute("DELETE FROM recurring_rules WHERE title_template = ?", (title,))
+                stats["recurring"] += cur.rowcount or 0
 
-        # 1) 周期规则（纯数据库行，无磁盘文件）
-        for title in sig["recurring_titles"]:
-            cur = conn.execute("DELETE FROM recurring_rules WHERE title_template = ?", (title,))
-            stats["recurring"] += cur.rowcount or 0
+            # 2) 重要事项记录
+            for title in sig["record_titles"]:
+                for row in conn.execute("SELECT * FROM important_records WHERE title = ?", (title,)).fetchall():
+                    rid = row["id"]
+                    folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
+                    if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                        if delete_disk:
+                            shutil.rmtree(folder_abs, ignore_errors=True)
+                        else:
+                            rm_f = folder_abs / "00_重要事项内容.md"
+                            if rm_f.is_file():
+                                rm_f.unlink(missing_ok=True)
+                    for d in conn.execute("SELECT id FROM documents WHERE record_id = ?", (rid,)).fetchall():
+                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
+                    conn.execute("DELETE FROM documents WHERE record_id = ?", (rid,))
+                    conn.execute("DELETE FROM important_records WHERE id = ?", (rid,))
+                    stats["records"] += 1
 
-        # 2) 重要事项记录
-        for title in sig["record_titles"]:
-            row = conn.execute("SELECT * FROM important_records WHERE title = ?", (title,)).fetchone()
-            if not row:
-                continue
-            rid = row["id"]
-            folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
-            if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
-                if delete_disk:
-                    shutil.rmtree(folder_abs, ignore_errors=True)
-                else:
-                    rm_f = folder_abs / "00_重要事项内容.md"
-                    if rm_f.is_file():
-                        rm_f.unlink(missing_ok=True)
-            for d in conn.execute("SELECT id FROM documents WHERE record_id = ?", (rid,)).fetchall():
+            # 3) 资料存档包
+            for title in sig["archive_titles"]:
+                for row in conn.execute("SELECT * FROM archives WHERE title = ?", (title,)).fetchall():
+                    aid = row["id"]
+                    folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
+                    if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                        if delete_disk:
+                            shutil.rmtree(folder_abs, ignore_errors=True)
+                        else:
+                            rm_f = folder_abs / "00_存档说明与纪要.md"
+                            if rm_f.is_file():
+                                rm_f.unlink(missing_ok=True)
+                    for d in conn.execute("SELECT id FROM documents WHERE archive_id = ?", (aid,)).fetchall():
+                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
+                    conn.execute("DELETE FROM documents WHERE archive_id = ?", (aid,))
+                    conn.execute("DELETE FROM archives WHERE id = ?", (aid,))
+                    stats["archives"] += 1
+
+            # 4) 示例事项（按文号精确匹配）
+            for num in sig["task_doc_numbers"]:
+                for row in conn.execute("SELECT * FROM tasks WHERE doc_number = ?", (num,)).fetchall():
+                    tid = row["id"]
+                    folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
+                    if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
+                        if delete_disk:
+                            shutil.rmtree(folder_abs, ignore_errors=True)
+                        else:
+                            rm_f = folder_abs / "00_事项要求与进展.md"
+                            if rm_f.is_file():
+                                rm_f.unlink(missing_ok=True)
+                    for d in conn.execute("SELECT id FROM documents WHERE task_id = ?", (tid,)).fetchall():
+                        conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
+                    conn.execute("DELETE FROM documents WHERE task_id = ?", (tid,))
+                    conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
+                    stats["tasks"] += 1
+
+            # 5) 兜底：清掉因历史启动残留、但已无归属的记录文件
+            for d in conn.execute(
+                "SELECT id, rel_path FROM documents WHERE record_id IS NULL AND archive_id IS NULL AND task_id IS NULL "
+                "AND rel_path LIKE '%高密防汛重点水库与易涝点责任人底数表%'"
+            ).fetchall():
                 conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
-            conn.execute("DELETE FROM documents WHERE record_id = ?", (rid,))
-            conn.execute("DELETE FROM important_records WHERE id = ?", (rid,))
-            stats["records"] += 1
+                conn.execute("DELETE FROM documents WHERE id = ?", (d["id"],))
 
-        # 3) 资料存档包
-        for title in sig["archive_titles"]:
-            row = conn.execute("SELECT * FROM archives WHERE title = ?", (title,)).fetchone()
-            if not row:
-                continue
-            aid = row["id"]
-            folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
-            if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
-                if delete_disk:
-                    shutil.rmtree(folder_abs, ignore_errors=True)
-                else:
-                    rm_f = folder_abs / "00_存档说明与纪要.md"
-                    if rm_f.is_file():
-                        rm_f.unlink(missing_ok=True)
-            for d in conn.execute("SELECT id FROM documents WHERE archive_id = ?", (aid,)).fetchall():
-                conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
-            conn.execute("DELETE FROM documents WHERE archive_id = ?", (aid,))
-            conn.execute("DELETE FROM archives WHERE id = ?", (aid,))
-            stats["archives"] += 1
-
-        # 4) 示例事项（按文号精确匹配）
-        for num in sig["task_doc_numbers"]:
-            row = conn.execute("SELECT * FROM tasks WHERE doc_number = ?", (num,)).fetchone()
-            if not row:
-                continue
-            tid = row["id"]
-            folder_abs = ws_root / row["folder_rel_path"] if row["folder_rel_path"] else None
-            if folder_abs and folder_abs.exists() and _is_safe_subpath(folder_abs, ws_root):
-                if delete_disk:
-                    shutil.rmtree(folder_abs, ignore_errors=True)
-                else:
-                    rm_f = folder_abs / "00_事项要求与进展.md"
-                    if rm_f.is_file():
-                        rm_f.unlink(missing_ok=True)
-            for d in conn.execute("SELECT id FROM documents WHERE task_id = ?", (tid,)).fetchall():
-                conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
-            conn.execute("DELETE FROM documents WHERE task_id = ?", (tid,))
-            conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
-            stats["tasks"] += 1
-
-        # 5) 兜底：清掉因历史启动残留、但已无归属的记录文件
-        for d in conn.execute(
-            "SELECT id, rel_path FROM documents WHERE record_id IS NULL AND archive_id IS NULL AND task_id IS NULL "
-            "AND rel_path LIKE '%高密防汛重点水库与易涝点责任人底数表%'"
-        ).fetchall():
-            conn.execute("DELETE FROM documents_fts WHERE doc_id = ?", (d["id"],))
-            conn.execute("DELETE FROM documents WHERE id = ?", (d["id"],))
-
-        conn.commit()
-        conn.close()
+            conn.commit()
 
     # 清掉空分类目录，保持文件系统整洁
     for root_name in ("重要事项记录", "资料存档"):
@@ -5810,6 +7001,7 @@ def run_server(port: Optional[int] = None) -> None:
     seed_demo_data_if_empty()
     sync_filesystem(force=True)
     check_and_spawn_all_recurring()
+    start_background_sync_thread(interval=15.0)
 
     listen_port = port or int(cfg.get("port", 8090))
     lan_ip = get_lan_ip()
@@ -5830,6 +7022,7 @@ def run_server(port: Optional[int] = None) -> None:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\n正在关闭服务...")
+        _BG_SYNC_STOP.set()
         server.server_close()
 
 

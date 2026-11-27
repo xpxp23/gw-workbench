@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>公文与材料智能工作台 (GW-Workbench v3.2.2)</title>
+  <title>公文与材料智能工作台 (GW-Workbench v3.3.0)</title>
   <style>
     :root {
       --bg: #f1f5f9;
@@ -504,12 +504,13 @@
       align-items: center;
       gap: 4px;
     }
-    .badge-danger { background: var(--danger-soft); color: var(--danger); border: 1px solid #fecaca; }
-    .badge-warning { background: var(--warning-soft); color: var(--warning); border: 1px solid #fde68a; }
-    .badge-normal { background: var(--primary-soft); color: var(--primary); border: 1px solid #bfdbfe; }
-    .badge-routine { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border-strong); }
-    .badge-archived { background: var(--success-soft); color: var(--success); border: 1px solid #a7f3d0; }
-    .badge-teal { background: var(--teal-soft); color: var(--teal); border: 1px solid #99f6e4; }
+    .badge-danger { background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(220, 38, 38, 0.28); }
+    .badge-warning { background: var(--warning-soft); color: var(--warning); border: 1px solid rgba(217, 119, 6, 0.30); }
+    .badge-normal { background: var(--primary-soft); color: var(--primary); border: 1px solid rgba(29, 78, 216, 0.26); }
+    .badge-routine { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border); }
+    .badge-archived { background: var(--success-soft); color: var(--success); border: 1px solid rgba(5, 150, 105, 0.28); }
+    .badge-teal { background: var(--teal-soft); color: var(--teal); border: 1px solid rgba(13, 148, 136, 0.30); }
+    .badge-priority-normal { background: var(--surface-alt); color: var(--text-muted); border: 1px solid var(--border); }
 
     .task-summary {
       font-size: 13px;
@@ -527,7 +528,7 @@
       gap: 10px;
       align-items: start;
     }
-    @media (max-width: 1100px) {
+    @media (max-width: 1200px) {
       .task-body-grid { grid-template-columns: 1fr; }
     }
     .sub-box {
@@ -744,7 +745,7 @@
       gap: 15px;
       align-items: start;
     }
-    @media (max-width: 920px) {
+    @media (max-width: 900px) {
       .library-layout { grid-template-columns: 1fr; }
     }
     .cat-sidebar {
@@ -1080,7 +1081,7 @@
       gap: 16px;
       align-items: start;
     }
-    @media (max-width: 960px) {
+    @media (max-width: 900px) {
       .records-split-layout { grid-template-columns: 1fr; }
     }
     .records-nav-panel {
@@ -1427,7 +1428,7 @@
       display: none;
     }
 
-    /* ==================== v3.1.0 现代化政务精简骨架与视觉升级 ==================== */
+    /* ==================== v3.3.0 现代化政务精简骨架、深色模式与三大体验升级 ==================== */
     .ico {
       width: 15px; height: 15px;
       stroke: currentColor; fill: none;
@@ -1437,8 +1438,7 @@
     .ico-sm { width: 13px; height: 13px; vertical-align: -2px; }
     .ico-lg { width: 18px; height: 18px; vertical-align: -3px; }
 
-    body { background: #f3f6fa; color: #0f172a; }
-    body.dark-mode { background: #0b1120; color: #e2e8f0; }
+    body { background: var(--bg); color: var(--text); }
 
     .app-shell { display: flex; min-height: 100vh; width: 100%; }
     .app-sidebar {
@@ -1461,7 +1461,7 @@
     body.sidebar-collapsed .sb-brand-left { gap: 0; }
 
     .sb-brand {
-      min-height: 56px; padding: 6px 14px;
+      min-height: 54px; padding: 6px 14px;
       display: flex; align-items: center; justify-content: space-between;
       border-bottom: 1px solid rgba(255,255,255,0.08); gap: 8px;
     }
@@ -1470,15 +1470,8 @@
       font-size: 14.5px; font-weight: 700; color: #fff;
       white-space: nowrap; overflow: hidden; min-width: 0;
     }
-    .sb-brand-titles {
-      display: flex; flex-direction: column; gap: 1px;
-      line-height: 1.2; min-width: 0;
-    }
-    .sb-ver {
-      font-size: 10px; font-weight: 600; line-height: 1.1;
-      letter-spacing: 0.2px; color: #93b4e6;
-      padding: 0; background: transparent; border-radius: 0;
-    }
+    .sb-brand-titles { display: flex; flex-direction: column; gap: 1px; line-height: 1.2; min-width: 0; }
+    .sb-ver { font-size: 10px; font-weight: 600; line-height: 1.1; letter-spacing: 0.2px; color: #93b4e6; }
     .sb-collapse-btn {
       background: transparent; border: none; color: #94a3b8;
       cursor: pointer; padding: 5px; border-radius: 6px;
@@ -1486,10 +1479,7 @@
     }
     .sb-collapse-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
 
-    .sb-nav {
-      flex: 1; padding: 12px 10px;
-      display: flex; flex-direction: column; gap: 4px; overflow-y: auto;
-    }
+    .sb-nav { flex: 1; padding: 12px 10px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
     .sb-nav-btn {
       width: 100%; border: none; background: transparent; color: #cbd5e1;
       padding: 9px 11px; border-radius: 8px; font-size: 13.5px; font-weight: 500;
@@ -1498,20 +1488,11 @@
     }
     .sb-nav-btn-main { display: flex; align-items: center; gap: 9px; min-width: 0; }
     .sb-nav-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
-    .sb-nav-btn.active {
-      background: #1d4ed8; color: #fff; font-weight: 600;
-      box-shadow: 0 2px 8px rgba(29,78,216,0.35);
-    }
-    .sb-badge {
-      font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
-      background: rgba(255,255,255,0.12); color: #e2e8f0;
-    }
+    .sb-nav-btn.active { background: #1d4ed8; color: #fff; font-weight: 600; box-shadow: 0 2px 8px rgba(29,78,216,0.35); }
+    .sb-badge { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: rgba(255,255,255,0.12); color: #e2e8f0; }
     .sb-nav-btn.active .sb-badge { background: rgba(255,255,255,0.24); color: #fff; }
 
-    .sb-footer {
-      padding: 10px; border-top: 1px solid rgba(255,255,255,0.08);
-      display: flex; flex-direction: column; gap: 6px;
-    }
+    .sb-footer { padding: 10px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 6px; }
     .sb-util-btn {
       width: 100%; border: 1px solid rgba(255,255,255,0.12);
       background: rgba(255,255,255,0.04); color: #cbd5e1;
@@ -1524,62 +1505,53 @@
 
     .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-    .topbar {
-      height: 54px; min-height: 54px; padding: 0 20px !important;
-      background: #ffffff !important; color: #0f172a !important;
-      border-bottom: 1px solid #e2e8f0 !important;
-      box-shadow: 0 1px 3px rgba(15,23,42,0.04) !important;
-      display: flex !important; flex-wrap: nowrap !important;
-      align-items: center !important; justify-content: space-between !important;
-      gap: 12px !important; position: sticky; top: 0; z-index: 100;
+    .app-main .topbar {
+      height: 54px; min-height: 54px; padding: 0 18px;
+      background: var(--surface); color: var(--text);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+      display: flex; flex-wrap: nowrap;
+      align-items: center; justify-content: space-between;
+      gap: 10px; position: sticky; top: 0; z-index: 100;
     }
-    body.dark-mode .topbar {
-      background: #111827 !important; color: #f1f5f9 !important;
-      border-bottom-color: #1f2937 !important;
-    }
-    .topbar-search-zone { flex: 1; max-width: 620px; display: flex; align-items: center; gap: 6px; min-width: 0; }
-    .topbar-search-box { flex: 1; position: relative; display: flex; align-items: center; min-width: 0; }
-    .topbar-search-box .ico-search-pos { position: absolute; left: 11px; color: #64748b; pointer-events: none; }
+    .topbar-search-zone { flex: 1; max-width: 600px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .topbar-search-box { flex: 1; position: relative; display: flex; align-items: center; min-width: 140px; }
+    .topbar-search-box .ico-search-pos { position: absolute; left: 10px; color: var(--text-muted); pointer-events: none; }
     .topbar-search-box .search-input {
-      width: 100%; padding: 7px 12px 7px 34px !important; font-size: 13px !important;
-      border-radius: 8px !important; border: 1px solid #cbd5e1 !important;
-      background: #f8fafc !important; color: #0f172a !important;
+      width: 100%; padding: 6px 12px 6px 32px; font-size: 13px;
+      border-radius: 8px; border: 1px solid var(--border-strong);
+      background: var(--surface-alt); color: var(--text);
       transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
     }
     .topbar-search-box .search-input:focus {
-      background: #ffffff !important; border-color: #1d4ed8 !important;
-      box-shadow: 0 0 0 3px rgba(29,78,216,0.12) !important; outline: none;
-    }
-    body.dark-mode .topbar-search-box .search-input {
-      background: #1e293b !important; border-color: #334155 !important; color: #f1f5f9 !important;
+      background: var(--surface); border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(29,78,216,0.14); outline: none;
     }
 
-    .top-actions { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+    .top-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .top-actions .btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; border-radius: 7px; }
     .mode-pill {
-      display: inline-flex !important; align-items: center; gap: 5px;
-      padding: 5px 11px !important; border-radius: 999px !important;
-      font-size: 12.5px !important; font-weight: 600 !important;
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 11px; border-radius: 999px;
+      font-size: 12.5px; font-weight: 600;
       cursor: pointer; white-space: nowrap;
     }
-    .mode-pill.mode-edit { background: #ecfdf5 !important; color: #065f46 !important; border: 1px solid #a7f3d0 !important; }
-    .mode-pill.mode-view { background: #f1f5f9 !important; color: #334155 !important; border: 1px solid #cbd5e1 !important; }
-    body.dark-mode .mode-pill.mode-edit {
-      background: rgba(16,185,129,0.18) !important; color: #6ee7b7 !important; border-color: rgba(16,185,129,0.35) !important;
-    }
+    .mode-pill.mode-edit { background: var(--success-soft); color: var(--success); border: 1px solid rgba(5,150,105,0.32); }
+    .mode-pill.mode-view { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border-strong); }
+    body.dark-mode .mode-pill.mode-edit { color: #6ee7b7; border-color: rgba(16,185,129,0.38); }
+    body.dark-mode .mode-pill.mode-view { background: var(--surface-alt); color: var(--text-secondary); border-color: var(--border-strong); }
 
-    .container { max-width: 1380px; width: 100%; margin: 0 auto; padding: 14px 20px 64px !important; }
-    .lan-pinned-list:empty { display: none !important; margin: 0 !important; padding: 0 !important; }
+    .app-main .container { max-width: 1420px; width: 100%; margin: 0 auto; padding: 14px 20px 64px; }
+    .lan-pinned-list:empty { display: none; margin: 0; padding: 0; }
     .lan-pinned-list { margin-bottom: 10px; }
 
-    .omnibox {
-      display: none; margin-bottom: 12px !important;
-      border: 1.5px dashed #93c5fd !important; border-radius: 10px !important;
-      background: #ffffff !important; padding: 12px 14px !important;
+    .app-main .omnibox {
+      display: none; margin-bottom: 12px;
+      border: 1.5px dashed var(--primary); border-radius: 10px;
+      background: var(--surface); padding: 12px 14px;
       box-shadow: 0 4px 14px rgba(29,78,216,0.06);
     }
-    .omnibox.is-open { display: block !important; }
-    body.dark-mode .omnibox { background: #1e293b !important; border-color: #3b82f6 !important; }
+    .app-main .omnibox.is-open { display: block; }
 
     .global-drop-overlay {
       position: fixed; inset: 0; z-index: 9990;
@@ -1588,51 +1560,136 @@
     }
     .global-drop-overlay.active { display: flex; }
     .global-drop-box {
-      background: #fff; color: #0f172a; padding: 28px 42px; border-radius: 14px;
-      border: 2px dashed #1d4ed8; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+      background: var(--surface); color: var(--text); padding: 28px 42px; border-radius: 14px;
+      border: 2px dashed var(--primary); text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+    }
+    .global-drop-sub { font-size: 13px; color: var(--text-muted); }
+
+    .ip-wl-warn {
+      display: none; font-size: 12px; color: var(--warning);
+      background: var(--warning-soft); border: 1px solid rgba(217,119,6,0.35);
+      border-radius: 6px; padding: 6px 9px; margin-top: 7px; line-height: 1.6;
     }
 
-    .filter-bar { background: transparent !important; padding: 2px 0 10px !important; margin-bottom: 6px !important; gap: 8px !important; }
-    .filter-pill {
-      display: inline-flex !important; align-items: center; gap: 5px;
-      padding: 5px 12px !important; font-size: 12.5px !important;
-      border-radius: 8px !important; border: 1px solid #cbd5e1 !important;
-      background: #ffffff !important; color: #334155 !important; transition: all 0.15s;
+    #tabWorkbench .filter-bar { background: transparent; padding: 2px 0 10px; margin-bottom: 6px; gap: 8px; }
+    .app-main .filter-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 11px; font-size: 12.5px;
+      border-radius: 8px; border: 1px solid var(--border-strong);
+      background: var(--surface); color: var(--text-secondary); transition: all 0.15s;
     }
-    .filter-pill.active { background: #1e3a8a !important; color: #ffffff !important; border-color: #1e3a8a !important; }
-    body.dark-mode .filter-pill { background: #1e293b !important; color: #cbd5e1 !important; border-color: #334155 !important; }
-    body.dark-mode .filter-pill.active { background: #2563eb !important; color: #ffffff !important; border-color: #2563eb !important; }
+    .app-main .filter-pill.active { background: var(--primary); color: #ffffff; border-color: var(--primary); }
 
-    .task-card {
-      border-radius: 10px !important; border: 1px solid #e2e8f0 !important;
-      box-shadow: 0 1px 3px rgba(15,23,42,0.04) !important;
-      margin-bottom: 12px !important; transition: box-shadow 0.15s, border-color 0.15s;
+    /* 恢复完整视图卡片 5px 左侧期限预警色条 + 深色模式语义边框 */
+    .app-main .task-card {
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      border-left: 5px solid var(--primary);
+      box-shadow: var(--shadow);
+      margin-bottom: 12px;
+      transition: box-shadow 0.15s, border-color 0.15s;
     }
-    .task-card:hover { box-shadow: 0 4px 12px rgba(15,23,42,0.07) !important; border-color: #cbd5e1 !important; }
-    .task-card.selected-card { border-color: #1d4ed8 !important; box-shadow: 0 0 0 2px rgba(29,78,216,0.18) !important; }
+    .app-main .task-card:hover { box-shadow: var(--shadow-hover); border-color: var(--border-strong); }
+    .app-main .task-card.level-danger { border-left-color: var(--danger); }
+    .app-main .task-card.level-warning { border-left-color: var(--warning); }
+    .app-main .task-card.level-normal { border-left-color: var(--primary); }
+    .app-main .task-card.level-routine { border-left-color: #64748b; }
+    .app-main .task-card.level-archived { border-left-color: var(--success); }
+    .app-main .task-card.selected-card {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px rgba(59,130,246,0.28);
+    }
 
     .badge-clickable { cursor: pointer; transition: filter 0.12s, transform 0.12s; }
     .badge-clickable:hover { filter: brightness(0.94); transform: translateY(-0.5px); }
-    .inline-date-pop { font-size: 12px; padding: 2px 5px; border: 1px solid #1d4ed8; border-radius: 5px; background: #fff; color: #0f172a; }
+    .inline-date-pop {
+      font-size: 12px; padding: 2px 5px;
+      border: 1px solid var(--primary); border-radius: 5px;
+      background: var(--surface); color: var(--text);
+    }
 
-    .sub-box-title { display: flex !important; align-items: center; justify-content: space-between; gap: 6px; }
+    .sub-box .sub-box-title { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
     .chk-title-actions { display: inline-flex; align-items: center; gap: 4px; }
     .chk-clear-btn {
       font-size: 11px; padding: 1px 7px; border-radius: 5px;
-      border: 1px solid #e2e8f0; background: transparent; color: #64748b;
+      border: 1px solid var(--border); background: transparent; color: var(--text-muted);
       cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
     }
-    .chk-clear-btn:hover { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
-    .chk-more-toggle { display: inline-block; margin-top: 6px; font-size: 12px; color: #1d4ed8; cursor: pointer; font-weight: 500; }
+    .chk-clear-btn:hover { background: var(--danger-soft); color: var(--danger); border-color: rgba(220,38,38,0.3); }
+    .chk-more-toggle { display: inline-block; margin-top: 6px; font-size: 12px; color: var(--primary); cursor: pointer; font-weight: 500; }
     .chk-more-toggle:hover { text-decoration: underline; }
-    .chk-inline-edit { width: 100%; font-size: 12.5px; padding: 2px 6px; border: 1px solid #1d4ed8; border-radius: 4px; outline: none; }
+    .chk-inline-edit {
+      width: 100%; font-size: 12.5px; padding: 2px 6px;
+      border: 1px solid var(--primary); border-radius: 4px; outline: none;
+      background: var(--surface); color: var(--text);
+    }
 
+    /* 进展日志悬停编辑/删除 */
+    .prog-item { position: relative; padding-right: 48px; }
+    .prog-ops {
+      position: absolute; right: 2px; top: 1px;
+      display: none; align-items: center; gap: 2px;
+      background: var(--surface-alt); border-radius: 4px;
+    }
+    .prog-item:hover .prog-ops { display: inline-flex; }
+
+    /* 左右栏独立拖放区高亮 */
+    .file-col { border-radius: 7px; transition: background 0.15s, outline-color 0.15s; padding: 4px; }
+    .file-col.drag-over { background: var(--primary-soft); outline: 1.5px dashed var(--primary); }
+
+    /* ==================== 专项一：「我写的材料」轻量化单层文件夹 ==================== */
+    .mat-root-dropzone { min-height: 8px; border-radius: 6px; transition: background 0.15s, outline 0.15s; }
+    .mat-root-dropzone.drag-over { background: var(--success-soft); outline: 1.5px dashed var(--success); padding: 4px; }
+    .mat-folder-block {
+      margin-top: 6px; border: 1px solid var(--border); border-radius: 7px;
+      background: var(--surface); overflow: hidden;
+    }
+    .mat-folder-head {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px; cursor: pointer; user-select: none;
+      background: var(--surface-alt); font-size: 12.5px; font-weight: 600; color: var(--text);
+      transition: background 0.14s;
+    }
+    .mat-folder-head:hover { background: var(--surface-hover); }
+    .mat-folder-head.drag-over { background: var(--primary-soft); outline: 1.5px dashed var(--primary); }
+    .mat-folder-chevron { transition: transform 0.15s; color: var(--text-muted); display: inline-flex; }
+    .mat-folder-block.is-open .mat-folder-chevron { transform: rotate(90deg); }
+    .mat-folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mat-folder-cnt {
+      font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: 99px;
+      background: var(--surface); border: 1px solid var(--border); color: var(--text-muted);
+    }
+    .mat-folder-ops { display: none; align-items: center; gap: 2px; }
+    .mat-folder-head:hover .mat-folder-ops { display: inline-flex; }
+    .mat-folder-body { display: none; padding: 4px 8px 6px 14px; border-top: 1px dashed var(--border); }
+    .mat-folder-block.is-open .mat-folder-body { display: block; }
+    .mat-folder-hint {
+      margin-top: 6px; padding: 5px 8px; border-radius: 6px;
+      background: var(--primary-soft); color: var(--primary);
+      font-size: 11.5px; display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    }
+    /* 极简模式下的子文件夹紧凑条 */
+    .min-folder-wrap { margin-top: 4px; }
+    .min-folder-pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 9px; border-radius: 7px; cursor: pointer;
+      background: var(--surface); border: 1px solid var(--border);
+      font-size: 12.5px; font-weight: 600; color: var(--text-secondary);
+      transition: background 0.14s, border-color 0.14s;
+    }
+    .min-folder-pill:hover { background: var(--surface-hover); border-color: var(--primary); color: var(--primary); }
+    .min-folder-body { display: none; padding: 2px 0 2px 14px; }
+    .min-folder-wrap.is-open .min-folder-body { display: block; }
+    .min-folder-wrap.is-open .mat-folder-chevron { transform: rotate(90deg); }
+
+    /* 任务批量操作条 */
     .task-batch-bar {
       position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
       z-index: 450; background: #0f172a; color: #fff;
-      padding: 10px 16px; border-radius: 12px;
-      box-shadow: 0 12px 32px rgba(15,23,42,0.32);
-      display: none; align-items: center; gap: 10px; font-size: 13px;
+      padding: 9px 14px; border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(15,23,42,0.38);
+      display: none; align-items: center; gap: 8px; font-size: 12.5px; flex-wrap: wrap;
+      max-width: 94vw;
     }
     .task-batch-bar.show { display: flex; }
 
@@ -1643,26 +1700,107 @@
     }
     .toast-undo-btn:hover { background: rgba(255,255,255,0.28); }
 
-    @media (max-width: 960px) {
-      .app-sidebar { width: 60px; }
-      .app-sidebar .sb-text,
-      .app-sidebar .sb-badge,
-      .app-sidebar .sb-ver,
-      .app-sidebar .sb-foot-label { display: none; }
-      .app-sidebar .sb-nav-btn { justify-content: center; padding: 10px 0; }
-      .form-grid { grid-template-columns: 1fr !important; }
-      .drawer-split-container { flex-direction: column !important; }
+    /* 压缩预览抽屉顶部为紧凑双层 + 同事项切换条 */
+    .drawer-header { padding: 9px 16px; gap: 8px; }
+    .drawer-title-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .drawer-toolbar { padding: 6px 16px; gap: 6px; }
+    .drawer-body { padding: 10px 16px 14px; }
+    .drawer-sibling-bar {
+      display: none; align-items: center; gap: 5px;
+      font-size: 12px; background: var(--surface-alt);
+      border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px;
+    }
+    .drawer-sibling-bar.is-visible { display: inline-flex; }
+    .drawer-sibling-bar select {
+      border: none; background: transparent; color: var(--text);
+      font-size: 12px; max-width: 210px; outline: none; cursor: pointer;
+    }
+    .drawer-path-inline {
+      font-size: 11.5px; color: var(--text-muted);
+      display: inline-flex; align-items: center; gap: 5px;
+      max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
 
-    /* ==================== v3.2 极简浏览模式（供领导/同事快速找文件） ==================== */
-    /* 极简模式下隐藏建档台、同步、卡片/台账切换、折叠按钮等一切非找文件元素 */
-    body.browse-minimal #omniboxPanel,
-    body.browse-minimal #omniPendingFiles,
-    body.browse-minimal #btnToggleOmnibox,
+    /* 归档无图占位 & 悬停快捷操作 & 可折叠快投条 */
+    .arch-cover-empty {
+      width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+      color: var(--teal); background: var(--teal-soft); border-radius: 6px;
+    }
+    .arch-tile { position: relative; }
+    .arch-tile-quick {
+      position: absolute; top: 8px; right: 8px;
+      display: none; gap: 4px; z-index: 3;
+    }
+    .arch-tile:hover .arch-tile-quick { display: inline-flex; }
+    .archive-intake-box.is-collapsed .arch-intake-body { display: none; }
+    .archive-intake-box.is-collapsed { padding: 9px 14px; }
+
+    /* 重要事项吸顶页签 & 右侧双栏就地编辑 */
+    .record-att-tabs {
+      position: sticky; top: 0; z-index: 8;
+      background: var(--surface); padding: 8px 0 8px;
+      border-bottom: 1px solid var(--border); margin-bottom: 12px;
+    }
+    .rec-inline-editor {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 460px;
+    }
+    .rec-inline-editor textarea {
+      width: 100%; min-height: 440px; padding: 12px; font-family: monospace; font-size: 13.5px;
+      line-height: 1.65; border: 1px solid var(--border-strong); border-radius: 8px;
+      background: var(--surface-alt); color: var(--text); resize: vertical;
+    }
+    .rec-inline-preview {
+      border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+      background: var(--surface); overflow-y: auto; max-height: 540px;
+    }
+
+    /* 搜索结果键盘高亮 */
+    .search-res-item.is-kbd-active {
+      outline: 2px solid var(--primary);
+      background: var(--primary-soft);
+    }
+
+    /* 统一右键菜单 */
+    .gw-ctx-menu {
+      position: fixed; z-index: 9995; min-width: 176px;
+      background: var(--surface); color: var(--text);
+      border: 1px solid var(--border-strong); border-radius: 9px;
+      box-shadow: 0 12px 32px rgba(15,23,42,0.22);
+      padding: 5px; font-size: 12.5px;
+    }
+    .gw-ctx-item {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 6px 10px; border: none; background: transparent;
+      color: var(--text); border-radius: 6px; cursor: pointer; text-align: left;
+      font-size: 12.5px;
+    }
+    .gw-ctx-item:hover { background: var(--surface-hover); color: var(--primary); }
+    .gw-ctx-item.danger { color: var(--danger); }
+    .gw-ctx-item.danger:hover { background: var(--danger-soft); color: var(--danger); }
+    .gw-ctx-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+    .gw-ctx-label { font-size: 11px; color: var(--text-muted); padding: 3px 10px; font-weight: 600; }
+
+    /* 快捷键速查浮层 */
+    .shortcut-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; font-size: 13px; }
+    .shortcut-row { display: flex; align-items: center; justify-content: space-between; padding: 5px 0; border-bottom: 1px dashed var(--border); }
+    .kbd-key {
+      display: inline-block; padding: 2px 7px; border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; font-weight: 700;
+      background: var(--surface-alt); border: 1px solid var(--border-strong); color: var(--text);
+    }
+
+    /* 台账表文件分节小标 */
+    .tbl-file-sec { font-size: 10.5px; font-weight: 700; color: var(--text-muted); margin-top: 3px; }
+    .tbl-file-sec.sec-inc { color: var(--primary); }
+    .tbl-file-sec.sec-draft { color: var(--success); }
+
+    /* ==================== 专项二：v3.3.0 极简浏览模式全面重塑 ==================== */
+    /* 允许编辑用户在极简模式下点顶栏【极速建档】展开建档台 */
+    body.browse-minimal #omniboxPanel:not(.is-open),
     body.browse-minimal #btnDiskSync,
-    body.browse-minimal .wb-full-only { display: none !important; }
-    body:not(.browse-minimal) .wb-min-only { display: none !important; }
-    body.browse-minimal .container { max-width: 1560px !important; }
+    body.browse-minimal .wb-full-only { display: none; }
+    body:not(.browse-minimal) .wb-min-only { display: none; }
+    body.browse-minimal .app-main .container { max-width: 1560px; }
 
     .browse-mode-switch {
       display: inline-flex;
@@ -1673,65 +1811,102 @@
       flex-shrink: 0;
     }
     .browse-mode-switch button {
-      border: none;
-      background: transparent;
-      padding: 6px 13px;
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--text-secondary);
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
+      border: none; background: transparent;
+      padding: 5px 11px; font-size: 12.5px; font-weight: 700;
+      color: var(--text-secondary); cursor: pointer;
+      display: inline-flex; align-items: center; gap: 4px;
       transition: background 0.15s, color 0.15s;
     }
     .browse-mode-switch button:hover { background: var(--surface-hover); }
     .browse-mode-switch button.active { background: var(--primary); color: #fff; }
 
+    /* 极简专属顶部快筛条 */
+    .min-quick-bar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 12px; margin-bottom: 10px; box-shadow: var(--shadow);
+    }
+    .min-quick-search {
+      flex: 1; min-width: 200px; max-width: 340px; position: relative; display: flex; align-items: center;
+    }
+    .min-quick-search .ico { position: absolute; left: 9px; color: var(--text-muted); pointer-events: none; }
+    .min-quick-search input {
+      width: 100%; padding: 5px 10px 5px 28px; font-size: 12.5px;
+      border-radius: 7px; border: 1px solid var(--border-strong);
+      background: var(--surface-alt); color: var(--text); outline: none;
+    }
+    .min-quick-search input:focus { border-color: var(--primary); background: var(--surface); }
+    .min-ext-pills { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+    .min-ext-pill {
+      border: 1px solid var(--border); background: var(--surface-alt); color: var(--text-secondary);
+      padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: all 0.14s;
+    }
+    .min-ext-pill:hover { border-color: var(--primary); color: var(--primary); }
+    .min-ext-pill.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
     .min-bar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin: 2px 2px 12px;
-      font-size: 14px;
-      color: var(--text-secondary);
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; flex-wrap: wrap; margin: 0 2px 10px;
+      font-size: 13px; color: var(--text-secondary);
     }
-    .min-bar b { color: var(--primary); font-size: 17px; font-weight: 800; }
-    .min-bar .min-bar-hint { font-size: 12.5px; color: var(--text-muted); }
+    .min-bar b { color: var(--primary); font-size: 15px; font-weight: 800; }
+    .min-bar .min-bar-hint { font-size: 12px; color: var(--text-muted); }
 
-    /* 两列用「两根独立竖列 + 奇偶分配」：卡片紧贴不留行内空白，
-       且折叠/展开只改变自身高度，卡片不会在两列之间跳来跳去（排序稳定） */
-    .minimal-cols {
-      display: flex;
-      align-items: flex-start;
-      gap: 16px;
+    /* 轻量时间分组分隔条 */
+    .min-group-sep {
+      display: flex; align-items: center; gap: 8px;
+      margin: 12px 0 7px; font-size: 12px; font-weight: 700; color: var(--text-muted);
     }
-    .min-col {
-      flex: 1 1 0;
-      min-width: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-    .minimal-cols.is-one { flex-direction: column; }
-    .minimal-cols.is-one .min-col { flex: none; width: 100%; }
-    @media (max-width: 1180px) {
-      .minimal-cols { flex-direction: column; }
-      .min-col { width: 100%; }
-    }
+    .min-group-sep::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
+    /* 模式 A：速查清单模式 (list，默认) */
+    .min-list-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .min-list-item {
+      background: var(--surface); border: 1px solid var(--border);
+      border-left: 4px solid var(--primary); border-radius: 9px;
+      box-shadow: var(--shadow); overflow: hidden;
+      transition: border-color 0.14s, box-shadow 0.14s;
+    }
+    .min-list-item:hover { border-color: var(--border-strong); box-shadow: var(--shadow-hover); }
+    .min-list-item.lv-danger { border-left-color: var(--danger); }
+    .min-list-item.lv-warning { border-left-color: var(--warning); }
+    .min-list-item.lv-normal { border-left-color: var(--primary); }
+    .min-list-item.lv-routine { border-left-color: #64748b; }
+    .min-list-item.lv-archived { border-left-color: var(--success); }
+
+    .min-list-head {
+      display: flex; align-items: center; gap: 9px;
+      padding: 8px 12px; cursor: pointer; user-select: none;
+    }
+    .min-list-head:hover { background: var(--surface-alt); }
+    .min-list-chevron { color: var(--text-muted); transition: transform 0.16s; display: inline-flex; flex-shrink: 0; }
+    .min-list-item:not(.is-folded) .min-list-chevron { transform: rotate(90deg); }
+    .min-list-title {
+      flex: 1; min-width: 140px; font-size: 14px; font-weight: 700; color: var(--text);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .min-list-sub {
+      font-size: 12px; color: var(--text-muted); white-space: nowrap;
+      display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+    }
+    .min-list-body {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+      padding: 10px 14px 12px; border-top: 1px dashed var(--border);
+      background: var(--surface-alt);
+    }
+    .min-list-item.is-folded .min-list-body { display: none; }
+
+    /* 模式 B：整齐双栏自然流 CSS Grid (grid) */
+    .min-grid-wrap {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px; align-items: start;
+    }
     .min-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-left: 6px solid var(--primary);
-      border-radius: 12px;
-      padding: 16px 18px 14px;
-      box-shadow: var(--shadow);
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-left: 5px solid var(--primary); border-radius: 11px;
+      padding: 13px 15px 12px; box-shadow: var(--shadow);
+      display: flex; flex-direction: column; gap: 8px;
       transition: box-shadow 0.15s, border-color 0.15s;
     }
     .min-card:hover { box-shadow: var(--shadow-hover); border-color: var(--border-strong); }
@@ -1740,114 +1915,55 @@
     .min-card.lv-normal { border-left-color: var(--primary); }
     .min-card.lv-routine { border-left-color: #64748b; }
     .min-card.lv-archived { border-left-color: var(--success); }
-    .min-card.is-folded { padding: 11px 14px; gap: 4px; }
+    .min-card.is-folded { padding: 10px 13px; gap: 4px; }
+    .min-card.is-folded .min-card-body { display: none; }
 
-    .min-card-head { display: flex; align-items: flex-start; gap: 9px; flex-wrap: wrap; }
+    .min-card-head { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; cursor: pointer; user-select: none; }
     .min-card-title {
-      flex: 1;
-      min-width: 200px;
-      font-size: 17px;
-      font-weight: 800;
-      line-height: 1.5;
-      color: var(--text);
-      letter-spacing: 0.2px;
+      flex: 1; min-width: 160px; font-size: 15.5px; font-weight: 800;
+      line-height: 1.45; color: var(--text);
     }
-    .min-card.is-folded .min-card-title {
-      font-size: 15.5px;
-      line-height: 1.45;
-      min-width: 120px;
-    }
+    .min-card.is-folded .min-card-title { font-size: 14.5px; }
     .min-card-meta {
-      font-size: 12.5px;
-      color: var(--text-muted);
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-      align-items: center;
-      margin-top: -4px;
+      font-size: 12px; color: var(--text-muted);
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
     }
+    .min-card-body { display: flex; flex-direction: column; gap: 8px; }
     .min-fold-sum {
-      flex-shrink: 0;
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--text-secondary);
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: 99px;
-      padding: 2px 10px;
-      margin-top: 4px;
-      white-space: nowrap;
+      flex-shrink: 0; font-size: 11.5px; font-weight: 700;
+      color: var(--text-secondary); background: var(--surface-alt);
+      border: 1px solid var(--border); border-radius: 99px;
+      padding: 2px 9px; white-space: nowrap;
     }
-    .min-fold-btn {
-      flex-shrink: 0;
-      margin-top: 2px;
-      font-size: 12px;
-      font-weight: 700;
-      padding: 3px 10px;
-      border-radius: 6px;
-      border: 1px solid var(--border-strong);
-      background: var(--surface);
-      color: var(--text-secondary);
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      transition: all 0.15s;
-    }
-    .min-fold-btn:hover { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
-
     .min-file-block {
-      background: var(--surface-alt);
-      border: 1px solid var(--border);
-      border-radius: 9px;
-      padding: 8px 10px 5px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 7px 10px 5px;
     }
     .min-file-block-title {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 13px;
-      font-weight: 800;
-      color: var(--text-secondary);
-      padding-bottom: 6px;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 3px;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12.5px; font-weight: 800; color: var(--text-secondary);
+      padding-bottom: 5px; border-bottom: 1px solid var(--border); margin-bottom: 3px;
     }
     .min-file-block-title.blk-incoming { color: var(--primary); }
     .min-file-block-title.blk-draft { color: var(--success); }
     .min-file-block-title .min-count {
-      margin-left: auto;
-      background: var(--surface);
-      border: 1px solid var(--border-strong);
-      color: var(--text-muted);
-      border-radius: 99px;
-      font-size: 11.5px;
-      padding: 0 8px;
-      font-weight: 700;
+      margin-left: auto; background: var(--surface-alt);
+      border: 1px solid var(--border); color: var(--text-muted);
+      border-radius: 99px; font-size: 11px; padding: 0 7px; font-weight: 700;
     }
 
     .mf-row {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      padding: 9px 8px 9px 6px;
-      border-radius: 7px;
-      cursor: pointer;
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 6px; border-radius: 6px; cursor: pointer;
       border-bottom: 1px dashed var(--border);
     }
     .mf-row:last-child { border-bottom: none; }
     .mf-row:hover { background: var(--surface-hover); }
     .mf-kind {
-      flex-shrink: 0;
-      width: 46px;
-      text-align: center;
-      font-size: 10.5px;
-      font-weight: 800;
-      letter-spacing: 0.4px;
-      padding: 3px 0;
-      border-radius: 5px;
-      background: #e2e8f0;
-      color: #475569;
+      flex-shrink: 0; width: 42px; text-align: center;
+      font-size: 10px; font-weight: 800; letter-spacing: 0.3px;
+      padding: 2px 0; border-radius: 5px;
+      background: #e2e8f0; color: #475569;
     }
     .mf-kind.k-pdf { background: #fee2e2; color: #b91c1c; }
     .mf-kind.k-doc { background: #dbeafe; color: #1d4ed8; }
@@ -1866,39 +1982,66 @@
     body.dark-mode .mf-kind.k-zip { background: #1e293b; color: #94a3b8; }
 
     .mf-name {
-      flex: 1;
-      font-size: 14.5px;
-      font-weight: 600;
-      color: var(--text);
-      line-height: 1.45;
-      overflow-wrap: anywhere;
-      word-break: break-word;
+      flex: 1; font-size: 13.5px; font-weight: 600; color: var(--text);
+      line-height: 1.4; overflow-wrap: anywhere; word-break: break-word;
     }
     .mf-row:hover .mf-name { color: var(--primary); }
+    .mf-meta { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+    .mf-acts { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+    .mf-wps {
+      display: none; font-size: 11px; padding: 2px 6px; border-radius: 5px;
+      border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-secondary);
+      cursor: pointer;
+    }
+    .mf-row:hover .mf-wps { display: inline-flex; }
+    .mf-wps:hover { border-color: var(--primary); color: var(--primary); }
     .mf-dl {
-      flex-shrink: 0;
-      color: var(--text-muted);
-      display: inline-flex;
-      align-items: center;
-      padding: 4px 6px;
-      border-radius: 6px;
-      text-decoration: none;
+      flex-shrink: 0; color: var(--text-muted);
+      display: inline-flex; align-items: center; padding: 3px 5px;
+      border-radius: 5px; text-decoration: none;
     }
     .mf-dl:hover { background: var(--primary-soft); color: var(--primary); }
-    .min-empty { font-size: 13px; color: var(--text-muted); padding: 10px 6px; }
+    .min-empty-inline {
+      font-size: 12px; color: var(--text-muted); padding: 4px 6px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .min-more-btn {
+      margin-top: 4px; width: 100%; border: 1px dashed var(--border-strong);
+      background: transparent; color: var(--primary); font-size: 12px; font-weight: 600;
+      padding: 4px 8px; border-radius: 6px; cursor: pointer;
+    }
+    .min-more-btn:hover { background: var(--primary-soft); }
+    .min-extra-files { display: none; }
+    .min-extra-files.is-expanded { display: block; }
 
     /* 工具条：禁用态与下拉统一宽度 */
-    .btn[disabled], .btn.is-disabled {
-      opacity: 0.42;
-      cursor: not-allowed;
-      box-shadow: none !important;
+    .btn[disabled], .btn.is-disabled { opacity: 0.42; cursor: not-allowed; box-shadow: none; }
+    .btn[disabled]:hover { background: var(--surface); border-color: var(--border-strong); color: var(--text-secondary); }
+    #wbCatFilter, #wbSortSelect { max-width: 190px; }
+
+    /* 统一响应式断点：1200px & 900px + 1280px 顶栏防挤压 */
+    @media (max-width: 1320px) {
+      .app-main .topbar { padding: 0 12px; gap: 8px; }
+      .topbar-search-zone { max-width: 460px; }
+      .top-actions .btn { padding: 5px 8px; font-size: 12px; }
+      .mode-pill { padding: 4px 9px; font-size: 12px; }
     }
-    .btn[disabled]:hover {
-      background: var(--surface);
-      border-color: var(--border-strong);
-      color: var(--text-secondary);
+    @media (max-width: 1200px) {
+      .min-grid-wrap { grid-template-columns: 1fr; }
+      .min-list-body { grid-template-columns: 1fr; }
+      .rec-inline-editor { grid-template-columns: 1fr; }
     }
-    #wbCatFilter, #wbSortSelect { max-width: 200px; }
+    @media (max-width: 900px) {
+      .app-sidebar { width: 60px; }
+      .app-sidebar .sb-text,
+      .app-sidebar .sb-badge,
+      .app-sidebar .sb-ver,
+      .app-sidebar .sb-foot-label { display: none; }
+      .app-sidebar .sb-nav-btn { justify-content: center; padding: 10px 0; }
+      .form-grid { grid-template-columns: 1fr; }
+      .drawer-split-container { flex-direction: column; }
+      .min-list-sub { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -1936,23 +2079,41 @@
     <symbol id="ico-chev-ud" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5M7 9l5-5 5 5"/></symbol>
     <symbol id="ico-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 21h16"/></symbol>
     <symbol id="ico-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="ico-folder-plus" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 11v6M9 14h6"/></symbol>
+    <symbol id="ico-chev-r" viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></symbol>
+    <symbol id="ico-chev-l" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+    <symbol id="ico-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+    <symbol id="ico-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="ico-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/></symbol>
+    <symbol id="ico-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></symbol>
+    <symbol id="ico-video" viewBox="0 0 24 24"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="M17 10l5-3v10l-5-3z"/></symbol>
+    <symbol id="ico-keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M8 16h8"/></symbol>
   </svg>
 
   <div id="globalDropOverlay" class="global-drop-overlay">
     <div class="global-drop-box">
       <div style="font-size:18px;font-weight:700;margin-bottom:6px;">松开鼠标即可投喂来文建档</div>
-      <div style="font-size:13px;color:#475569;">支持 .ofd / .docx / .pdf / .wps / 微信通知截图（自动提取文号、截止期与精简待办）</div>
+      <div class="global-drop-sub">支持 .ofd / .docx / .pdf / .wps / 微信通知截图（自动提取文号、截止期与精简待办）</div>
     </div>
   </div>
 
   <div id="taskBatchBar" class="task-batch-bar">
     <span>已选 <strong id="taskBatchCount">0</strong> 项待办</span>
-    <button class="btn btn-xs btn-success" onclick="batchTasksAction('archive')">批量办结归档</button>
+    <button class="btn btn-xs btn-success" onclick="batchTasksAction('archive')">办结归档</button>
     <button class="btn btn-xs" style="background:#334155;color:#fff;border-color:#475569;" onclick="batchTasksAction('reopen')">恢复进行中</button>
+    <button class="btn btn-xs" style="background:#334155;color:#fff;border-color:#475569;" onclick="batchTasksAction('pin')">置顶</button>
+    <button class="btn btn-xs" style="background:#334155;color:#fff;border-color:#475569;" onclick="batchTasksAction('unpin')">取消置顶</button>
+    <select id="taskBatchPrioSelect" class="form-control" style="width:auto;padding:2px 6px;font-size:12px;background:#1e293b;color:#fff;border-color:#475569;" onchange="if(this.value){batchTasksSetPriority(this.value);this.value='';}">
+      <option value="">设优先级...</option>
+      <option value="紧急">设为紧急</option>
+      <option value="重要">设为重要</option>
+      <option value="普通">设为普通</option>
+    </select>
     <select id="taskBatchCatSelect" class="form-control" style="width:auto;padding:2px 6px;font-size:12px;background:#1e293b;color:#fff;border-color:#475569;">
       <option value="">批量移至分类...</option>
     </select>
     <button class="btn btn-xs btn-primary" onclick="batchTasksMoveCategory()">移动</button>
+    <button class="btn btn-xs" style="background:#991b1b;color:#fff;border-color:#b91c1c;" onclick="batchTasksDelete()">批量删除</button>
     <button class="btn btn-xs" style="background:transparent;color:#cbd5e1;border-color:#475569;" onclick="clearTaskSelection()">取消</button>
   </div>
 
@@ -1963,7 +2124,7 @@
           <svg class="ico ico-lg" style="color:#60a5fa;"><use href="#ico-gov"/></svg>
           <div class="sb-brand-titles">
             <span class="sb-text">公文智能工作台</span>
-            <span class="sb-ver" id="verBadge">v3.2.2</span>
+            <span class="sb-ver" id="verBadge">v3.3.0</span>
           </div>
         </div>
         <button class="sb-collapse-btn" onclick="toggleSidebar()" title="收起/展开侧边栏">
@@ -2045,6 +2206,9 @@
           <span class="mode-pill mode-view" id="modeBadge" onclick="toggleEditMode()">
             <svg class="ico ico-sm"><use href="#ico-lock"/></svg> 浏览模式
           </span>
+          <button class="btn btn-sm" onclick="openShortcutModal()" title="快捷键速查 (?)">
+            <svg class="ico ico-sm"><use href="#ico-keyboard"/></svg>
+          </button>
           <button class="btn btn-sm" onclick="openSettingsModal()" title="系统设置">
             <svg class="ico ico-sm"><use href="#ico-settings"/></svg> 设置
           </button>
@@ -2075,7 +2239,7 @@
           <div class="omnibox-controls">
             <label class="btn btn-sm" style="cursor:pointer;" title="挂载来文原件或截图">
               传文件
-              <input type="file" id="omniFileInput" multiple style="display:none;" onchange="handleOmniFileSelect(this.files)" />
+              <input type="file" id="omniFileInput" multiple style="display:none;" onchange="handleOmniFileSelect(this.files); this.value='';" />
             </label>
             <select id="omniSourceSelect" class="form-control" style="width:auto;padding:4px 7px;font-size:12px;">
               <option value="">自动识别渠道</option>
@@ -2116,9 +2280,9 @@
             <button id="browseModeMinBtn" onclick="setBrowseMode('minimal')">极简浏览</button>
             <button id="browseModeFullBtn" onclick="setBrowseMode('full')">完整视图</button>
           </div>
-          <div class="browse-mode-switch wb-min-only" title="极简浏览的列数：单列看得更宽，两列一屏看更多">
-            <button id="minColsOneBtn" onclick="setMinCols(1)">单列</button>
-            <button id="minColsTwoBtn" onclick="setMinCols(2)">两列</button>
+          <div class="browse-mode-switch wb-min-only" title="极简浏览布局：速查清单（一屏15~20条）或整齐双栏">
+            <button id="minLayoutListBtn" onclick="setMinLayout('list')"><svg class="ico ico-sm"><use href="#ico-list"/></svg> 清单</button>
+            <button id="minLayoutGridBtn" onclick="setMinLayout('grid')"><svg class="ico ico-sm"><use href="#ico-grid"/></svg> 双栏</button>
           </div>
           <button class="btn btn-sm wb-min-only" id="btnFoldAllMin" onclick="toggleAllMinFold()" title="把所有卡片收成一行标题，先扫标题再展开">
             <svg class="ico ico-sm"><use href="#ico-chev-ud"/></svg> <span id="btnFoldAllMinLabel">全部收起</span>
@@ -2126,6 +2290,21 @@
           <button class="btn btn-sm wb-full-only" id="btnCollapseAll" onclick="toggleCollapseAllTasks()" title="一键折叠或展开全部事项卡片（状态自动记忆）"><svg class="ico ico-sm"><use href="#ico-chev-ud"/></svg> 折叠/展开</button>
           <button class="btn btn-sm wb-full-only" id="viewModeCardBtn" onclick="setTaskViewMode('card')"><svg class="ico ico-sm"><use href="#ico-cards"/></svg> 卡片</button>
           <button class="btn btn-sm wb-full-only" id="viewModeTableBtn" onclick="setTaskViewMode('table')"><svg class="ico ico-sm"><use href="#ico-table"/></svg> 台账表</button>
+        </div>
+      </div>
+
+      <div class="min-quick-bar wb-min-only" id="minQuickBar">
+        <div class="min-quick-search">
+          <svg class="ico ico-sm"><use href="#ico-search"/></svg>
+          <input type="text" id="minQuickFilterInput" placeholder="极简速滤：输入事项名、文件名或文号即时筛选..." oninput="handleMinQuickFilter()" />
+        </div>
+        <div class="min-ext-pills" id="minExtPills">
+          <button class="min-ext-pill active" data-ext="" onclick="setMinExtFilter('', this)">全部</button>
+          <button class="min-ext-pill" data-ext="pdf" onclick="setMinExtFilter('pdf', this)">PDF</button>
+          <button class="min-ext-pill" data-ext="doc" onclick="setMinExtFilter('doc', this)">DOCX</button>
+          <button class="min-ext-pill" data-ext="xls" onclick="setMinExtFilter('xls', this)">XLS</button>
+          <button class="min-ext-pill" data-ext="ofd" onclick="setMinExtFilter('ofd', this)">OFD</button>
+          <button class="min-ext-pill" data-ext="img" onclick="setMinExtFilter('img', this)">图片</button>
         </div>
       </div>
 
@@ -2147,35 +2326,41 @@
         </aside>
 
         <div class="arch-main-col">
-          <!-- 按次极速存入归档包面板 -->
-          <div class="archive-intake-box" id="archiveIntakeBox"
-               ondragover="event.preventDefault(); this.style.background='var(--teal-soft)';"
+          <!-- 按次极速存入归档包面板（默认折叠为单行快投条，拖文件或点击自动展开） -->
+          <div class="archive-intake-box is-collapsed" id="archiveIntakeBox"
+               ondragover="event.preventDefault(); this.classList.remove('is-collapsed'); this.style.background='var(--teal-soft)';"
                ondragleave="this.style.background='var(--surface)';"
                ondrop="handleArchiveIntakeDrop(event)"
-               onpaste="handleArchiveIntakePaste(event)">
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
-              <div style="font-weight:700;color:var(--teal);font-size:14px;">
-                按标题一次存入资料存档包（支持混装：录音 .mp3/.m4a + 现场照片 .jpg/.png + 课件 .pptx + 纪要 .docx/.md）
+               onpaste="this.classList.remove('is-collapsed'); handleArchiveIntakePaste(event)">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;cursor:pointer;" onclick="toggleArchiveIntakeBox()">
+              <div style="font-weight:700;color:var(--teal);font-size:13.5px;display:flex;align-items:center;gap:6px;">
+                <svg class="ico ico-sm"><use href="#ico-plus"/></svg>
+                <span>快速存入资料存档包（点击展开或直接拖入录音/照片/PPT/文档）</span>
               </div>
-              <button class="btn btn-xs" onclick="fillArchiveTodayPrefix()">填入今日日期前缀</button>
-            </div>
-            <div style="display:grid;grid-template-columns: 1.5fr 1fr 145px auto;gap:8px;align-items:center;flex-wrap:wrap;">
-              <input type="text" id="archTitleInput" class="form-control" placeholder="输入存档标题，如：11.17会议记录 / 11.18xx事项下沉照片..." />
-              <select id="archCatSelect" class="form-control"></select>
-              <input type="date" id="archDateInput" class="form-control" />
-              <button class="btn btn-teal" onclick="submitNewArchiveBundle()">立即存入本包</button>
-            </div>
-            <div style="display:grid;grid-template-columns: 1fr auto;gap:8px;margin-top:8px;align-items:start;">
-              <textarea id="archNotesInput" class="form-control" rows="2" placeholder="可选：随手写几句会议核心纪要、培训要点或现场下沉情况说明（支持直接粘贴文字或 Ctrl+V 粘贴照片）..."></textarea>
-              <div style="display:flex;flex-direction:column;gap:5px;">
-                <label class="btn btn-sm" style="cursor:pointer;justify-content:center;">
-                  选择多份文件 (录音/照片/PPT/文档)
-                  <input type="file" id="archFilesInput" multiple style="display:none;" onchange="handleArchiveFilesSelect(this.files)" />
-                </label>
-                <input type="text" id="archTagsInput" class="form-control" style="font-size:12px;padding:4px 8px;" placeholder="可选标签（空格分隔）" />
+              <div style="display:flex;gap:6px;align-items:center;" onclick="event.stopPropagation()">
+                <button class="btn btn-xs" onclick="toggleArchiveIntakeBox(true); fillArchiveTodayPrefix()">填入今日前缀</button>
+                <button class="btn btn-xs btn-teal" id="btnToggleArchIntake" onclick="toggleArchiveIntakeBox()">展开新建</button>
               </div>
             </div>
-            <div class="pending-files-bar" id="archPendingFilesBar"></div>
+            <div class="arch-intake-body" style="margin-top:9px;">
+              <div style="display:grid;grid-template-columns: 1.5fr 1fr 145px auto;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="text" id="archTitleInput" class="form-control" placeholder="输入存档标题，如：11.17会议记录 / 11.18xx事项下沉照片..." />
+                <select id="archCatSelect" class="form-control"></select>
+                <input type="date" id="archDateInput" class="form-control" />
+                <button class="btn btn-teal" onclick="submitNewArchiveBundle()">立即存入本包</button>
+              </div>
+              <div style="display:grid;grid-template-columns: 1fr auto;gap:8px;margin-top:8px;align-items:start;">
+                <textarea id="archNotesInput" class="form-control" rows="2" placeholder="可选：随手写几句会议核心纪要、培训要点或现场下沉情况说明（支持直接粘贴文字或 Ctrl+V 粘贴照片）..."></textarea>
+                <div style="display:flex;flex-direction:column;gap:5px;">
+                  <label class="btn btn-sm" style="cursor:pointer;justify-content:center;">
+                    选择多份文件 (录音/照片/PPT/文档)
+                    <input type="file" id="archFilesInput" multiple style="display:none;" onchange="handleArchiveFilesSelect(this.files); this.value='';" />
+                  </label>
+                  <input type="text" id="archTagsInput" class="form-control" style="font-size:12px;padding:4px 8px;" placeholder="可选标签（空格分隔）" />
+                </div>
+              </div>
+              <div class="pending-files-bar" id="archPendingFilesBar"></div>
+            </div>
           </div>
 
           <!-- 资料存档过滤与检索工具条 -->
@@ -2364,7 +2549,7 @@
           <a class="btn btn-success" href="/api/export/ledger?format=csv" target="_blank">导出 Excel/WPS 兼容台账 (.csv)</a>
           <a class="btn" href="/api/export/ledger?format=md" target="_blank">导出 Markdown 台账 (.md)</a>
           <span style="color:var(--border-strong);">|</span>
-          <input type="text" id="summaryPeriodInput" class="form-control" value="2026年11月阶段性" style="width:180px;" />
+          <input type="text" id="summaryPeriodInput" class="form-control" value="" placeholder="如：2026年11月阶段性" style="width:180px;" />
           <button class="btn btn-purple" onclick="generatePeriodicSummary()">一键生成阶段工作总结初稿</button>
           <button class="btn btn-sm" onclick="copySummaryText()">复制总结全文</button>
         </div>
@@ -2381,52 +2566,64 @@
   <div class="drawer-backdrop" id="drawerBackdrop" onclick="attemptClosePreviewDrawer()"></div>
   <aside class="drawer" id="previewDrawer">
     <div class="drawer-header">
-      <div style="overflow:hidden;">
-        <div id="drawerTitle" ondblclick="renameCurrentDocPrompt()"
-             title="双击可重命名该文件"
-             style="font-weight:700;font-size:15px;overflow-wrap:anywhere;line-height:1.35;cursor:text;"></div>
-        <div id="drawerSubMeta" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
+      <div style="overflow:hidden;min-width:0;flex:1;">
+        <div class="drawer-title-row">
+          <div id="drawerTitle" ondblclick="renameCurrentDocPrompt()"
+               title="双击或按 F2 重命名该文件"
+               style="font-weight:700;font-size:15px;overflow-wrap:anywhere;line-height:1.35;cursor:text;"></div>
+          <button class="btn btn-xs" id="btnDrawerRename" style="display:none;padding:2px 5px;" onclick="renameCurrentDocPrompt()" title="重命名文件 (F2)" aria-label="重命名文件">
+            <svg class="ico ico-sm"><use href="#ico-edit"/></svg>
+          </button>
+        </div>
+        <div id="drawerSubMeta" style="font-size:11.5px;color:var(--text-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
       </div>
-      <div style="display:flex;gap:6px;flex-shrink:0;">
+      <div style="display:flex;gap:5px;flex-shrink:0;align-items:center;">
         <button class="btn btn-xs" id="btnToggleSplit" onclick="toggleSplitDraftingStudio()" title="开启左看参考旧稿/重要事项底数/会议纪要、右写新材料的双栏对照撰稿模式">
-          开启双栏对照
+          双栏对照
         </button>
-        <button class="btn btn-xs" onclick="adjustDrawerFont(-1)">A-</button>
-        <button class="btn btn-xs" onclick="adjustDrawerFont(1)">A+</button>
-        <button class="btn btn-primary btn-sm" onclick="copyDrawerText()">复制全文</button>
-        <a class="btn btn-sm" id="drawerDownloadLink" href="#" target="_blank">⬇下载</a>
-        <button class="btn btn-sm" id="btnDrawerDelete" style="display:none;color:var(--danger);border-color:#fecaca;" onclick="deleteCurrentDrawerDoc()" title="从工作台删除这份文件">删除</button>
-        <button class="btn btn-sm" onclick="attemptClosePreviewDrawer()"></button>
+        <button class="btn btn-xs" onclick="adjustDrawerFont(-1)" title="缩小字号">A-</button>
+        <button class="btn btn-xs" onclick="adjustDrawerFont(1)" title="放大字号">A+</button>
+        <button class="btn btn-primary btn-xs" id="btnDrawerCopyText" onclick="copyDrawerText()">复制全文</button>
+        <a class="btn btn-xs" id="drawerDownloadLink" href="#" target="_blank">⬇下载</a>
+        <button class="btn btn-xs btn-danger-ghost" id="btnDrawerDelete" style="display:none;" onclick="deleteCurrentDrawerDoc()" title="从工作台删除这份文件">删除</button>
+        <button class="btn btn-xs" onclick="attemptClosePreviewDrawer()" title="关闭抽屉 (Esc)" aria-label="关闭抽屉">
+          <svg class="ico ico-sm"><use href="#ico-x"/></svg>
+        </button>
       </div>
     </div>
 
     <div class="drawer-toolbar">
-      <div class="scope-group">
-        <button class="scope-btn active" id="drawerTabReadBtn" onclick="switchDrawerMode('read')">智能直读/表格预览</button>
-        <button class="scope-btn" id="drawerTabRawBtn" onclick="switchDrawerMode('raw')">纯文本</button>
-        <button class="scope-btn" id="drawerTabEditBtn" onclick="switchDrawerMode('edit')">在线写稿/改稿</button>
+      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <div class="scope-group">
+          <button class="scope-btn active" id="drawerTabReadBtn" onclick="switchDrawerMode('read')">直读/表格</button>
+          <button class="scope-btn" id="drawerTabRawBtn" onclick="switchDrawerMode('raw')">纯文本</button>
+          <button class="scope-btn" id="drawerTabEditBtn" onclick="switchDrawerMode('edit')">在线写稿</button>
+        </div>
+        <div class="drawer-sibling-bar" id="drawerSiblingBar">
+          <button class="btn btn-xs" style="padding:1px 4px;border:none;" onclick="stepDrawerSibling(-1)" title="同事项上一份文件" aria-label="上一份"><svg class="ico ico-sm"><use href="#ico-chev-l"/></svg></button>
+          <select id="drawerSiblingSelect" onchange="openDocPreview(parseInt(this.value))" title="切换同事项其它文件"></select>
+          <button class="btn btn-xs" style="padding:1px 4px;border:none;" onclick="stepDrawerSibling(1)" title="同事项下一份文件" aria-label="下一份"><svg class="ico ico-sm"><use href="#ico-chev-r"/></svg></button>
+        </div>
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;" id="drawerActionBtns">
-        <button class="btn btn-xs btn-success" id="btnDrawerFormatGw" onclick="formatCurrentDrawerDocToGw('report')" title="按 GB/T 9704—2012 国标公文标准（二号小标宋标题+三号仿宋正文+28磅行距+页码）导出 .docx">
-          导出国标公文(.docx)
+      <div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;" id="drawerActionBtns">
+        <span id="drawerPathBar" class="drawer-path-inline">
+          <span id="drawerPathText" style="overflow:hidden;text-overflow:ellipsis;"></span>
+          <button class="btn btn-xs" id="btnDrawerOpenDir" onclick="openDrawerFolder()" title="在本机文件管理器中打开所在目录">目录</button>
+          <button class="btn btn-xs" onclick="copyDrawerPath()" title="复制本机物理路径">路径</button>
+        </span>
+        <button class="btn btn-xs btn-success" id="btnDrawerFormatGw" onclick="formatCurrentDrawerDocToGw('report')" title="按 GB/T 9704—2012 国标公文标准导出 .docx">
+          国标.docx
         </button>
-        <button class="btn btn-xs btn-purple" id="btnDrawerFormatRedhead" onclick="formatCurrentDrawerDocToGw('redhead')" title="生成带红色版头与发文字号的正式红头文件 .docx">
-          导出红头文件(.docx)
+        <button class="btn btn-xs btn-purple" id="btnDrawerFormatRedhead" onclick="formatCurrentDrawerDocToGw('redhead')" title="生成带红色版头的正式红头文件 .docx">
+          红头.docx
         </button>
         <button class="btn btn-xs" id="btnDrawerOpenWps" style="display:none;" onclick="openCurrentDrawerDocInWps()">
-          本机打开
+          WPS打开
         </button>
       </div>
     </div>
 
     <div class="drawer-body">
-      <div id="drawerPathBar" style="font-size:12px;background:var(--primary-soft);color:var(--primary);padding:6px 10px;border-radius:6px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;">
-        <span id="drawerPathText" style="word-break:break-all;"></span>
-        <div style="display:flex;gap:5px;flex-shrink:0;align-items:center;">
-          <button class="btn btn-xs" id="btnDrawerOpenDir" onclick="openDrawerFolder()" title="在本机文件管理器中打开该文件所在目录">打开目录</button>
-          <button class="btn btn-xs" onclick="copyDrawerPath()">复制路径</button>
-        </div>
-      </div>
 
       <!-- 资料存档单包详情（v3.0.1）：归档包有自己的排版，不与文档双栏改稿混用 -->
       <div id="archDetailBody" style="display:none;flex:1;overflow-y:auto;padding-right:2px;"></div>
@@ -2501,7 +2698,7 @@
     <div class="modal">
       <div class="modal-header">
         <span id="archiveModalTitle">编辑资料存档包</span>
-        <button class="btn btn-sm" onclick="document.getElementById('archiveModalBackdrop').style.display='none'"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('archiveModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <input type="hidden" id="editArchiveId" />
       <div class="form-grid">
@@ -2532,7 +2729,7 @@
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-        <button class="btn" onclick="document.getElementById('archiveModalBackdrop').style.display='none'">取消</button>
+        <button class="btn" onclick="tryCloseModalByBackdrop('archiveModalBackdrop')">取消</button>
         <button class="btn btn-primary" onclick="saveArchiveModal()">保存修改</button>
       </div>
     </div>
@@ -2543,7 +2740,7 @@
     <div class="modal" style="width:min(780px, 96vw);">
       <div class="modal-header">
         <span id="recordModalTitle">新建 / 编辑重要事项记录</span>
-        <button class="btn btn-sm" onclick="document.getElementById('recordModalBackdrop').style.display='none'"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('recordModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <input type="hidden" id="editRecordId" />
       <div class="form-grid">
@@ -2574,7 +2771,7 @@
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-        <button class="btn" onclick="document.getElementById('recordModalBackdrop').style.display='none'">取消</button>
+        <button class="btn" onclick="tryCloseModalByBackdrop('recordModalBackdrop')">取消</button>
         <button class="btn btn-primary" onclick="saveRecordModal()">保存重要事项记录</button>
       </div>
     </div>
@@ -2585,7 +2782,7 @@
     <div class="modal">
       <div class="modal-header">
         <span id="taskModalTitle">编辑工作事项</span>
-        <button class="btn btn-sm" onclick="closeTaskModal()"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('taskModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <input type="hidden" id="editTaskId" />
       <div class="form-grid">
@@ -2643,7 +2840,7 @@
       <div style="display:flex;justify-content:space-between;margin-top:12px;">
         <button class="btn btn-danger-ghost btn-sm" id="btnDeleteTask" onclick="deleteCurrentTask()">删除事项</button>
         <div style="display:flex;gap:8px;">
-          <button class="btn" onclick="closeTaskModal()">取消</button>
+          <button class="btn" onclick="tryCloseModalByBackdrop('taskModalBackdrop')">取消</button>
           <button class="btn btn-primary" onclick="saveTaskModal()">保存修改</button>
         </div>
       </div>
@@ -2655,7 +2852,7 @@
     <div class="modal">
       <div class="modal-header">
         <span>上传独立材料 / 历史公文至资料库</span>
-        <button class="btn btn-sm" onclick="document.getElementById('libUploadModalBackdrop').style.display='none'"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('libUploadModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <div class="form-grid">
         <div class="form-group">
@@ -2681,7 +2878,7 @@
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-        <button class="btn" onclick="document.getElementById('libUploadModalBackdrop').style.display='none'">取消</button>
+        <button class="btn" onclick="tryCloseModalByBackdrop('libUploadModalBackdrop')">取消</button>
         <button class="btn btn-primary" onclick="submitLibraryUpload()">开始上传并建立全文索引</button>
       </div>
     </div>
@@ -2692,7 +2889,7 @@
     <div class="modal">
       <div class="modal-header">
         <span>批量扫描导入本机历史公文文件夹</span>
-        <button class="btn btn-sm" onclick="document.getElementById('scanDirModalBackdrop').style.display='none'"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('scanDirModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">
         填入你麒麟系统电脑上的历史公文文件夹路径（如 <code>/home/kylin/桌面/2025历史公文</code>），系统将自动提取正文建立 FTS5 全文检索，并自动保留原多级子文件夹名称作为标签！
@@ -2712,7 +2909,7 @@
         </label>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-        <button class="btn" onclick="document.getElementById('scanDirModalBackdrop').style.display='none'">取消</button>
+        <button class="btn" onclick="tryCloseModalByBackdrop('scanDirModalBackdrop')">取消</button>
         <button class="btn btn-primary" onclick="submitScanLocalDir()">立即扫描建库</button>
       </div>
     </div>
@@ -2723,7 +2920,7 @@
     <div class="modal">
       <div class="modal-header">
         <span>整理归纳公文与材料</span>
-        <button class="btn btn-sm" onclick="document.getElementById('docEditModalBackdrop').style.display='none'"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('docEditModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <input type="hidden" id="editDocId" />
       <div class="form-grid">
@@ -2764,7 +2961,7 @@
       <div style="display:flex;justify-content:space-between;margin-top:12px;">
         <button class="btn btn-danger-ghost btn-sm" onclick="deleteCurrentDoc()">移除记录</button>
         <div style="display:flex;gap:8px;">
-          <button class="btn" onclick="document.getElementById('docEditModalBackdrop').style.display='none'">取消</button>
+          <button class="btn" onclick="tryCloseModalByBackdrop('docEditModalBackdrop')">取消</button>
           <button class="btn btn-primary" onclick="saveDocEditModal()">保存归纳设置</button>
         </div>
       </div>
@@ -2776,7 +2973,7 @@
     <div class="modal">
       <div class="modal-header">
         <span id="recModalHeaderTitle">新增周期性 / 常态化工作派生规则</span>
-        <button class="btn btn-sm" onclick="document.getElementById('recurringModalBackdrop').style.display='none'"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('recurringModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <input type="hidden" id="recEditId" />
       <div class="form-grid">
@@ -2815,7 +3012,7 @@
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-        <button class="btn" onclick="document.getElementById('recurringModalBackdrop').style.display='none'">取消</button>
+        <button class="btn" onclick="tryCloseModalByBackdrop('recurringModalBackdrop')">取消</button>
         <button class="btn btn-primary" onclick="saveRecurringModal()">保存周期规则</button>
       </div>
     </div>
@@ -2826,7 +3023,7 @@
     <div class="modal" style="width:min(760px,96vw);">
       <div class="modal-header">
         <span>工作台、访问控制、AI 接口与 xkl-gw 联动设置</span>
-        <button class="btn btn-sm" onclick="document.getElementById('settingsModalBackdrop').style.display='none'"></button>
+        <button class="btn btn-sm" onclick="tryCloseModalByBackdrop('settingsModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <div class="form-grid">
         <div class="form-group">
@@ -2854,7 +3051,7 @@
             支持三种写法：<code>172.19.51.*</code>（整段）、<code>172.19.51.0/24</code>（CIDR）、<code>172.19.51.69</code>（单个 IP）。
             不在名单内的设备将被<b>直接断开连接</b>，浏览器只会显示"无法访问此网站"。本机 <code>127.0.0.1</code> 永远可访问。
           </div>
-          <div id="ipWlWarn" style="display:none;font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:6px 9px;margin-top:7px;line-height:1.6;">
+          <div id="ipWlWarn" class="ip-wl-warn">
             当前未设置白名单，局域网内任意设备都可尝试访问（仅受密码保护）。
           </div>
         </div>
@@ -2896,7 +3093,7 @@
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
-        <button class="btn" onclick="document.getElementById('settingsModalBackdrop').style.display='none'">取消</button>
+        <button class="btn" onclick="tryCloseModalByBackdrop('settingsModalBackdrop')">取消</button>
         <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
       </div>
 
@@ -2916,7 +3113,7 @@
         <div id="accessLogBox" style="max-height:230px;overflow-y:auto;border:1px solid var(--border);border-radius:7px;">
           <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
             <thead>
-              <tr style="position:sticky;top:0;background:var(--bg-soft,#f8fafc);z-index:1;">
+              <tr style="position:sticky;top:0;background:var(--surface-alt);z-index:1;">
                 <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted);">时间</th>
                 <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted);">来源 IP</th>
                 <th style="text-align:left;padding:5px 8px;font-weight:600;color:var(--text-muted);">请求</th>
@@ -2937,7 +3134,7 @@
     <div class="modal" style="max-width:440px;">
       <div class="modal-header">
         <span id="customDialogTitle">操作确认</span>
-        <button class="btn btn-sm" onclick="closeCustomDialog(null)"></button>
+        <button class="btn btn-sm" onclick="closeCustomDialog(null)" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
       </div>
       <div id="customDialogMessage" style="font-size:13.5px;color:var(--text-secondary);margin-bottom:12px;line-height:1.6;"></div>
       <div class="form-group" id="customDialogInputWrap" style="display:none;">
@@ -2974,11 +3171,35 @@
     </div>
   </div>
 
+  <!-- 全站统一右键菜单 -->
+  <div id="gwContextMenu" class="gw-ctx-menu" style="display:none;"></div>
+
+  <!-- 快捷键速查浮层 (?) -->
+  <div class="modal-backdrop" id="shortcutModalBackdrop" style="z-index:420;">
+    <div class="modal" style="max-width:560px;">
+      <div class="modal-header">
+        <span>快捷键速查</span>
+        <button class="btn btn-sm" onclick="hideBackdrop('shortcutModalBackdrop')" title="关闭" aria-label="关闭"><svg class="ico ico-sm"><use href="#ico-x"/></svg></button>
+      </div>
+      <div class="shortcut-grid">
+        <div class="shortcut-row"><span>全局四维秒搜</span><span><span class="kbd-key">/</span> 或 <span class="kbd-key">Ctrl+K</span></span></div>
+        <div class="shortcut-row"><span>搜索结果上下选择</span><span><span class="kbd-key">↑</span> <span class="kbd-key">↓</span> + <span class="kbd-key">Enter</span></span></div>
+        <div class="shortcut-row"><span>打开极速建档台</span><span class="kbd-key">N</span></div>
+        <div class="shortcut-row"><span>切换极简 / 完整视图</span><span class="kbd-key">M</span></div>
+        <div class="shortcut-row"><span>重命名抽屉当前文件</span><span class="kbd-key">F2</span></div>
+        <div class="shortcut-row"><span>保存正在编辑的草稿</span><span class="kbd-key">Ctrl+S</span></div>
+        <div class="shortcut-row"><span>切换 6 大栏目</span><span class="kbd-key">Alt+1 ~ 6</span></div>
+        <div class="shortcut-row"><span>分层关闭菜单/弹窗/抽屉</span><span class="kbd-key">Esc</span></div>
+        <div class="shortcut-row"><span>打开本快捷键速查</span><span class="kbd-key">?</span></div>
+      </div>
+    </div>
+  </div>
+
   <div class="toast" id="toastBox"></div>
 
   <script>
     let STATE = {
-      version: '3.0.0',
+      version: '3.3.0',
       can_view: true,
       can_edit: false,
       is_localhost: false,
@@ -3007,14 +3228,24 @@
           return ['received_desc', 'received_asc', 'deadline_asc', 'updated_desc', 'title_asc'].includes(v) ? v : 'received_desc';
         } catch (e) { return 'received_desc'; }
       })(),
-      // v3.2.2 极简浏览：列数 1/2 与逐卡折叠（纯前端展示，不写数据库）
-      minCols: (function () { try { return localStorage.getItem('gw_min_cols') === '1' ? 1 : 2; } catch (e) { return 2; } })(),
+      // v3.3.0 极简浏览：布局 list(速查清单，默认)/grid(整齐双栏) + 逐卡折叠 + 快筛 + 文件夹折叠
+      minLayout: (function () { try { return localStorage.getItem('gw_min_layout') === 'grid' ? 'grid' : 'list'; } catch (e) { return 'list'; } })(),
+      minQuickKw: '',
+      minExtFilter: '',
       minFold: (function () {
         try {
           const a = JSON.parse(localStorage.getItem('gw_min_fold') || '[]');
           return Array.isArray(a) ? a.map(Number).filter(n => !isNaN(n)) : [];
         } catch (e) { return []; }
       })(),
+      matFold: (function () {
+        try {
+          const o = JSON.parse(localStorage.getItem('gw_mat_fold') || '{}');
+          return (o && typeof o === 'object') ? o : {};
+        } catch (e) { return {}; }
+      })(),
+      recInlineEdit: false,
+      taskRefsCache: {},
       searchScope: 'full',
       searchKeywords: [],
       libCategoryFilter: '',
@@ -3172,7 +3403,7 @@
 
     function _topOpenBackdropId() {
       const order = [
-        'customDialogBackdrop', 'imageLightboxBackdrop', 'taskModalBackdrop',
+        'customDialogBackdrop', 'shortcutModalBackdrop', 'imageLightboxBackdrop', 'taskModalBackdrop',
         'archiveModalBackdrop', 'recordModalBackdrop', 'docEditModalBackdrop',
         'recurringModalBackdrop', 'settingsModalBackdrop',
         'libUploadModalBackdrop', 'scanDirModalBackdrop'
@@ -3217,14 +3448,36 @@
     }
 
     function highlightKeywordsHtml(text, keywords) {
-      const safe = escapeHtml(text || '');
-      if (!keywords || keywords.length === 0) return safe;
-      const valid = [...new Set(keywords.filter(k => k && k.trim().length > 0))]
+      const raw = String(text || '');
+      if (!keywords || keywords.length === 0) return escapeHtml(raw);
+      const valid = [...new Set(keywords.map(k => String(k || '').trim()).filter(Boolean))]
         .sort((a, b) => b.length - a.length)
         .map(kw => kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      if (!valid.length) return safe;
+      if (!valid.length) return escapeHtml(raw);
       const reg = new RegExp(`(${valid.join('|')})`, 'gi');
-      return safe.replace(reg, '<mark class="hl">$1</mark>');
+      let out = '';
+      let lastIdx = 0;
+      let m;
+      while ((m = reg.exec(raw)) !== null) {
+        if (m.index > lastIdx) out += escapeHtml(raw.slice(lastIdx, m.index));
+        out += `<mark class="hl">${escapeHtml(m[0])}</mark>`;
+        lastIdx = m.index + m[0].length;
+        if (m[0].length === 0) reg.lastIndex++;
+      }
+      if (lastIdx < raw.length) out += escapeHtml(raw.slice(lastIdx));
+      return out;
+    }
+
+    function formatFileSizeShort(bytes) {
+      const n = Number(bytes || 0);
+      if (!n || isNaN(n)) return '';
+      if (n < 1024) return `${n}B`;
+      if (n < 1024 * 1024) return `${Math.round(n / 1024)}K`;
+      return `${(n / (1024 * 1024)).toFixed(1)}M`;
+    }
+
+    function getDefaultCategory() {
+      return (STATE.categories && STATE.categories[0]) || '01_日常综合';
     }
 
     function formatInlineMd(escapedText) {
@@ -3447,7 +3700,7 @@
           <div style="text-align:center;padding:12px;">
             <img src="${escapeHtml(sp.media_url)}" alt="${escapeHtml(docObj.filename)}"
                  style="max-width:100%;max-height:560px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;"
-                 onclick="openSingleImageLightbox('${escapeHtml(sp.media_url)}', '${escapeHtml(docObj.filename)}', '/api/docs/${docObj.id}/download')" />
+                 onclick="openSingleImageLightbox('${escapeJsAttr(sp.media_url)}', '${escapeJsAttr(docObj.filename)}', '/api/docs/${docObj.id}/download')" />
             ${docObj.extracted_text ? `<div style="margin-top:12px;text-align:left;">${renderSimpleMarkdown(docObj.extracted_text, keywords)}</div>` : ''}
           </div>
         `;
@@ -3516,9 +3769,11 @@
     }
 
     async function apiFetch(url, options = {}) {
+      const isFormData = (typeof FormData !== 'undefined' && options.body instanceof FormData);
+      const headers = isFormData ? { ...(options.headers || {}) } : { 'Content-Type': 'application/json', ...(options.headers || {}) };
       const resp = await fetch(url, {
-        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-        ...options
+        ...options,
+        headers
       });
       if (resp.status === 401) {
         document.getElementById('loginModalBackdrop').style.display = 'flex';
@@ -3536,6 +3791,44 @@
         throw new Error(data.error || `请求失败 (HTTP ${resp.status})`);
       }
       return data;
+    }
+
+    async function uploadFilesFormData(url, fileList, extraFields = {}) {
+      const fd = new FormData();
+      Object.entries(extraFields || {}).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) fd.append(k, String(v));
+      });
+      for (const f of Array.from(fileList || [])) {
+        fd.append('files', f, f.name);
+      }
+      return await apiFetch(url, { method: 'POST', body: fd });
+    }
+
+    async function refreshSingleTask(taskId) {
+      if (!taskId) return null;
+      const res = await apiFetch(`/api/tasks/${taskId}`);
+      if (res && res.task) {
+        updateSingleTaskInStateAndDOM(res.task);
+        return res.task;
+      }
+      return null;
+    }
+
+    async function refreshSingleArchive(archiveId) {
+      if (!archiveId) return null;
+      const res = await apiFetch(`/api/archives/${archiveId}`);
+      if (res && res.archive) {
+        const idx = (STATE.archives || []).findIndex(x => x.id === archiveId);
+        if (idx !== -1) STATE.archives[idx] = res.archive;
+        else (STATE.archives = STATE.archives || []).unshift(res.archive);
+        renderHeaderAndAuth();
+        if (STATE.activeMainTab === 'archives') renderArchives();
+        if (STATE.archDetailId === archiveId && STATE.drawerIsArchive) {
+          openArchiveDetail(archiveId);
+        }
+        return res.archive;
+      }
+      return null;
     }
 
     const DIRTY_TABS = { workbench: true, archives: true, records: true, library: true, recurring: true };
@@ -3642,7 +3935,7 @@
     }
 
     function renderHeaderAndAuth() {
-      document.getElementById('verBadge').textContent = `v${STATE.version || '3.2.2'}`;
+      document.getElementById('verBadge').textContent = `v${STATE.version || '3.3.0'}`;
       const lanEl = document.getElementById('lanUrlBadge');
       if (lanEl) lanEl.innerHTML = `${ico('globe')}<span class="sb-foot-label">${escapeHtml(STATE.lan_url || '')}</span>`;
       const dirEl = document.getElementById('localDirBadge');
@@ -3703,6 +3996,13 @@
         if (el) el.innerHTML = catOptions;
       });
 
+      const taskBatchCatSel = document.getElementById('taskBatchCatSelect');
+      if (taskBatchCatSel) {
+        const prev = taskBatchCatSel.value;
+        taskBatchCatSel.innerHTML = '<option value="">批量移至分类...</option>' +
+          (STATE.categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        if (prev) taskBatchCatSel.value = prev;
+      }
       const archCatOptions = (STATE.archive_categories || []).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
       ['archCatSelect', 'editArchiveCat'].forEach(id => {
         const el = document.getElementById(id);
@@ -3715,6 +4015,9 @@
     }
 
     function switchMainTab(tab) {
+      if (STATE.activeMainTab !== tab && typeof clearTaskSelection === 'function') {
+        clearTaskSelection();
+      }
       STATE.activeMainTab = tab;
       const tabMap = {
         workbench: 'Workbench',
@@ -3847,7 +4150,7 @@
       bar.innerHTML = STATE.omniFiles.map((f, idx) => `
         <span class="file-pill">
           ${escapeHtml(f.filename)}
-          <span style="cursor:pointer;font-weight:700;" onclick="STATE.omniFiles.splice(${idx},1);renderOmniPendingFiles();"></span>
+          <span style="cursor:pointer;display:inline-flex;align-items:center;" title="移除待传文件" onclick="STATE.omniFiles.splice(${idx},1);renderOmniPendingFiles();">${ico('x')}</span>
         </span>
       `).join('');
     }
@@ -3911,16 +4214,17 @@
       renderTasks();
     }
 
-    // ==================== v3.2 极简浏览模式（领导/同事找文件专用） ====================
+    // ==================== v3.3.0 极简浏览模式（清单 / 整齐双栏 + 快筛 + 分组 + 0闪烁） ====================
     function setBrowseMode(mode) {
       STATE.browseMode = (mode === 'full') ? 'full' : 'minimal';
       try { localStorage.setItem('gw_browse_mode', STATE.browseMode); } catch (e) {}
+      if (typeof clearTaskSelection === 'function') clearTaskSelection();
       applyBrowseModeChrome();
       DIRTY_TABS.workbench = true;
       renderTasks();
       showToast(STATE.browseMode === 'minimal'
-        ? '已切到【极简浏览】：只显示来文原件与我写的材料'
-        : '已切到【完整视图】：可查看要求、细项与进展');
+        ? '已切到【极简浏览】：速查清单与文件直达'
+        : '已切到【完整视图】：可管理要求、细项、进展与文件夹');
     }
 
     function applyBrowseModeChrome() {
@@ -3930,10 +4234,6 @@
       const fullBtn = document.getElementById('browseModeFullBtn');
       if (minBtn) minBtn.classList.toggle('active', minimal);
       if (fullBtn) fullBtn.classList.toggle('active', !minimal);
-      if (minimal) {
-        const box = document.getElementById('omniboxPanel');
-        if (box) { box.classList.remove('is-open', 'expanded'); }
-      }
     }
 
     // ==================== v3.2.1 排序（极简浏览 / 卡片 / 台账表 共用） ====================
@@ -3945,7 +4245,6 @@
       title_asc: '事项名称'
     };
 
-    // 收文日期：优先取事项文件夹的日期前缀（来文当天），否则退回建档时间
     function taskReceivedDate(t) {
       const m = String(t.folder_rel_path || '').match(/(\d{4}-\d{2}-\d{2})/);
       if (m) return m[1];
@@ -3954,7 +4253,7 @@
 
     function taskDeadlineKey(t) {
       const d = String(t.deadline || '').slice(0, 10);
-      return d || '9999-99-99';   // 无截止日期的沉底
+      return d || '9999-99-99';
     }
 
     function sortTaskList(list) {
@@ -3970,7 +4269,7 @@
         b.id - a.id;
 
       arr.sort((a, b) => {
-        if (!!a.is_pinned !== !!b.is_pinned) return a.is_pinned ? -1 : 1;   // 置顶永远在前
+        if (!!a.is_pinned !== !!b.is_pinned) return a.is_pinned ? -1 : 1;
         switch (mode) {
           case 'received_asc': return byReceivedAsc(a, b);
           case 'deadline_asc': return taskDeadlineKey(a).localeCompare(taskDeadlineKey(b)) || byReceivedDesc(a, b);
@@ -3989,7 +4288,6 @@
       renderTasks();
     }
 
-    // 工具条状态：卡片/台账表当前高亮；折叠/展开只在卡片模式可用
     function applyTaskToolbarState() {
       const isTable = STATE.taskViewMode === 'table';
       const cardBtn = document.getElementById('viewModeCardBtn');
@@ -4010,11 +4308,10 @@
         sortSel.value = STATE.taskSort || 'received_desc';
       }
 
-      // 极简浏览：列数高亮 + 「全部收起 / 全部展开」文案
-      const oneBtn = document.getElementById('minColsOneBtn');
-      const twoBtn = document.getElementById('minColsTwoBtn');
-      if (oneBtn) oneBtn.classList.toggle('active', STATE.minCols === 1);
-      if (twoBtn) twoBtn.classList.toggle('active', STATE.minCols !== 1);
+      const listBtn = document.getElementById('minLayoutListBtn');
+      const gridBtn = document.getElementById('minLayoutGridBtn');
+      if (listBtn) listBtn.classList.toggle('active', STATE.minLayout !== 'grid');
+      if (gridBtn) gridBtn.classList.toggle('active', STATE.minLayout === 'grid');
 
       const foldLabel = document.getElementById('btnFoldAllMinLabel');
       if (foldLabel) {
@@ -4024,8 +4321,13 @@
       }
     }
 
-    // ==================== v3.2.2 极简浏览：列数切换 + 逐卡折叠 ====================
+    // ==================== 极简浏览折叠与布局 ====================
     function isMinFolded(taskId) {
+      if (STATE.minLayout === 'list') {
+        // 速查清单模式默认收起为单行，展开的 ID 记在 minListExpanded
+        if (!window._MIN_LIST_EXPANDED) window._MIN_LIST_EXPANDED = new Set();
+        return !window._MIN_LIST_EXPANDED.has(taskId);
+      }
       return (STATE.minFold || []).includes(taskId);
     }
 
@@ -4033,37 +4335,219 @@
       try { localStorage.setItem('gw_min_fold', JSON.stringify(STATE.minFold || [])); } catch (e) {}
     }
 
-    function toggleMinFold(taskId) {
+    function toggleMinFold(taskId, cardEl) {
+      const targetEl = cardEl || document.getElementById(`task_card_${taskId}`);
+      if (STATE.minLayout === 'list') {
+        if (!window._MIN_LIST_EXPANDED) window._MIN_LIST_EXPANDED = new Set();
+        if (window._MIN_LIST_EXPANDED.has(taskId)) {
+          window._MIN_LIST_EXPANDED.delete(taskId);
+          if (targetEl) targetEl.classList.add('is-folded');
+        } else {
+          window._MIN_LIST_EXPANDED.add(taskId);
+          if (targetEl) targetEl.classList.remove('is-folded');
+        }
+        applyTaskToolbarState();
+        return;
+      }
       const set = new Set(STATE.minFold || []);
-      if (set.has(taskId)) set.delete(taskId); else set.add(taskId);
+      let nowFolded = false;
+      if (set.has(taskId)) { set.delete(taskId); nowFolded = false; }
+      else { set.add(taskId); nowFolded = true; }
       STATE.minFold = Array.from(set);
       persistMinFold();
-      renderTasks();
+      if (targetEl) {
+        targetEl.classList.toggle('is-folded', nowFolded);
+        const sumEl = targetEl.querySelector('.min-fold-sum');
+        if (sumEl) sumEl.style.display = nowFolded ? 'inline-flex' : 'none';
+      }
+      applyTaskToolbarState();
     }
 
     function toggleAllMinFold() {
       const visible = sortTaskList((STATE.tasks || []).filter(doesTaskMatchCurrentFilter));
       const allFolded = visible.length > 0 && visible.every(t => isMinFolded(t.id));
+      if (STATE.minLayout === 'list') {
+        if (!window._MIN_LIST_EXPANDED) window._MIN_LIST_EXPANDED = new Set();
+        if (allFolded) visible.forEach(t => window._MIN_LIST_EXPANDED.add(t.id));
+        else window._MIN_LIST_EXPANDED.clear();
+        document.querySelectorAll('#tasksContainer .min-list-item').forEach(el => {
+          el.classList.toggle('is-folded', !allFolded);
+        });
+        applyTaskToolbarState();
+        showToast(allFolded ? '已展开全部事项文件区' : '已收起全部事项为单行速查');
+        return;
+      }
       if (allFolded) {
-        // 只展开当前可见的，其它筛选下的折叠状态保留
         const visIds = new Set(visible.map(t => t.id));
         STATE.minFold = (STATE.minFold || []).filter(id => !visIds.has(id));
       } else {
         STATE.minFold = Array.from(new Set([...(STATE.minFold || []), ...visible.map(t => t.id)]));
       }
       persistMinFold();
-      renderTasks();
-      showToast(allFolded ? '已展开全部卡片' : '已收起全部卡片，先扫标题再展开查看文件');
+      document.querySelectorAll('#tasksContainer .min-card').forEach(el => {
+        el.classList.toggle('is-folded', !allFolded);
+      });
+      applyTaskToolbarState();
+      showToast(allFolded ? '已展开全部卡片' : '已收起全部卡片');
     }
 
-    function setMinCols(n) {
-      STATE.minCols = (n === 1) ? 1 : 2;
-      try { localStorage.setItem('gw_min_cols', String(STATE.minCols)); } catch (e) {}
+    function setMinLayout(layout) {
+      STATE.minLayout = (layout === 'grid') ? 'grid' : 'list';
+      try { localStorage.setItem('gw_min_layout', STATE.minLayout); } catch (e) {}
       renderTasks();
     }
 
+    const handleMinQuickFilter = debounceFn(() => {
+      STATE.minQuickKw = (document.getElementById('minQuickFilterInput')?.value || '').trim().toLowerCase();
+      renderTasks();
+    }, 150);
 
-    // 按扩展名给文件打类型标签与配色
+    function setMinExtFilter(ext, btnEl) {
+      STATE.minExtFilter = ext || '';
+      document.querySelectorAll('#minExtPills .min-ext-pill').forEach(b => b.classList.remove('active'));
+      if (btnEl) btnEl.classList.add('active');
+      renderTasks();
+    }
+
+    function matchExtFilter(filename, extGroup) {
+      if (!extGroup) return true;
+      const ext = String(filename || '').split('.').pop().toLowerCase();
+      if (extGroup === 'pdf') return ext === 'pdf';
+      if (extGroup === 'doc') return ['doc', 'docx', 'wps', 'dot', 'md', 'txt'].includes(ext);
+      if (extGroup === 'xls') return ['xls', 'xlsx', 'et', 'csv'].includes(ext);
+      if (extGroup === 'ofd') return ext === 'ofd';
+      if (extGroup === 'img') return ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'tif'].includes(ext);
+      return true;
+    }
+
+    // ==================== 专项一：「我写的材料」单层文件夹状态与操作 ====================
+    function _matFoldKey(taskId, folderName) { return `${taskId}::${folderName}`; }
+
+    function isMatFolderOpen(taskId, folderName, defaultOpen = true) {
+      const k = _matFoldKey(taskId, folderName);
+      if (STATE.matFold && Object.prototype.hasOwnProperty.call(STATE.matFold, k)) {
+        return !!STATE.matFold[k];
+      }
+      return defaultOpen;
+    }
+
+    function toggleMatFolder(taskId, folderName, wrapEl) {
+      const k = _matFoldKey(taskId, folderName);
+      const cur = wrapEl ? wrapEl.classList.contains('is-open') : isMatFolderOpen(taskId, folderName);
+      const next = !cur;
+      STATE.matFold[k] = next;
+      try { localStorage.setItem('gw_mat_fold', JSON.stringify(STATE.matFold)); } catch (e) {}
+      if (wrapEl) wrapEl.classList.toggle('is-open', next);
+    }
+
+    function getTaskMaterialFolderNames(t) {
+      const set = new Set();
+      (t.material_folders || []).forEach(mf => {
+        const n = typeof mf === 'string' ? mf : (mf && mf.name);
+        if (n) set.add(n);
+      });
+      (t.drafted_files || []).forEach(f => {
+        if (f.sub_folder) set.add(f.sub_folder);
+      });
+      return Array.from(set);
+    }
+
+    async function createTaskFolderPrompt(taskId) {
+      const dlg = await showCustomDialog({
+        title: '新建材料子文件夹',
+        message: '在「我写的材料」下建立单层分类文件夹（如：各科室报送、会议纪要、过程稿）：',
+        inputDefault: '',
+        inputPlaceholder: '输入文件夹名称...'
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
+      const name = dlg.value.trim();
+      const res = await apiFetch(`/api/tasks/${taskId}/folders`, {
+        method: 'POST',
+        body: JSON.stringify({ name })
+      });
+      if (res.task) updateSingleTaskInStateAndDOM(res.task);
+      else await refreshSingleTask(taskId);
+      showToast(`已创建文件夹【${res.folder || name}】`);
+    }
+
+    async function renameTaskFolderPrompt(taskId, oldName) {
+      const dlg = await showCustomDialog({
+        title: '重命名材料文件夹',
+        message: `将文件夹【${oldName}】重命名为：`,
+        inputDefault: oldName
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
+      const newName = dlg.value.trim();
+      if (newName === oldName) return;
+      const res = await apiFetch(`/api/tasks/${taskId}/folders`, {
+        method: 'PUT',
+        body: JSON.stringify({ old_name: oldName, new_name: newName })
+      });
+      if (res.task) updateSingleTaskInStateAndDOM(res.task);
+      else await refreshSingleTask(taskId);
+      showToast(`文件夹已重命名为【${res.new_name || newName}】`);
+    }
+
+    async function deleteTaskFolderPrompt(taskId, folderName) {
+      const dlg = await showCustomDialog({
+        title: '解散材料文件夹',
+        message: `确定移除文件夹【${folderName}】吗？默认采用安全解散模式，文件夹内的所有材料将安全移回「我写的材料」根目录，不会删除文件。`,
+        checkLabel: '同时彻底删除该文件夹内的全部文件（谨慎勾选）',
+        checkDefault: false,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      const res = await apiFetch(`/api/tasks/${taskId}/folders`, {
+        method: 'DELETE',
+        body: JSON.stringify({ name: folderName, delete_files: !!dlg.checked })
+      });
+      if (res.task) updateSingleTaskInStateAndDOM(res.task);
+      else await refreshSingleTask(taskId);
+      showToast(dlg.checked ? `已删除文件夹【${folderName}】及其内部文件` : `已安全解散【${folderName}】，内部文件已移回根目录`);
+    }
+
+    async function moveDocToFolder(docId, taskId, subFolder, targetRole = 'draft') {
+      const res = await apiFetch(`/api/docs/${docId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ sub_folder: subFolder || '', doc_role: targetRole })
+      });
+      if (res.task) updateSingleTaskInStateAndDOM(res.task);
+      else if (taskId) await refreshSingleTask(taskId);
+      showToast(subFolder ? `已移入文件夹【${subFolder}】` : '已移回材料根目录');
+    }
+
+    function onTaskFileDragStart(ev, docId, taskId, role) {
+      ev.stopPropagation();
+      ev.dataTransfer.setData('text/gw-doc-id', String(docId));
+      ev.dataTransfer.setData('text/gw-doc-task', String(taskId));
+      ev.dataTransfer.setData('text/gw-doc-role', String(role));
+      ev.dataTransfer.effectAllowed = 'move';
+    }
+
+    async function handleFileColDrop(ev, taskId, targetRole, subFolder = '') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.currentTarget) ev.currentTarget.classList.remove('drag-over');
+      if (!STATE.can_edit) return;
+      const docIdStr = ev.dataTransfer.getData('text/gw-doc-id');
+      if (docIdStr) {
+        const docId = parseInt(docIdStr);
+        const srcTask = parseInt(ev.dataTransfer.getData('text/gw-doc-task') || '0');
+        const srcRole = ev.dataTransfer.getData('text/gw-doc-role') || '';
+        if (srcTask === taskId) {
+          if (targetRole === 'incoming' && srcRole !== 'incoming') {
+            await swapFileRole(docId, 'incoming');
+          } else if (targetRole === 'draft') {
+            await moveDocToFolder(docId, taskId, subFolder, 'draft');
+          }
+        }
+        return;
+      }
+      if (ev.dataTransfer.files && ev.dataTransfer.files.length > 0) {
+        await uploadTaskFiles(taskId, targetRole, ev.dataTransfer.files, subFolder);
+      }
+    }
+
     function fileKindTag(filename) {
       const ext = String(filename || '').split('.').pop().toLowerCase();
       const map = {
@@ -4075,39 +4559,131 @@
         jpg: ['图片', 'k-img'], jpeg: ['图片', 'k-img'], png: ['图片', 'k-img'],
         gif: ['图片', 'k-img'], bmp: ['图片', 'k-img'], webp: ['图片', 'k-img'], tif: ['图片', 'k-img'],
         zip: ['ZIP', 'k-zip'], rar: ['ZIP', 'k-zip'], '7z': ['ZIP', 'k-zip'],
-        md: ['TXT', 'k-zip'], txt: ['TXT', 'k-zip']
+        md: ['MD', 'k-zip'], txt: ['TXT', 'k-zip']
       };
       const hit = map[ext] || ['文件', 'k-zip'];
       return `<span class="mf-kind ${hit[1]}">${hit[0]}</span>`;
     }
 
-    function buildMinimalFileRows(files, emptyText) {
-      const list = files || [];
-      if (list.length === 0) return `<div class="min-empty">${emptyText}</div>`;
-      return list.map(f => `
-        <div class="mf-row" onclick="openDocPreview(${f.id})" title="点击在线预览全文">
+    function buildMinimalSingleFileRow(f, taskId) {
+      const dt = String(f.updated_at || f.created_at || '').slice(5, 10);
+      const sz = formatFileSizeShort(f.file_size);
+      const meta = [dt, sz].filter(Boolean).join(' · ');
+      return `
+        <div class="mf-row" onclick="openDocPreview(${f.id})"
+             oncontextmenu="openDocContextMenu(event, ${f.id}, ${taskId})"
+             title="点击在线预览全文 · 右键更多操作">
           ${fileKindTag(f.filename)}
           <span class="mf-name">${escapeHtml(f.filename)}</span>
-          <a class="mf-dl" href="/api/docs/${f.id}/download" onclick="event.stopPropagation()" title="下载到本地">
-            ${ico('download')}
-          </a>
+          ${meta ? `<span class="mf-meta">${escapeHtml(meta)}</span>` : ''}
+          <span class="mf-acts" onclick="event.stopPropagation()">
+            ${STATE.is_localhost ? `<button class="mf-wps" onclick="openLocalPath('file', ${f.id})" title="本机 WPS 打开">WPS</button>` : ''}
+            <a class="mf-dl" href="/api/docs/${f.id}/download" title="下载到本地">${ico('download')}</a>
+          </span>
         </div>
-      `).join('');
+      `;
+    }
+
+    function buildMinimalFileRows(files, emptyText, taskId, maxShow = 4, isDraftCol = false, taskObj = null) {
+      const extF = STATE.minExtFilter || '';
+      const list = (files || []).filter(f => matchExtFilter(f.filename, extF));
+      const folderNames = (isDraftCol && taskObj) ? getTaskMaterialFolderNames(taskObj) : [];
+
+      if (list.length === 0 && folderNames.length === 0) {
+        if (!isDraftCol && taskObj && taskObj.raw_notice_text) {
+          return `<div class="min-empty-inline"><span>无来文附件</span><a href="javascript:void(0)" onclick="event.stopPropagation();previewTaskRawNotice(${taskId})" style="color:var(--primary);font-weight:600;">查看原通知全文 ↗</a></div>`;
+        }
+        return `<div class="min-empty-inline">${emptyText}</div>`;
+      }
+
+      if (isDraftCol && folderNames.length > 0) {
+        const rootFiles = list.filter(f => !f.sub_folder);
+        let html = '';
+        if (rootFiles.length > 0) {
+          const shown = rootFiles.slice(0, maxShow);
+          const extra = rootFiles.slice(maxShow);
+          html += shown.map(f => buildMinimalSingleFileRow(f, taskId)).join('');
+          if (extra.length > 0) {
+            html += `<div class="min-extra-files">${extra.map(f => buildMinimalSingleFileRow(f, taskId)).join('')}</div>
+              <button class="min-more-btn" onclick="event.stopPropagation();const ex=this.previousElementSibling;const op=ex.classList.toggle('is-expanded');this.textContent=op?'收起多余文件':'展开其余 ${extra.length} 份';">展开其余 ${extra.length} 份</button>`;
+          }
+        }
+        folderNames.forEach(fn => {
+          const fDocs = list.filter(f => f.sub_folder === fn);
+          if (extF && fDocs.length === 0) return;
+          // 极简模式下子文件夹默认折叠为紧凑单行条，点击就地展开
+          const open = isMatFolderOpen(taskId, fn, false);
+          html += `
+            <div class="min-folder-wrap ${open ? 'is-open' : ''}">
+              <div class="min-folder-pill" onclick="event.stopPropagation();toggleMatFolder(${taskId}, '${escapeJsAttr(fn)}', this.parentElement)">
+                <span class="mat-folder-chevron">${ico('chev-r')}</span>
+                ${ico('folder')}
+                <span class="mat-folder-name">${escapeHtml(fn)}</span>
+                <span class="mat-folder-cnt">${fDocs.length}</span>
+              </div>
+              <div class="min-folder-body">
+                ${fDocs.length ? fDocs.map(f => buildMinimalSingleFileRow(f, taskId)).join('') : '<div class="min-empty-inline">空文件夹</div>'}
+              </div>
+            </div>
+          `;
+        });
+        return html || `<div class="min-empty-inline">${emptyText}</div>`;
+      }
+
+      const shown = list.slice(0, maxShow);
+      const extra = list.slice(maxShow);
+      let html = shown.map(f => buildMinimalSingleFileRow(f, taskId)).join('');
+      if (extra.length > 0) {
+        html += `<div class="min-extra-files">${extra.map(f => buildMinimalSingleFileRow(f, taskId)).join('')}</div>
+          <button class="min-more-btn" onclick="event.stopPropagation();const ex=this.previousElementSibling;const op=ex.classList.toggle('is-expanded');this.textContent=op?'收起多余文件':'展开其余 ${extra.length} 份';">展开其余 ${extra.length} 份</button>`;
+      }
+      return html;
+    }
+
+    function buildMinimalListItemHtml(t) {
+      const dl = t.deadline_info || { level: 'routine', label: '常态化' };
+      const badgeClass = { danger: 'badge-danger', warning: 'badge-warning', normal: 'badge-normal', routine: 'badge-routine', archived: 'badge-archived' }[dl.level] || 'badge-routine';
+      const inc = t.incoming_files || [];
+      const draft = t.drafted_files || [];
+      const folded = isMinFolded(t.id);
+      const recDt = taskReceivedDate(t).slice(5);
+      return `
+        <article class="min-list-item lv-${dl.level} ${folded ? 'is-folded' : ''}" id="task_card_${t.id}">
+          <div class="min-list-head" onclick="toggleMinFold(${t.id}, this.parentElement)">
+            <span class="min-list-chevron">${ico('chev-r')}</span>
+            <span class="badge ${badgeClass}">${escapeHtml(dl.label)}</span>
+            ${t.is_pinned ? `<span class="badge badge-warning">置顶</span>` : ''}
+            <span class="min-list-title" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</span>
+            <span class="min-list-sub">
+              <span>${escapeHtml((t.category || '').replace(/^\d+_/, ''))}</span>
+              ${t.issuing_org ? `<span>· ${escapeHtml(t.issuing_org)}</span>` : ''}
+              <span>· ${escapeHtml(recDt)}</span>
+            </span>
+            <span class="min-fold-sum">来文 ${inc.length} · 材料 ${draft.length}</span>
+            <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" onclick="event.stopPropagation()" title="一键打包下载本事项全部文件">ZIP</a>
+          </div>
+          <div class="min-list-body">
+            <div class="min-file-block">
+              <div class="min-file-block-title blk-incoming">${ico('file')} 来文通知原件 <span class="min-count">${inc.length}</span></div>
+              ${buildMinimalFileRows(inc, '无来文原件', t.id, 6, false, t)}
+            </div>
+            <div class="min-file-block">
+              <div class="min-file-block-title blk-draft">${ico('edit')} 我写的材料 <span class="min-count">${draft.length}</span></div>
+              ${buildMinimalFileRows(draft, '暂未放入材料', t.id, 6, true, t)}
+            </div>
+          </div>
+        </article>
+      `;
     }
 
     function buildMinimalTaskCardHtml(t) {
       const dl = t.deadline_info || { level: 'routine', label: '常态化' };
-      const badgeClass = {
-        danger: 'badge-danger', warning: 'badge-warning', normal: 'badge-normal',
-        routine: 'badge-routine', archived: 'badge-archived'
-      }[dl.level] || 'badge-routine';
-
+      const badgeClass = { danger: 'badge-danger', warning: 'badge-warning', normal: 'badge-normal', routine: 'badge-routine', archived: 'badge-archived' }[dl.level] || 'badge-routine';
       const metaParts = [
-        t.category,
+        (t.category || '').replace(/^\d+_/, ''),
         `收文 ${taskReceivedDate(t).slice(5)}`,
         t.issuing_org ? `来文：${t.issuing_org}` : '',
         t.doc_number ? `文号：${t.doc_number}` : '',
-        t.source_channel || '',
         t.status === 'archived' ? '已办结' : ''
       ].filter(Boolean);
 
@@ -4117,38 +4693,30 @@
       const metaHtml = metaParts.length
         ? `<div class="min-card-meta">${metaParts.map(p => `<span>${escapeHtml(p)}</span>`).join('<span>·</span>')}</div>`
         : '';
-      const headHtml = `
-          <div class="min-card-head">
-            <span class="badge ${badgeClass}" style="margin-top:3px;">${escapeHtml(dl.label)}</span>
-            <div class="min-card-title">${escapeHtml(t.title)}</div>
-            ${folded ? `<span class="min-fold-sum">来文 ${inc.length} · 材料 ${draft.length}</span>` : ''}
-            <button class="min-fold-btn" onclick="event.stopPropagation();toggleMinFold(${t.id})"
-                    title="${folded ? '展开本事项，查看全部来文与材料' : '收起本事项，只留标题（便于快速扫标题）'}">
-              ${folded ? '▸ 展开' : '▾ 收起'}
-            </button>
-          </div>
-          ${metaHtml}`;
-
-      if (folded) {
-        return `<article class="min-card is-folded lv-${dl.level}" id="task_card_${t.id}">${headHtml}</article>`;
-      }
 
       return `
-        <article class="min-card lv-${dl.level}" id="task_card_${t.id}">
-          ${headHtml}
-
-          <div class="min-file-block">
-            <div class="min-file-block-title blk-incoming">
-              ${ico('file')} 来文通知原件 <span class="min-count">${inc.length}</span>
-            </div>
-            ${buildMinimalFileRows(inc, '本事项没有上传来文原件（通知为电话/微信文字，请见完整视图）')}
+        <article class="min-card ${folded ? 'is-folded' : ''} lv-${dl.level}" id="task_card_${t.id}">
+          <div class="min-card-head" onclick="toggleMinFold(${t.id}, this.parentElement)" title="点击整行展开或收起">
+            <span class="badge ${badgeClass}" style="margin-top:2px;">${escapeHtml(dl.label)}</span>
+            ${t.is_pinned ? `<span class="badge badge-warning" style="margin-top:2px;">置顶</span>` : ''}
+            <div class="min-card-title">${escapeHtml(t.title)}</div>
+            <span class="min-fold-sum" style="${folded ? '' : 'display:none;'}">来文 ${inc.length} · 材料 ${draft.length}</span>
+            <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" onclick="event.stopPropagation()" title="一键打包下载">ZIP</a>
           </div>
-
-          <div class="min-file-block">
-            <div class="min-file-block-title blk-draft">
-              ${ico('edit')} 我写的材料 <span class="min-count">${draft.length}</span>
+          ${metaHtml}
+          <div class="min-card-body">
+            <div class="min-file-block">
+              <div class="min-file-block-title blk-incoming">
+                ${ico('file')} 来文通知原件 <span class="min-count">${inc.length}</span>
+              </div>
+              ${buildMinimalFileRows(inc, '无来文原件', t.id, 4, false, t)}
             </div>
-            ${buildMinimalFileRows(draft, '本事项暂未放入我写的材料')}
+            <div class="min-file-block">
+              <div class="min-file-block-title blk-draft">
+                ${ico('edit')} 我写的材料 <span class="min-count">${draft.length}</span>
+              </div>
+              ${buildMinimalFileRows(draft, '暂未放入材料', t.id, 4, true, t)}
+            </div>
           </div>
         </article>
       `;
@@ -4156,45 +4724,72 @@
 
     function renderMinimalBrowse(filtered) {
       const container = document.getElementById('tasksContainer');
+      const kw = (STATE.minQuickKw || '').trim().toLowerCase();
+      const extF = STATE.minExtFilter || '';
+
+      let list = filtered;
+      if (kw) {
+        list = list.filter(t => {
+          const filesHay = [...(t.incoming_files || []), ...(t.drafted_files || [])].map(f => `${f.filename} ${f.sub_folder || ''}`).join(' ');
+          const hay = `${t.title} ${t.category || ''} ${t.issuing_org || ''} ${t.doc_number || ''} ${filesHay}`.toLowerCase();
+          return hay.includes(kw);
+        });
+      }
+      if (extF) {
+        list = list.filter(t => {
+          const allF = [...(t.incoming_files || []), ...(t.drafted_files || [])];
+          return allF.some(f => matchExtFilter(f.filename, extF));
+        });
+      }
+
       const onlyActive = STATE.taskStatusFilter === 'active';
       const allLink = onlyActive
-        ? ` · 当前只看未办结，找历史材料请点 <a href="javascript:void(0)" onclick="switchTaskFilterToAll()" style="color:var(--primary);font-weight:700;">全部</a>`
+        ? ` · 当前只看未办结，找历史请点 <a href="javascript:void(0)" onclick="switchTaskFilterToAll()" style="color:var(--primary);font-weight:700;">全部</a>`
         : '';
-      if (filtered.length === 0) {
+      if (list.length === 0) {
         container.innerHTML = `<div style="background:var(--surface);padding:44px;text-align:center;border-radius:12px;border:1px solid var(--border);color:var(--text-muted);font-size:14px;">
           当前筛选条件下没有可浏览的事项文件。${allLink}
         </div>`;
         return;
       }
+
       let incTotal = 0, draftTotal = 0;
-      filtered.forEach(t => {
+      list.forEach(t => {
         incTotal += (t.incoming_files || []).length;
         draftTotal += (t.drafted_files || []).length;
       });
 
-      // 两列：奇偶分配到两根独立竖列（1左2右3左…），卡片紧贴无行内空白；
-      // 折叠/展开只改变卡片自身高度，不会让卡片在两列之间换位，排序始终稳定
-      const cards = filtered.map(buildMinimalTaskCardHtml);
-      let colsHtml;
-      if (STATE.minCols === 1) {
-        colsHtml = `<div class="minimal-cols is-one"><div class="min-col">${cards.join('')}</div></div>`;
-      } else {
-        const left = [], right = [];
-        cards.forEach((html, i) => (i % 2 === 0 ? left : right).push(html));
-        colsHtml = `<div class="minimal-cols is-two">
-            <div class="min-col">${left.join('')}</div>
-            <div class="min-col">${right.join('')}</div>
-          </div>`;
-      }
+      // 按 置顶 / 本月 / 更早 插入轻量时间分组分隔条
+      const curMonth = new Date().toISOString().slice(0, 7);
+      const groups = [
+        { key: 'pinned', label: '置顶事项', items: [] },
+        { key: 'month', label: `本月 (${curMonth})`, items: [] },
+        { key: 'earlier', label: '更早事项', items: [] }
+      ];
+      list.forEach(t => {
+        if (t.is_pinned) groups[0].items.push(t);
+        else if (taskReceivedDate(t).startsWith(curMonth)) groups[1].items.push(t);
+        else groups[2].items.push(t);
+      });
+
+      const isGrid = STATE.minLayout === 'grid';
+      const nonEmptyGroups = groups.filter(g => g.items.length > 0);
+      const bodyHtml = nonEmptyGroups.map(g => {
+        const sep = nonEmptyGroups.length > 1 ? `<div class="min-group-sep">${escapeHtml(g.label)} (${g.items.length})</div>` : '';
+        if (isGrid) {
+          return `${sep}<div class="min-grid-wrap">${g.items.map(buildMinimalTaskCardHtml).join('')}</div>`;
+        }
+        return `${sep}<div class="min-list-wrap">${g.items.map(buildMinimalListItemHtml).join('')}</div>`;
+      }).join('');
 
       container.innerHTML = `
         <div class="min-bar">
-          <span>共 <b>${filtered.length}</b> 个事项 · 来文原件 <b>${incTotal}</b> 份 · 我写的材料 <b>${draftTotal}</b> 份
-            <span style="font-size:12.5px;color:var(--text-muted);">（${SORT_LABELS[STATE.taskSort] || SORT_LABELS.received_desc}）</span>
+          <span>共 <b>${list.length}</b> 个事项 · 来文原件 <b>${incTotal}</b> 份 · 我写的材料 <b>${draftTotal}</b> 份
+            <span style="font-size:12px;color:var(--text-muted);">（${SORT_LABELS[STATE.taskSort] || SORT_LABELS.received_desc}）</span>
           </span>
-          <span class="min-bar-hint">点击文件名在线预览，点右侧箭头下载${allLink}</span>
+          <span class="min-bar-hint">点击事项行展开文件，点击文件名预览，右键更多操作${allLink}</span>
         </div>
-        ${colsHtml}
+        ${bodyHtml}
       `;
     }
 
@@ -4224,15 +4819,98 @@
       }
     }
 
+    function buildFullFileItemHtml(f, taskId, role) {
+      const swapTarget = role === 'incoming' ? 'draft' : 'incoming';
+      const swapTitle = role === 'incoming' ? '切换为【我写的材料】' : '切换为【来文原件】';
+      return `
+        <div class="file-item"
+             draggable="${STATE.can_edit ? 'true' : 'false'}"
+             ondragstart="onTaskFileDragStart(event, ${f.id}, ${taskId}, '${role}')"
+             oncontextmenu="openDocContextMenu(event, ${f.id}, ${taskId})">
+          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览 · 拖拽可移动/切换栏位 · 右键更多操作">${escapeHtml(f.filename)}</span>
+          <div class="file-acts">
+            ${role === 'draft' && STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${f.id})" title="按 GB/T 9704 国标公文排版导出 .docx">国标</button>` : ''}
+            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机 WPS 中直接打开">WPS</button>` : ''}
+            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, '${swapTarget}')" title="${swapTitle}">⇄</button>` : ''}
+            <a class="btn btn-xs" href="/api/docs/${f.id}/download" title="下载">下</a>
+          </div>
+        </div>
+      `;
+    }
+
+    function buildFullDraftColumnHtml(t) {
+      const files = t.drafted_files || [];
+      const folders = getTaskMaterialFolderNames(t);
+      const hasFolders = folders.length > 0;
+      const rootFiles = files.filter(f => !f.sub_folder);
+
+      if (!hasFolders) {
+        // 零文件夹时 100% 透明：常规列表，不增额外框体
+        const listHtml = files.map(f => buildFullFileItemHtml(f, t.id, 'draft')).join('')
+          || `<div style="color:var(--text-muted);font-size:12px;">暂未放入材料（可点【双栏写稿】或直接把文件拖到本栏）</div>`;
+        const hintKey = `gw_fhint_dismiss_${t.id}`;
+        const showHint = STATE.can_edit && files.length >= 6 && !sessionStorage.getItem(hintKey);
+        const hintHtml = showHint
+          ? `<div class="mat-folder-hint">
+               <span>材料较多，新建文件夹分类？</span>
+               <span style="display:inline-flex;gap:4px;">
+                 <button class="btn btn-xs btn-primary" onclick="createTaskFolderPrompt(${t.id})">+ 新建</button>
+                 <button class="btn btn-xs" onclick="sessionStorage.setItem('${hintKey}','1');this.closest('.mat-folder-hint').remove();" title="关闭提示" aria-label="关闭">${ico('x')}</button>
+               </span>
+             </div>`
+          : '';
+        return listHtml + hintHtml;
+      }
+
+      // 有文件夹时：根目录文件置顶 + 子文件夹单层内联折叠
+      const rootHtml = `
+        <div class="mat-root-dropzone"
+             ondragover="if(STATE.can_edit){event.preventDefault();event.stopPropagation();this.classList.add('drag-over');}"
+             ondragleave="this.classList.remove('drag-over');"
+             ondrop="handleFileColDrop(event, ${t.id}, 'draft', '')">
+          ${rootFiles.map(f => buildFullFileItemHtml(f, t.id, 'draft')).join('')}
+        </div>
+      `;
+
+      const foldersHtml = folders.map(fn => {
+        const fDocs = files.filter(f => f.sub_folder === fn);
+        const open = isMatFolderOpen(t.id, fn, true);
+        return `
+          <div class="mat-folder-block ${open ? 'is-open' : ''}">
+            <div class="mat-folder-head"
+                 onclick="toggleMatFolder(${t.id}, '${escapeJsAttr(fn)}', this.parentElement)"
+                 ondragover="if(STATE.can_edit){event.preventDefault();event.stopPropagation();this.classList.add('drag-over');}"
+                 ondragleave="this.classList.remove('drag-over');"
+                 ondrop="handleFileColDrop(event, ${t.id}, 'draft', '${escapeJsAttr(fn)}')">
+              <span class="mat-folder-chevron">${ico('chev-r')}</span>
+              ${ico('folder')}
+              <span class="mat-folder-name" title="${escapeHtml(fn)}">${escapeHtml(fn)}</span>
+              <span class="mat-folder-cnt">${fDocs.length}</span>
+              ${STATE.can_edit ? `
+                <span class="mat-folder-ops" onclick="event.stopPropagation()">
+                  <label class="btn btn-xs" style="padding:1px 4px;cursor:pointer;" title="上传文件到此文件夹">
+                    ${ico('plus')}
+                    <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'draft', this.files, '${escapeJsAttr(fn)}'); this.value='';" />
+                  </label>
+                  <button class="btn btn-xs" style="padding:1px 4px;" onclick="renameTaskFolderPrompt(${t.id}, '${escapeJsAttr(fn)}')" title="重命名文件夹" aria-label="重命名">${ico('edit')}</button>
+                  <button class="btn btn-xs" style="padding:1px 4px;" onclick="deleteTaskFolderPrompt(${t.id}, '${escapeJsAttr(fn)}')" title="解散文件夹（文件移回根目录）" aria-label="解散文件夹">${ico('trash')}</button>
+                </span>
+              ` : ''}
+            </div>
+            <div class="mat-folder-body">
+              ${fDocs.length ? fDocs.map(f => buildFullFileItemHtml(f, t.id, 'draft')).join('') : `<div style="font-size:11.5px;color:var(--text-muted);padding:3px 0;">空文件夹（可拖拽文件到标题行移入）</div>`}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return rootHtml + foldersHtml;
+    }
+
     function buildSingleTaskCardHtml(t) {
       const dl = t.deadline_info || { level: 'routine', label: '常态化' };
-      const badgeClass = {
-        danger: 'badge-danger',
-        warning: 'badge-warning',
-        normal: 'badge-normal',
-        routine: 'badge-routine',
-        archived: 'badge-archived'
-      }[dl.level] || 'badge-routine';
+      const badgeClass = { danger: 'badge-danger', warning: 'badge-warning', normal: 'badge-normal', routine: 'badge-routine', archived: 'badge-archived' }[dl.level] || 'badge-routine';
+      const isSelected = !!(window._SELECTED_TASK_IDS && window._SELECTED_TASK_IDS.has(t.id));
 
       const doneCnt = (t.checklist || []).filter(x => x.done).length;
       const totalCnt = (t.checklist || []).length;
@@ -4251,9 +4929,10 @@
 
       if (t.is_collapsed) {
         return `
-          <article class="task-card level-${dl.level}" id="task_card_${t.id}" style="padding:10px 15px;">
+          <article class="task-card level-${dl.level} ${isSelected ? 'selected-card' : ''}" id="task_card_${t.id}" style="padding:10px 15px;">
             <div class="task-header" style="align-items:center;">
               <div class="task-title-line" style="flex:1;">
+                ${STATE.can_edit ? `<input type="checkbox" class="task-sel-cb" ${isSelected ? 'checked' : ''} onchange="toggleTaskSelect(${t.id}, this.checked)" style="margin-right:4px;cursor:pointer;" />` : ''}
                 <span class="badge ${badgeClass}">${escapeHtml(dl.label)}</span>
                 <span class="task-title" onclick="toggleTaskCollapse(${t.id}, false)">${escapeHtml(t.title)}</span>
                 <span class="badge badge-routine">清单 ${doneCnt}/${totalCnt} (${pct}%)</span>
@@ -4292,57 +4971,52 @@
         ? `<span class="chk-more-toggle" onclick="toggleTaskChecklistExpand(${t.id})">展开其余 ${hiddenChkCount} 条细项...</span>`
         : (isChkExpanded && orderedChecks.length > 3 ? `<span class="chk-more-toggle" onclick="toggleTaskChecklistExpand(${t.id})">收起细项</span>` : '');
 
-      const progHtml = (t.progress_logs || []).map(p => `
+      const progHtml = (t.progress_logs || []).map((p, idx) => `
         <li class="prog-item">
-          <span class="prog-time">[${escapeHtml(p.time)}]</span>${escapeHtml(p.text)}
+          <span class="prog-time">[${escapeHtml(p.time)}]</span><span class="prog-text">${escapeHtml(p.text)}</span>
+          ${STATE.can_edit ? `
+            <span class="prog-ops">
+              <button class="btn btn-xs" style="padding:1px 4px;" onclick="editProgressPrompt(${t.id}, ${idx})" title="编辑此进展">${ico('edit')}</button>
+              <button class="btn btn-xs" style="padding:1px 4px;" onclick="deleteProgressItem(${t.id}, ${idx})" title="删除此进展">${ico('x')}</button>
+            </span>
+          ` : ''}
         </li>
       `).join('') || `<li style="color:var(--text-muted);font-size:12px;">暂无进展记录</li>`;
 
-      const incFilesHtml = (t.incoming_files || []).map(f => `
-        <div class="file-item">
-          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击直接预览全文">${escapeHtml(f.filename)}</span>
-          <div class="file-acts">
-            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开">WPS</button>` : ''}
-            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, 'draft')" title="切换为【我写的材料】">⇄</button>` : ''}
-            <a class="btn btn-xs" href="/api/docs/${f.id}/download">下</a>
-          </div>
-        </div>
-      `).join('') || `<div style="color:var(--text-muted);font-size:12px;">${t.raw_notice_text ? `<span class="file-name-link" onclick="previewTaskRawNotice(${t.id})">查看原始微信/通知文本</span>` : '无独立附件'}</div>`;
+      const incFilesHtml = (t.incoming_files || []).map(f => buildFullFileItemHtml(f, t.id, 'incoming')).join('')
+        || `<div style="color:var(--text-muted);font-size:12px;">${t.raw_notice_text ? `<span class="file-name-link" onclick="previewTaskRawNotice(${t.id})">查看原始微信/通知文本</span>` : '无独立附件'}</div>`;
 
-      const draftFilesHtml = (t.drafted_files || []).map(f => `
-        <div class="file-item">
-          <span class="file-name-link" onclick="openDocPreview(${f.id})" title="点击预览、双栏在线改稿或导出国标公文">${escapeHtml(f.filename)}</span>
-          <div class="file-acts">
-            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="quickFormatDocToGw(${f.id})" title="按 GB/T 9704 国标公文排版导出 .docx">国标</button>` : ''}
-            ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})" title="在本机麒麟 WPS 中直接打开编辑">WPS</button>` : ''}
-            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="swapFileRole(${f.id}, 'incoming')" title="切换为【来文原件】">⇄</button>` : ''}
-            <a class="btn btn-xs" href="/api/docs/${f.id}/download">下</a>
-          </div>
-        </div>
-      `).join('') || `<div style="color:var(--text-muted);font-size:12px;">暂未放入材料（可点右上【双栏写稿】或直接把文件拖到本卡片上）</div>`;
+      const draftFilesHtml = buildFullDraftColumnHtml(t);
 
-      const refsHtml = (t.reference_docs || []).map(r => `
-        <span class="ref-chip" onclick="openDocPreview(${r.id})" title="点击对比预览库内历史参考材料">
-          ${r.is_starred ? '⭐' : ''} ${escapeHtml(r.filename)}
-        </span>
-      `).join('');
+      // 按需异步关联旧稿（v3.3.0：bootstrap 不再同步计算，卡片内点击按需加载）
+      const cachedRefs = STATE.taskRefsCache[t.id] || (t.reference_docs && t.reference_docs.length ? t.reference_docs : null);
+      let refsAreaHtml = '';
+      if (cachedRefs && cachedRefs.length > 0) {
+        refsAreaHtml = cachedRefs.map(r => `
+          <span class="ref-chip" onclick="openDocPreview(${r.id})" title="点击对比预览库内历史参考材料">
+            ${r.is_starred ? '⭐' : ''} ${escapeHtml(r.filename)}
+            ${STATE.can_edit ? `<button class="btn btn-xs" style="margin-left:4px;padding:0 5px;font-size:10.5px;" onclick="event.stopPropagation();copyRefDocToTask(${t.id}, ${r.id})" title="一键复制该旧稿到本事项「我写的材料」">+引用</button>` : ''}
+          </span>
+        `).join('');
+      } else if (cachedRefs && cachedRefs.length === 0) {
+        refsAreaHtml = `<span style="color:var(--text-muted);">暂未匹配到同类旧稿，可在【公文与材料库】星标常用范文</span>`;
+      } else {
+        refsAreaHtml = `<button class="btn btn-xs" onclick="loadTaskReferences(${t.id}, this)">查看相似旧稿</button>`;
+      }
 
       return `
-        <article class="task-card level-${dl.level}" id="task_card_${t.id}"
-          ondragover="if(STATE.can_edit){event.preventDefault();this.style.outline='2px dashed var(--primary)';}"
-          ondragleave="this.style.outline='none';"
-          ondrop="this.style.outline='none';if(STATE.can_edit){event.preventDefault();uploadTaskFiles(${t.id}, 'draft', event.dataTransfer.files);}">
+        <article class="task-card level-${dl.level} ${isSelected ? 'selected-card' : ''}" id="task_card_${t.id}">
           <div class="task-header">
             <div class="task-title-wrap">
               <div class="task-title-line">
-                ${STATE.can_edit ? `<input type="checkbox" class="task-sel-cb" ${(window._SELECTED_TASK_IDS && window._SELECTED_TASK_IDS.has(t.id)) ? 'checked' : ''} onchange="toggleTaskSelect(${t.id}, this.checked)" title="多选用于批量归档或改分类" style="margin-right:4px;cursor:pointer;" />` : ''}
+                ${STATE.can_edit ? `<input type="checkbox" class="task-sel-cb" ${isSelected ? 'checked' : ''} onchange="toggleTaskSelect(${t.id}, this.checked)" title="多选用于批量归档或改分类" style="margin-right:4px;cursor:pointer;" />` : ''}
                 <span class="badge ${badgeClass} ${STATE.can_edit ? 'badge-clickable' : ''}" ${STATE.can_edit ? `onclick="openInlineDeadlinePicker(this, ${t.id}, '${escapeJsAttr(t.deadline || '')}')" title="点击快速修改截止日期"` : ''}>${escapeHtml(dl.label)}</span>
                 ${t.priority === '紧急'
                   ? `<span class="badge badge-danger ${STATE.can_edit ? 'badge-clickable' : ''}" ${STATE.can_edit ? `onclick="cycleTaskPriority(${t.id}, '紧急')" title="点击切换紧急程度"` : ''}>${ico('flame')} 紧急</span>`
                   : (t.priority === '重要'
                     ? `<span class="badge badge-warning ${STATE.can_edit ? 'badge-clickable' : ''}" ${STATE.can_edit ? `onclick="cycleTaskPriority(${t.id}, '重要')" title="点击切换紧急程度"` : ''}>重要</span>`
-                    : (STATE.can_edit ? `<span class="badge badge-clickable" style="background:#f1f5f9;color:#64748b;" onclick="cycleTaskPriority(${t.id}, '普通')" title="点击切换紧急程度">普通</span>` : ''))}
-                <span class="task-title" onclick="openEditTaskModal(${t.id})">${escapeHtml(t.title)}</span>
+                    : (STATE.can_edit ? `<span class="badge badge-priority-normal badge-clickable" onclick="cycleTaskPriority(${t.id}, '普通')" title="点击切换紧急程度">普通</span>` : ''))}
+                <span class="task-title" ${STATE.can_edit ? `ondblclick="event.stopPropagation();startInlineEditTaskField(this, ${t.id}, 'title')" title="双击就地修改标题 · 点右侧编辑打开完整表单"` : ''} onclick="openEditTaskModal(${t.id})">${escapeHtml(t.title)}</span>
               </div>
               <div class="task-submeta">
                 ${subMetaParts.map(p => `<span>${escapeHtml(p)}</span>`).join('<span>·</span>')}
@@ -4350,12 +5024,8 @@
             </div>
 
             <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
-              ${STATE.can_edit ? `
-                <button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id}, true)" title="开启左看要求/重要事项底数/会议纪要、右写新材料的双栏对照撰稿工作台">双栏对照写材料</button>
-              ` : ''}
-              ${STATE.is_localhost ? `
-                <button class="btn btn-xs" onclick="openTaskLocalFolder(${t.id})" title="在麒麟文件管理器中直接打开本事项物理文件夹">打开目录</button>
-              ` : ''}
+              ${STATE.can_edit ? `<button class="btn btn-xs btn-success" onclick="openOnlineEditorForTask(${t.id}, true)" title="开启双栏对照撰稿工作台">双栏对照写材料</button>` : ''}
+              ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openTaskLocalFolder(${t.id})" title="在本机文件管理器打开物理文件夹">打开目录</button>` : ''}
               <a class="btn btn-xs" href="/api/tasks/${t.id}/zip" title="打包下载本事项全部文件 (.zip)">打包下载</a>
               ${STATE.can_edit ? `
                 <select class="form-control" style="padding:2px 6px;font-size:12px;width:auto;font-weight:600;"
@@ -4376,7 +5046,7 @@
           </div>
 
           <div class="task-summary">
-            <strong>核心要求：</strong>${escapeHtml(t.summary || '暂无摘要')}
+            <strong>核心要求：</strong><span ${STATE.can_edit ? `ondblclick="startInlineEditTaskField(this, ${t.id}, 'summary')" title="双击就地修改核心要求" style="cursor:text;"` : ''}>${escapeHtml(t.summary || '暂无摘要')}</span>
             ${t.raw_notice_text ? `<span style="margin-left:10px;color:var(--primary);cursor:pointer;font-weight:600;" onclick="previewTaskRawNotice(${t.id})">[查看通知原文]</span>` : ''}
           </div>
 
@@ -4405,9 +5075,7 @@
 
             <div class="sub-box">
               <div>
-                <div class="sub-box-title">
-                  <span>实时进展记录</span>
-                </div>
+                <div class="sub-box-title"><span>实时进展记录</span></div>
                 <ul class="prog-list">${progHtml}</ul>
               </div>
               ${STATE.can_edit ? `
@@ -4421,27 +5089,34 @@
 
             <div class="sub-box">
               <div class="dual-files">
-                <div class="file-col">
+                <div class="file-col"
+                     ondragover="if(STATE.can_edit){event.preventDefault();event.stopPropagation();this.classList.add('drag-over');}"
+                     ondragleave="this.classList.remove('drag-over');"
+                     ondrop="handleFileColDrop(event, ${t.id}, 'incoming', '')">
                   <div class="sub-box-title">
                     <span>来文/通知原件</span>
                     ${STATE.can_edit ? `
                       <label style="color:var(--primary);cursor:pointer;font-size:11px;">
                         +传原件
-                        <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'incoming', this.files)" />
+                        <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'incoming', this.files); this.value='';" />
                       </label>
                     ` : ''}
                   </div>
                   ${incFilesHtml}
                 </div>
-                <div class="file-col">
+                <div class="file-col"
+                     ondragover="if(STATE.can_edit){event.preventDefault();event.stopPropagation();this.classList.add('drag-over');}"
+                     ondragleave="this.classList.remove('drag-over');"
+                     ondrop="handleFileColDrop(event, ${t.id}, 'draft', '')">
                   <div class="sub-box-title">
                     <span>我写的材料</span>
                     ${STATE.can_edit ? `
-                      <div style="display:flex;gap:6px;">
-                        <span style="color:var(--success);cursor:pointer;font-size:11px;" onclick="openOnlineEditorForTask(${t.id}, true)">+双栏写稿</span>
+                      <div style="display:flex;gap:6px;align-items:center;">
+                        <span style="color:var(--text-secondary);cursor:pointer;font-size:11px;" onclick="createTaskFolderPrompt(${t.id})" title="新建单层材料子文件夹">+文件夹</span>
+                        <span style="color:var(--success);cursor:pointer;font-size:11px;" onclick="openOnlineEditorForTask(${t.id}, true)">+写稿</span>
                         <label style="color:var(--primary);cursor:pointer;font-size:11px;">
                           +上传
-                          <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'draft', this.files)" />
+                          <input type="file" multiple style="display:none;" onchange="uploadTaskFiles(${t.id}, 'draft', this.files); this.value='';" />
                         </label>
                       </div>
                     ` : ''}
@@ -4459,9 +5134,9 @@
           </div>
 
           <div class="ref-bar">
-            <div class="ref-chips">
+            <div class="ref-chips" id="taskRefsWrap_${t.id}">
               <strong style="color:var(--text-secondary);">库内关联参考旧稿：</strong>
-              ${refsHtml || '<span style="color:var(--text-muted);">暂未匹配到同类旧稿，可在【公文与材料库】星标常用范文</span>'}
+              ${refsAreaHtml}
             </div>
             <button class="btn btn-xs" onclick="copyAgentDraftingPrompt(${t.id})">
               复制本地 Agent 撰稿上下文
@@ -4490,8 +5165,10 @@
               ${list.map(t => {
                 const dl = t.deadline_info || { level: 'routine', label: '常态' };
                 const latestProg = (t.progress_logs && t.progress_logs[0]) ? `[${t.progress_logs[0].time}] ${t.progress_logs[0].text}` : '暂无';
+                const incList = t.incoming_files || [];
+                const drList = t.drafted_files || [];
                 return `
-                  <tr>
+                  <tr id="task_card_${t.id}">
                     <td><span class="badge badge-${dl.level}">${escapeHtml(dl.label)}</span></td>
                     <td style="white-space:nowrap;font-size:12px;color:var(--text-secondary);">${escapeHtml(taskReceivedDate(t))}</td>
                     <td>
@@ -4510,8 +5187,8 @@
                       ` : ''}
                     </td>
                     <td>
-                      ${(t.incoming_files||[]).map(f => `<div class="file-name-link" onclick="openDocPreview(${f.id})">${escapeHtml(f.filename)}</div>`).join('')}
-                      ${(t.drafted_files||[]).map(f => `<div class="file-name-link" onclick="openDocPreview(${f.id})">${escapeHtml(f.filename)}</div>`).join('')}
+                      ${incList.length ? `<div class="tbl-file-sec sec-inc">来文 (${incList.length})</div>` + incList.map(f => `<div class="file-name-link" onclick="openDocPreview(${f.id})" oncontextmenu="openDocContextMenu(event, ${f.id}, ${t.id})">${escapeHtml(f.filename)}</div>`).join('') : ''}
+                      ${drList.length ? `<div class="tbl-file-sec sec-draft">材料 (${drList.length})</div>` + drList.map(f => `<div class="file-name-link" onclick="openDocPreview(${f.id})" oncontextmenu="openDocContextMenu(event, ${f.id}, ${t.id})">${f.sub_folder ? `[${escapeHtml(f.sub_folder)}] ` : ''}${escapeHtml(f.filename)}</div>`).join('') : ''}
                     </td>
                     <td>
                       <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -4527,6 +5204,99 @@
           </table>
         </div>
       `;
+    }
+
+    async function loadTaskReferences(taskId, btnEl) {
+      if (btnEl) { btnEl.disabled = true; btnEl.textContent = '匹配中...'; }
+      try {
+        const res = await apiFetch(`/api/tasks/${taskId}/references`);
+        STATE.taskRefsCache[taskId] = res.reference_docs || [];
+        const t = (STATE.tasks || []).find(x => x.id === taskId);
+        if (t) {
+          t.reference_docs = STATE.taskRefsCache[taskId];
+          updateSingleTaskInStateAndDOM(t);
+        }
+      } catch (err) {
+        if (btnEl) { btnEl.disabled = false; btnEl.textContent = '重试匹配'; }
+        showToast('加载关联旧稿失败：' + (err.message || err));
+      }
+    }
+
+    async function copyRefDocToTask(taskId, sourceDocId) {
+      const res = await apiFetch(`/api/tasks/${taskId}/copy-doc`, {
+        method: 'POST',
+        body: JSON.stringify({ source_doc_id: sourceDocId, role: 'draft' })
+      });
+      if (res.task) updateSingleTaskInStateAndDOM(res.task);
+      else await refreshSingleTask(taskId);
+      showToast('已将参考旧稿复制到本事项「我写的材料」！');
+    }
+
+    function startInlineEditTaskField(spanEl, taskId, field) {
+      if (!STATE.can_edit) return;
+      const orig = spanEl.textContent === '暂无摘要' ? '' : (spanEl.textContent || '');
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.className = 'chk-inline-edit';
+      inp.value = orig;
+      spanEl.replaceWith(inp);
+      inp.focus();
+      inp.select();
+      let done = false;
+      const finish = async (save) => {
+        if (done) return;
+        done = true;
+        const val = inp.value.trim();
+        if (save && val !== orig && (field !== 'title' || val.length > 0)) {
+          const res = await apiFetch(`/api/tasks/${taskId}`, {
+            method: 'PUT',
+            body: JSON.stringify({ [field]: val })
+          });
+          if (res.task) updateSingleTaskInStateAndDOM(res.task);
+          showToast(field === 'title' ? '事项标题已更新' : '核心要求已更新');
+        } else {
+          const t = STATE.tasks.find(x => x.id === taskId);
+          if (t) updateSingleTaskInStateAndDOM(t);
+        }
+      };
+      inp.addEventListener('blur', () => finish(true));
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      });
+    }
+
+    async function editProgressPrompt(taskId, index) {
+      const t = (STATE.tasks || []).find(x => x.id === taskId);
+      const item = t && t.progress_logs && t.progress_logs[index];
+      if (!item) return;
+      const dlg = await showCustomDialog({
+        title: '编辑进展记录',
+        message: `修改 [${item.time}] 的进展内容：`,
+        inputDefault: item.text
+      });
+      if (!dlg || !dlg.confirmed || !dlg.value || !dlg.value.trim()) return;
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ edit_progress: { index, text: dlg.value.trim() } })
+      });
+      if (res.task) updateSingleTaskInStateAndDOM(res.task);
+      showToast('进展记录已更新');
+    }
+
+    async function deleteProgressItem(taskId, index) {
+      const dlg = await showCustomDialog({
+        title: '删除进展记录',
+        message: '确定删除这条进展记录吗？',
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ delete_progress: index })
+      });
+      if (res.task) updateSingleTaskInStateAndDOM(res.task);
+      showToast('已删除该条进展记录');
     }
 
     async function toggleCheckItem(taskId, checkId) {
@@ -4561,19 +5331,19 @@
 
     function showUndoToast(message, undoFn) {
       _UNDO_SNAPSHOT = undoFn;
-      const el = document.getElementById('toast');
+      const el = document.getElementById('toastBox');
       if (!el) return;
       el.innerHTML = `${escapeHtml(message)} <button class="toast-undo-btn" onclick="runLastUndo()">撤销</button>`;
-      el.classList.add('show');
+      el.style.display = 'block';
       clearTimeout(window._toastTimer);
-      window._toastTimer = setTimeout(() => { el.classList.remove('show'); _UNDO_SNAPSHOT = null; }, 5500);
+      window._toastTimer = setTimeout(() => { el.style.display = 'none'; _UNDO_SNAPSHOT = null; }, 5500);
     }
 
     async function runLastUndo() {
       const fn = _UNDO_SNAPSHOT;
       _UNDO_SNAPSHOT = null;
-      const el = document.getElementById('toast');
-      if (el) el.classList.remove('show');
+      const el = document.getElementById('toastBox');
+      if (el) el.style.display = 'none';
       if (typeof fn === 'function') await fn();
     }
 
@@ -4788,6 +5558,32 @@
       showToast(`已将 ${res.updated_count || ids.length} 项待办移至 ${cat}`);
     }
 
+    async function batchTasksSetPriority(priority) {
+      const ids = Array.from(window._SELECTED_TASK_IDS);
+      if (!ids.length || !priority) return;
+      const res = await apiFetch('/api/tasks/batch', { method: 'POST', body: JSON.stringify({ task_ids: ids, action: 'set_priority', priority }) });
+      clearTaskSelection();
+      await loadBootstrap();
+      showToast(`已将 ${res.updated_count || ids.length} 项待办设为【${priority}】`);
+    }
+
+    async function batchTasksDelete() {
+      const ids = Array.from(window._SELECTED_TASK_IDS);
+      if (!ids.length) return;
+      const dlg = await showCustomDialog({
+        title: '批量删除待办事项',
+        message: `确定删除已勾选的 ${ids.length} 项待办吗？`,
+        checkLabel: '同时删除本机硬盘对应事项文件夹（不可恢复）',
+        checkDefault: false,
+        danger: true
+      });
+      if (!dlg || !dlg.confirmed) return;
+      const res = await apiFetch('/api/tasks/batch', { method: 'POST', body: JSON.stringify({ task_ids: ids, action: 'delete', delete_disk: !!dlg.checked }) });
+      clearTaskSelection();
+      await loadBootstrap();
+      showToast(`已批量删除 ${res.deleted_count || ids.length} 项待办`);
+    }
+
     async function quickAppendProgressFromEl(taskId, el) {
       const text = el.value.trim();
       if (!text) return;
@@ -4897,26 +5693,29 @@
       }
     }
 
-    async function uploadTaskFiles(taskId, role, fileList) {
+    async function uploadTaskFiles(taskId, role, fileList, subFolder = '') {
       if (!fileList || fileList.length === 0) return;
-      showToast('正在上传并提取全文索引...');
-      const payloadFiles = [];
-      for (const f of fileList) {
-        payloadFiles.push({
-          filename: f.name,
-          content_base64: await fileToBase64(f),
-          doc_role: role
-        });
-      }
-      const res = await apiFetch(`/api/tasks/${taskId}/files`, {
-        method: 'POST',
-        body: JSON.stringify({ doc_role: role, files: payloadFiles })
+      showToast('正在流式上传并提取全文索引...');
+      const res = await uploadFilesFormData(`/api/tasks/${taskId}/files`, fileList, {
+        role: role || 'draft',
+        doc_role: role || 'draft',
+        sub_folder: subFolder || ''
       });
-      updateSingleTaskInStateAndDOM(res.task);
-      showToast('文件已存入事项本地文件夹并建立全文索引！');
+      if (res && res.task) updateSingleTaskInStateAndDOM(res.task);
+      else await refreshSingleTask(taskId);
+      showToast(subFolder ? `文件已存入【${subFolder}】并建立全文索引！` : '文件已存入事项本地文件夹并建立全文索引！');
     }
 
     // ==================== TAB 2 (新增): 资料存档 (Archives) 交互实现 ====================
+    function toggleArchiveIntakeBox(forceOpen) {
+      const box = document.getElementById('archiveIntakeBox');
+      if (!box) return;
+      const collapsed = typeof forceOpen === 'boolean' ? !forceOpen : !box.classList.contains('is-collapsed');
+      box.classList.toggle('is-collapsed', collapsed);
+      const btn = document.getElementById('btnToggleArchIntake');
+      if (btn) btn.textContent = collapsed ? '展开新建' : '收起';
+    }
+
     function fillArchiveTodayPrefix() {
       const now = new Date();
       const prefix = `${now.getMonth() + 1}.${String(now.getDate()).padStart(2, '0')}`;
@@ -4968,7 +5767,7 @@
       bar.innerHTML = STATE.archPendingFiles.map((f, idx) => `
         <span class="file-pill">
           ${escapeHtml(f.filename)}
-          <span style="cursor:pointer;font-weight:700;" onclick="STATE.archPendingFiles.splice(${idx},1);renderArchivePendingFiles();"></span>
+          <span style="cursor:pointer;display:inline-flex;align-items:center;" title="移除待传文件" onclick="STATE.archPendingFiles.splice(${idx},1);renderArchivePendingFiles();">${ico('x')}</span>
         </span>
       `).join('');
     }
@@ -5042,8 +5841,8 @@
             <div style="display:flex;align-items:center;gap:4px;">
               ${STATE.can_edit ? `
                 <span class="cat-ops" onclick="event.stopPropagation();">
-                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameScopeCategoryPrompt('archive', '${escapeJsAttr(cat)}')" title="重命名分类"></button>
-                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteScopeCategoryPrompt('archive', '${escapeJsAttr(cat)}')" title="删除空分类"></button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameScopeCategoryPrompt('archive', '${escapeJsAttr(cat)}')" title="重命名分类" aria-label="重命名分类">${ico('edit')}</button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteScopeCategoryPrompt('archive', '${escapeJsAttr(cat)}')" title="删除空分类" aria-label="删除空分类">${ico('trash')}</button>
                 </span>
               ` : ''}
               <span class="badge badge-routine">${count}</span>
@@ -5150,14 +5949,16 @@
 
       const cover = imgs.length
         ? `<img src="${escapeHtml(imgs[0].media_url)}" alt="" loading="lazy" />`
-        : (auds.length ? '' : (vids.length ? '' : (docs.length ? '' : '')));
+        : `<div class="arch-cover-empty">${ico(auds.length ? 'music' : (vids.length ? 'video' : (docs.length ? 'file' : 'box')), 'ico-lg')}</div>`;
 
       const chips = [];
-      if (total) chips.push(`<span class="arch-chip t-teal">${total} 份</span>`);
-      if (imgs.length) chips.push(`<span class="arch-chip">${imgs.length}</span>`);
-      if (auds.length) chips.push(`<span class="arch-chip">${auds.length}</span>`);
-      if (vids.length) chips.push(`<span class="arch-chip">${vids.length}</span>`);
-      if (docs.length) chips.push(`<span class="arch-chip">${docs.length}</span>`);
+      if (total) chips.push(`<span class="arch-chip t-teal">共 ${total} 份</span>`);
+      const typeParts = [];
+      if (imgs.length) typeParts.push(`图 ${imgs.length}`);
+      if (auds.length) typeParts.push(`音 ${auds.length}`);
+      if (vids.length) typeParts.push(`视 ${vids.length}`);
+      if (docs.length) typeParts.push(`文 ${docs.length}`);
+      if (typeParts.length) chips.push(`<span class="arch-chip">${typeParts.join(' · ')}</span>`);
       if (notes) chips.push(`<span class="arch-chip">${notes.length} 字</span>`);
       if (total === 0) chips.push(`<span class="arch-chip" style="color:var(--warning);">空包</span>`);
 
@@ -5170,13 +5971,17 @@
           onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openArchiveDetail(${a.id});}"
           draggable="${STATE.can_edit ? 'true' : 'false'}"
           ondragstart="event.dataTransfer.setData('text/archive-id', '${a.id}')"
-          ondragover="if(STATE.can_edit){event.preventDefault();this.style.outline='2px dashed var(--teal)';}"
+          ondragover="if(STATE.can_edit){event.preventDefault();event.stopPropagation();this.style.outline='2px dashed var(--teal)';}"
           ondragleave="this.style.outline='none';"
-          ondrop="this.style.outline='none';if(STATE.can_edit && event.dataTransfer.files && event.dataTransfer.files.length>0){event.preventDefault();uploadAppendArchiveFiles(${a.id}, event.dataTransfer.files);}">
+          ondrop="this.style.outline='none';if(STATE.can_edit && event.dataTransfer.files && event.dataTransfer.files.length>0){event.preventDefault();event.stopPropagation();uploadAppendArchiveFiles(${a.id}, event.dataTransfer.files);}">
+          <div class="arch-tile-quick" onclick="event.stopPropagation()">
+            <a class="btn btn-xs" href="/api/archives/${a.id}/zip" title="打包下载本存档包">${ico('download')}</a>
+            ${STATE.can_edit ? `<button class="btn btn-xs" onclick="toggleArchivePin(${a.id}, ${!a.is_pinned})" title="${a.is_pinned ? '取消置顶' : '置顶'}">${ico('pin')}</button>` : ''}
+          </div>
           <div class="arch-tile-top">
             <div class="arch-cover">${cover}</div>
             <div class="arch-tile-main">
-              <div class="arch-tile-title">${a.is_pinned ? '' : ''}${escapeHtml(a.title)}</div>
+              <div class="arch-tile-title">${a.is_pinned ? '<span class="badge badge-warning" style="margin-right:4px;font-size:10.5px;">置顶</span>' : ''}${escapeHtml(a.title)}</div>
               <div class="arch-tile-meta">
                 <span>${escapeHtml(a.archive_date)}</span>
                 <span>· ${escapeHtml((a.category || '').replace(/^\d+_/, ''))}</span>
@@ -5204,6 +6009,10 @@
       if (copyBtn) copyBtn.style.display = isArch ? 'none' : '';
       const splitToggle = document.getElementById('btnToggleSplit');
       if (splitToggle) splitToggle.style.display = isArch ? 'none' : '';
+      const renBtn = document.getElementById('btnDrawerRename');
+      if (renBtn && isArch) renBtn.style.display = 'none';
+      const sibBar = document.getElementById('drawerSiblingBar');
+      if (sibBar && isArch) sibBar.classList.remove('is-visible');
       STATE.drawerIsArchive = isArch;
       if (!isArch) {
         if (pathBar) pathBar.style.display = '';
@@ -5287,7 +6096,7 @@
             ${STATE.can_edit ? `
               <label class="btn btn-xs btn-teal" style="cursor:pointer;" title="向本归档包继续追加录音、照片、PPT或文档">
                 + 追加文件
-                <input type="file" multiple style="display:none;" onchange="uploadAppendArchiveFiles(${a.id}, this.files)" />
+                <input type="file" multiple style="display:none;" onchange="uploadAppendArchiveFiles(${a.id}, this.files); this.value='';" />
               </label>
               <button class="btn btn-xs" onclick="openEditArchiveModal(${a.id})">编辑纪要/标题</button>
               <button class="btn btn-xs" onclick="toggleArchivePin(${a.id}, ${!a.is_pinned})">${a.is_pinned ? '取消置顶' : '置顶'}</button>
@@ -5328,19 +6137,9 @@
 
     async function uploadAppendArchiveFiles(archiveId, fileList) {
       if (!fileList || fileList.length === 0) return;
-      showToast('正在向该归档包追加文件...');
-      const files = [];
-      for (const f of fileList) {
-        files.push({
-          filename: f.name,
-          content_base64: await fileToBase64(f)
-        });
-      }
-      await apiFetch(`/api/archives/${archiveId}/files`, {
-        method: 'POST',
-        body: JSON.stringify({ files })
-      });
-      await loadBootstrap();
+      showToast('正在向该归档包流式追加文件...');
+      await uploadFilesFormData(`/api/archives/${archiveId}/files`, fileList);
+      await refreshSingleArchive(archiveId);
       showToast('文件已追加进该资料存档包！');
     }
 
@@ -5387,7 +6186,7 @@
         })
       });
       document.getElementById('archiveModalBackdrop').style.display = 'none';
-      await loadBootstrap();
+      await refreshSingleArchive(parseInt(aid));
       showToast('资料存档包已更新并同步至本地文件夹！');
     }
 
@@ -5396,7 +6195,7 @@
         method: 'PUT',
         body: JSON.stringify({ is_pinned: isPinned })
       });
-      await loadBootstrap();
+      await refreshSingleArchive(archiveId);
     }
 
     async function deleteArchiveBundle(archiveId) {
@@ -5410,7 +6209,7 @@
       });
       if (!dlg || !dlg.confirmed) return;
       await apiFetch(`/api/archives/${archiveId}?delete_disk=${dlg.checked ? '1' : '0'}`, { method: 'DELETE' });
-      if (STATE.archDetailId === archiveId) { STATE.archDetailId = null; closePreviewDrawer(); }
+      if (STATE.archDetailId === archiveId) { STATE.archDetailId = null; await attemptClosePreviewDrawer(); }
       await loadBootstrap();
       showToast('已删除该资料存档包');
     }
@@ -5470,7 +6269,7 @@
       let pillsHtml = `<button class="filter-pill ${STATE.recCategoryFilter === '' ? 'active' : ''}" style="padding:2px 9px;font-size:11.5px;" onclick="STATE.recCategoryFilter='';renderRecordsModule();">全部 (${allRecs.length})</button>`;
       recCats.forEach(c => {
         const cnt = allRecs.filter(r => r.category === c).length;
-        pillsHtml += `<button class="filter-pill ${STATE.recCategoryFilter === c ? 'active' : ''}" style="padding:2px 9px;font-size:11.5px;" onclick="STATE.recCategoryFilter='${escapeHtml(c)}';renderRecordsModule();">${escapeHtml(c)} (${cnt})</button>`;
+        pillsHtml += `<button class="filter-pill ${STATE.recCategoryFilter === c ? 'active' : ''}" style="padding:2px 9px;font-size:11.5px;" onclick="STATE.recCategoryFilter='${escapeJsAttr(c)}';renderRecordsModule();">${escapeHtml(c)} (${cnt})</button>`;
       });
       if (pillsBar) pillsBar.innerHTML = pillsHtml;
 
@@ -5497,7 +6296,7 @@
         <div class="record-tree-item ${STATE.activeRecordId === r.id ? 'active' : ''}" onclick="selectImportantRecord(${r.id}, true)">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
             <strong style="font-size:13.5px;color:var(--text);line-height:1.35;">
-              ${r.is_pinned ? '' : ''}${escapeHtml(r.title)}
+              ${r.is_pinned ? ico('pin', 'ico-sm') + ' ' : ''}${escapeHtml(r.title)}
             </strong>
             <span class="badge badge-routine" style="font-size:10.5px;flex-shrink:0;">${(r.files || []).length}附件</span>
           </div>
@@ -5509,9 +6308,12 @@
       `).join('');
     }
 
+    let _recordReqSeq = 0;
     async function selectImportantRecord(recordId, updateTreeHighlight = true) {
+      const mySeq = ++_recordReqSeq;
       STATE.activeRecordId = recordId;
       STATE.activeRecordAttIndex = -1;
+      STATE.recInlineEdit = false;
       if (updateTreeHighlight) {
         document.querySelectorAll('#recordsTreeList .record-tree-item').forEach(el => el.classList.remove('active'));
         renderRecordsModule();
@@ -5520,11 +6322,34 @@
       canvas.innerHTML = `<div style="padding:36px;color:var(--text-muted);">正在加载直读内容...</div>`;
       try {
         const res = await apiFetch(`/api/records/${recordId}`);
+        if (mySeq !== _recordReqSeq) return;
         STATE.activeRecordDetail = res.record;
         renderActiveRecordCanvas();
       } catch (err) {
+        if (mySeq !== _recordReqSeq) return;
         canvas.innerHTML = `<div style="padding:36px;color:var(--danger);">加载失败: ${escapeHtml(err.message)}</div>`;
       }
+    }
+
+    function toggleRecordInlineEdit() {
+      STATE.recInlineEdit = !STATE.recInlineEdit;
+      STATE.activeRecordAttIndex = -1;
+      renderActiveRecordCanvas();
+    }
+
+    async function saveRecordInlineEdit() {
+      const r = STATE.activeRecordDetail;
+      const ta = document.getElementById('recInlineMdTextarea');
+      if (!r || !ta) return;
+      const res = await apiFetch(`/api/records/${r.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ content_md: ta.value })
+      });
+      if (res.record) STATE.activeRecordDetail = res.record;
+      else STATE.activeRecordDetail.content_md = ta.value;
+      const idx = (STATE.important_records || []).findIndex(x => x.id === r.id);
+      if (idx !== -1 && res.record) STATE.important_records[idx] = { ...STATE.important_records[idx], ...res.record };
+      showToast('重要事项正文已保存！');
     }
 
     function renderActiveRecordCanvas() {
@@ -5535,17 +6360,16 @@
       const kw = (document.getElementById('recTreeFilterInput')?.value || '').trim();
       const kws = kw ? [kw] : [];
 
-      // 构建正文与关联附件直读切换标签栏
       let tabsHtml = `
         <button class="record-att-tab ${STATE.activeRecordAttIndex === -1 ? 'active' : ''}"
                 onclick="STATE.activeRecordAttIndex=-1; renderActiveRecordCanvas();">
-          核心正文与摘要直读
+          核心正文与摘要
         </button>
       `;
       files.forEach((f, idx) => {
         tabsHtml += `
           <button class="record-att-tab ${STATE.activeRecordAttIndex === idx ? 'active' : ''}"
-                  onclick="STATE.activeRecordAttIndex=${idx}; renderActiveRecordCanvas();">
+                  onclick="STATE.activeRecordAttIndex=${idx}; STATE.recInlineEdit=false; renderActiveRecordCanvas();">
             ${escapeHtml(f.filename)} (${escapeHtml(f.file_type || '')})
           </button>
         `;
@@ -5553,26 +6377,46 @@
 
       let bodyContentHtml = '';
       if (STATE.activeRecordAttIndex === -1) {
-        // 默认直读模式：先展示 Markdown 正文，若下方挂载了 Excel/Word/PDF 原件，直接平铺展示第一个主附件的直读表格/内容！
-        bodyContentHtml = `
-          <div class="preview-rendered-box" style="background:var(--surface);border:none;padding:4px 0;">
-            ${r.content_md ? renderSimpleMarkdown(r.content_md, kws) : '<p style="color:var(--text-muted);">（暂无手写正文，请直接查看下方挂载的文档/表格原件）</p>'}
-          </div>
-        `;
-        if (files.length > 0) {
-          bodyContentHtml += files.map((f, fIdx) => `
-            <div style="margin-top:22px;padding-top:16px;border-top:2px solid var(--border);">
-              <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-                <strong style="font-size:15px;color:var(--primary);">关联原件直读：${escapeHtml(f.filename)}</strong>
-                <div style="display:flex;gap:6px;">
-                  ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('file', ${f.id})">用本机 WPS 打开编辑</button>` : ''}
-                  <a class="btn btn-xs btn-primary" href="/api/docs/${f.id}/download">⬇下载原件</a>
-                  ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteDocQuick(${f.id})">移除此附件</button>` : ''}
+        if (STATE.recInlineEdit && STATE.can_edit) {
+          bodyContentHtml = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <span style="font-size:12.5px;color:var(--text-muted);">双栏实时 Markdown 编辑（按 Ctrl+S 极速保存）</span>
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-xs btn-primary" onclick="saveRecordInlineEdit()">保存正文 (Ctrl+S)</button>
+                <button class="btn btn-xs" onclick="toggleRecordInlineEdit()">退出编辑</button>
+              </div>
+            </div>
+            <div class="rec-inline-editor">
+              <textarea id="recInlineMdTextarea"
+                oninput="const pv=document.getElementById('recInlineMdPreview');if(pv)pv.innerHTML=renderSimpleMarkdown(this.value);"
+                onkeydown="if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveRecordInlineEdit();}">${escapeHtml(r.content_md || '')}</textarea>
+              <div class="rec-inline-preview" id="recInlineMdPreview">${renderSimpleMarkdown(r.content_md || '')}</div>
+            </div>
+          `;
+        } else {
+          bodyContentHtml = `
+            <div class="preview-rendered-box" style="background:var(--surface);border:none;padding:4px 0;">
+              ${r.content_md ? renderSimpleMarkdown(r.content_md, kws) : '<p style="color:var(--text-muted);">（暂无手写正文，请点击上方附件页签按需查看挂载原件）</p>'}
+            </div>
+          `;
+          // 按 Tab 按需渲染：正文页只显示轻量附件入口卡片，不再一次性平铺大 Excel/PDF
+          if (files.length > 0) {
+            bodyContentHtml += `
+              <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--border);">
+                <div style="font-size:12.5px;font-weight:700;color:var(--text-secondary);margin-bottom:8px;">关联原件 (${files.length} 份 · 点击上方页签或下方卡片按需直读)</div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                  ${files.map((f, fIdx) => `
+                    <div style="display:inline-flex;align-items:center;gap:8px;padding:7px 11px;border-radius:8px;border:1px solid var(--border);background:var(--surface-alt);cursor:pointer;"
+                         onclick="STATE.activeRecordAttIndex=${fIdx}; renderActiveRecordCanvas();">
+                      ${fileKindTag(f.filename)}
+                      <span style="font-size:13px;font-weight:600;color:var(--text);">${escapeHtml(f.filename)}</span>
+                      <a class="btn btn-xs" href="/api/docs/${f.id}/download" onclick="event.stopPropagation()">下载</a>
+                    </div>
+                  `).join('')}
                 </div>
               </div>
-              ${renderStructuredPreviewHtml(f, kws, `rec_inline_${r.id}_${fIdx}`)}
-            </div>
-          `).join('');
+            `;
+          }
         }
       } else {
         const activeFile = files[STATE.activeRecordAttIndex];
@@ -5582,7 +6426,7 @@
               <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px;padding:8px 12px;background:var(--primary-soft);border-radius:7px;">
                 <span style="font-size:12.5px;color:var(--primary);font-weight:600;">本地物理路径：${escapeHtml(activeFile.abs_path)}</span>
                 <div style="display:flex;gap:6px;">
-                  ${STATE.is_localhost ? `<button class="btn btn-xs btn-primary" onclick="openLocalPath('file', ${activeFile.id})">本机 WPS 打开编辑</button>` : ''}
+                  ${STATE.is_localhost ? `<button class="btn btn-xs btn-primary" onclick="openLocalPath('file', ${activeFile.id})">本机 WPS 打开</button>` : ''}
                   <a class="btn btn-xs" href="/api/docs/${activeFile.id}/download">⬇下载此文件</a>
                   ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteDocQuick(${activeFile.id})">删除</button>` : ''}
                 </div>
@@ -5603,22 +6447,23 @@
               ${(r.tags || []).map(t => `<span class="badge badge-routine">#${escapeHtml(t)}</span>`).join('')}
             </div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">
-              本地物理目录：<code>${escapeHtml(r.folder_rel_path)}</code> · 数据基准更新于：${escapeHtml(r.updated_at)}
+              本地物理目录：<code>${escapeHtml(r.folder_rel_path)}</code> · 更新于：${escapeHtml(r.updated_at)}
             </div>
           </div>
 
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             ${STATE.can_edit ? `
-              <button class="btn btn-xs btn-primary" onclick="openRecordModal(${r.id})">编辑正文/属性</button>
+              <button class="btn btn-xs ${STATE.recInlineEdit ? 'btn-success' : 'btn-primary'}" onclick="toggleRecordInlineEdit()">${STATE.recInlineEdit ? '完成就地编辑' : '就地双栏编辑'}</button>
+              <button class="btn btn-xs" onclick="openRecordModal(${r.id})">属性</button>
               <label class="btn btn-xs btn-success" style="cursor:pointer;" title="直接挂载 Word / PDF / Excel 底数文件">
-                +挂载 Word/PDF/Excel
-                <input type="file" multiple style="display:none;" onchange="uploadAppendRecordFiles(${r.id}, this.files)" />
+                +挂载原件
+                <input type="file" multiple style="display:none;" onchange="uploadAppendRecordFiles(${r.id}, this.files); this.value='';" />
               </label>
               <button class="btn btn-xs" onclick="toggleRecordPin(${r.id}, ${!r.is_pinned})">${r.is_pinned ? '取消置顶' : '置顶'}</button>
             ` : ''}
             ${STATE.is_localhost ? `<button class="btn btn-xs" onclick="openLocalPath('folder', null, '${escapeJsAttr(r.folder_rel_path)}')">打开目录</button>` : ''}
             <button class="btn btn-xs" onclick="copyText(STATE.activeRecordDetail?.content_md || '', '已复制重要事项正文！')">复制正文</button>
-            ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteImportantRecord(${r.id})"></button>` : ''}
+            ${STATE.can_edit ? `<button class="btn btn-xs btn-danger-ghost" onclick="deleteImportantRecord(${r.id})" title="删除该重要事项" aria-label="删除">${ico('trash')}</button>` : ''}
           </div>
         </div>
 
@@ -5688,6 +6533,7 @@
       } else {
         res = await apiFetch('/api/records', { method: 'POST', body: JSON.stringify(payload) });
       }
+      const _rfi = document.getElementById('editRecordFilesInput'); if (_rfi) _rfi.value = '';
       document.getElementById('recordModalBackdrop').style.display = 'none';
       if (res.record && res.record.id) {
         STATE.activeRecordId = res.record.id;
@@ -5699,19 +6545,9 @@
 
     async function uploadAppendRecordFiles(recordId, fileList) {
       if (!fileList || fileList.length === 0) return;
-      showToast('正在上传并解析原件结构...');
-      const files = [];
-      for (const f of fileList) {
-        files.push({
-          filename: f.name,
-          content_base64: await fileToBase64(f)
-        });
-      }
-      const res = await apiFetch(`/api/records/${recordId}/files`, {
-        method: 'POST',
-        body: JSON.stringify({ files })
-      });
-      if (res.record) {
+      showToast('正在流式上传并解析原件结构...');
+      const res = await uploadFilesFormData(`/api/records/${recordId}/files`, fileList);
+      if (res && res.record) {
         STATE.activeRecordDetail = res.record;
         renderActiveRecordCanvas();
       }
@@ -5898,8 +6734,8 @@
             <div style="display:flex;align-items:center;gap:4px;">
               ${STATE.can_edit ? `
                 <span class="cat-ops" onclick="event.stopPropagation();">
-                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameScopeCategoryPrompt('task', '${escapeJsAttr(cat)}')" title="重命名或合并此物理分类文件夹"></button>
-                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteScopeCategoryPrompt('task', '${escapeJsAttr(cat)}')" title="删除空目录"></button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="renameScopeCategoryPrompt('task', '${escapeJsAttr(cat)}')" title="重命名或合并此物理分类文件夹" aria-label="重命名">${ico('edit')}</button>
+                  <button class="btn btn-xs" style="padding:1px 5px;" onclick="deleteScopeCategoryPrompt('task', '${escapeJsAttr(cat)}')" title="删除空目录" aria-label="删除">${ico('trash')}</button>
                 </span>
               ` : ''}
               <span class="badge badge-routine">${count}</span>
@@ -6360,6 +7196,9 @@
     }
 
     // ==================== 四维全库搜索（待办+公文+资料存档+重要事项记录） ====================
+    let _searchReqSeq = 0;
+    let _searchKbdIdx = -1;
+
     function handleSearchDebounce() {
       clearTimeout(window._searchTimer);
       const q = document.getElementById('globalSearchInput').value.trim();
@@ -6385,8 +7224,10 @@
         clearSearch();
         return;
       }
+      const mySeq = ++_searchReqSeq;
       STATE.searchKeywords = q.split(/\s+/).filter(Boolean);
       const res = await apiFetch(`/api/search?q=${encodeURIComponent(q)}&scope=${STATE.searchScope}`);
+      if (mySeq !== _searchReqSeq) return;
       document.getElementById('searchResultsBox').style.display = 'block';
       document.getElementById('clearSearchBtn').style.display = 'inline-flex';
       document.getElementById('aiSearchAnswerWrap').innerHTML = '';
@@ -6406,6 +7247,7 @@
         showToast('请先在搜索框输入要查询的问题或关键词');
         return;
       }
+      const mySeq = ++_searchReqSeq;
       document.getElementById('searchResultsBox').style.display = 'block';
       document.getElementById('clearSearchBtn').style.display = 'inline-flex';
       document.getElementById('aiSearchAnswerWrap').innerHTML = `<div class="ai-answer-card">正在执行四维 FTS5 初筛与 AI 智能语义汇总...</div>`;
@@ -6413,6 +7255,7 @@
         method: 'POST',
         body: JSON.stringify({ query: q })
       });
+      if (mySeq !== _searchReqSeq) return;
       STATE.searchKeywords = res.keywords || [q];
       document.getElementById('aiSearchAnswerWrap').innerHTML = `
         <div class="ai-answer-card">
@@ -6434,11 +7277,12 @@
 
     function renderSearchResultsList(tasks, docs, archives, records, titleLabel, kws = []) {
       const box = document.getElementById('searchMatchedContent');
-      let html = `<div style="font-weight:700;margin-bottom:8px;color:var(--text-secondary);">${escapeHtml(titleLabel)}：命中 ${records.length} 条重要事项，${archives.length} 个资料存档包，${tasks.length} 项工作待办，${docs.length} 份文件</div>`;
+      _searchKbdIdx = -1;
+      let html = `<div style="font-weight:700;margin-bottom:8px;color:var(--text-secondary);">${escapeHtml(titleLabel)}：命中 ${records.length} 条重要事项，${archives.length} 个资料存档包，${tasks.length} 项工作待办，${docs.length} 份文件 <span style="font-weight:400;font-size:11.5px;color:var(--text-muted);">（支持 ↑/↓ + Enter 极速直达）</span></div>`;
 
       if (records.length > 0) {
         html += `<div style="margin-bottom:10px;display:flex;flex-direction:column;gap:6px;">` + records.map(r => `
-          <div style="background:var(--primary-soft);border:1px solid #93c5fd;padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div class="search-res-item" data-act="openRecordInTab(${r.id});clearSearch();" style="background:var(--primary-soft);border:1px solid rgba(59,130,246,0.3);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div>
               <strong>[重要事项记录] ${highlightKeywordsHtml(r.title, kws)}</strong>
               <span class="badge badge-routine" style="margin-left:6px;">${escapeHtml(r.category)}</span>
@@ -6451,21 +7295,21 @@
 
       if (archives.length > 0) {
         html += `<div style="margin-bottom:10px;display:flex;flex-direction:column;gap:6px;">` + archives.map(a => `
-          <div style="background:var(--teal-soft);border:1px solid #99f6e4;padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div class="search-res-item" data-act="locateArchiveCard(${a.id});clearSearch();" style="background:var(--teal-soft);border:1px solid rgba(13,148,136,0.3);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div>
               <strong>[资料存档包] ${highlightKeywordsHtml(a.title, kws)}</strong>
               <span class="badge badge-teal" style="margin-left:6px;">${escapeHtml(a.archive_date)}</span>
               <span class="badge badge-routine">${escapeHtml(a.category)} (${(a.files||[]).length}份附件)</span>
               <div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">${highlightKeywordsHtml(a.match_snippet || (a.notes_md || '').slice(0, 140), kws)}</div>
             </div>
-            <button class="btn btn-xs btn-teal" onclick="locateArchiveCard(${a.id})">定位存档包</button>
+            <button class="btn btn-xs btn-teal" onclick="locateArchiveCard(${a.id}); clearSearch();">定位存档包</button>
           </div>
         `).join('') + `</div>`;
       }
 
       if (tasks.length > 0) {
         html += `<div style="margin-bottom:10px;display:flex;flex-direction:column;gap:6px;">` + tasks.map(t => `
-          <div style="background:var(--surface-alt);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div class="search-res-item" data-act="locateTaskCard(${t.id});" style="background:var(--surface-alt);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div>
               <strong>[待办事项] ${highlightKeywordsHtml(t.title, kws)}</strong>
               <span class="badge badge-routine" style="margin-left:6px;">${escapeHtml(t.category)}</span>
@@ -6482,7 +7326,7 @@
 
       if (docs.length > 0) {
         html += `<div style="display:flex;flex-direction:column;gap:6px;">` + docs.map(d => `
-          <div style="background:var(--surface);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+          <div class="search-res-item" data-act="openDocPreview(${d.id});" style="background:var(--surface);border:1px solid var(--border);padding:8px 12px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
             <div>
               <span class="file-name-link" style="font-weight:700;" onclick="openDocPreview(${d.id})">${highlightKeywordsHtml(d.filename, kws)}</span>
               <span class="badge badge-routine" style="margin-left:6px;">${escapeHtml(d.category)}</span>
@@ -6498,9 +7342,47 @@
       box.innerHTML = html;
     }
 
+    function stepSearchResultKbd(delta) {
+      const items = Array.from(document.querySelectorAll('#searchMatchedContent .search-res-item'));
+      if (!items.length) return false;
+      items.forEach(el => el.classList.remove('is-kbd-active'));
+      _searchKbdIdx = (_searchKbdIdx + delta + items.length) % items.length;
+      const cur = items[_searchKbdIdx];
+      cur.classList.add('is-kbd-active');
+      cur.scrollIntoView({ block: 'nearest' });
+      return true;
+    }
+
+    function activateSearchResultKbd() {
+      const items = Array.from(document.querySelectorAll('#searchMatchedContent .search-res-item'));
+      if (_searchKbdIdx < 0 || _searchKbdIdx >= items.length) return false;
+      const btn = items[_searchKbdIdx].querySelector('button');
+      if (btn) btn.click();
+      return true;
+    }
+
     function locateTaskCard(taskId) {
+      clearSearch();
       switchMainTab('workbench');
       const t = STATE.tasks.find(x => x.id === taskId);
+      // 清除可能隐藏目标事项的分类/极简快筛冲突
+      const catSel = document.getElementById('wbCatFilter');
+      if (catSel && t && catSel.value && catSel.value !== t.category) catSel.value = '';
+      if (STATE.minQuickKw) {
+        STATE.minQuickKw = '';
+        const qInp = document.getElementById('minQuickFilterInput');
+        if (qInp) qInp.value = '';
+      }
+      if (STATE.minExtFilter) {
+        STATE.minExtFilter = '';
+        document.querySelectorAll('#minExtPills .min-ext-pill').forEach(b => b.classList.toggle('active', b.dataset.ext === ''));
+      }
+      // 解除极简折叠与完整卡片折叠
+      STATE.minFold = (STATE.minFold || []).filter(id => id !== taskId);
+      persistMinFold();
+      if (!window._MIN_LIST_EXPANDED) window._MIN_LIST_EXPANDED = new Set();
+      window._MIN_LIST_EXPANDED.add(taskId);
+
       if (t) {
         t.is_collapsed = false;
         if (!doesTaskMatchCurrentFilter(t)) {
@@ -6513,6 +7395,7 @@
       setTimeout(() => {
         const el = document.getElementById(`task_card_${taskId}`);
         if (el) {
+          el.classList.remove('is-folded');
           el.scrollIntoView({ behavior: 'smooth', block: 'center' });
           el.classList.remove('pulse-locate');
           void el.offsetWidth;
@@ -6526,7 +7409,6 @@
       STATE.archCategoryFilter = '';
       const sInp = document.getElementById('archSearchInput');
       if (sInp) sInp.value = '';
-      // v3.0.1：分组模式下目标可能落在折叠的月份里，先把它所在的组展开
       const target = (STATE.archives || []).find(x => x.id === archiveId);
       if (target && STATE.archView === 'group') {
         const key = String(target.archive_date || '').slice(0, 7) || '未标日期';
@@ -6548,28 +7430,72 @@
     }
 
     function clearSearch() {
-      document.getElementById('globalSearchInput').value = '';
+      const inp = document.getElementById('globalSearchInput');
+      if (inp) inp.value = '';
       STATE.searchKeywords = [];
-      document.getElementById('searchResultsBox').style.display = 'none';
-      document.getElementById('clearSearchBtn').style.display = 'none';
+      _searchKbdIdx = -1;
+      const box = document.getElementById('searchResultsBox');
+      if (box) box.style.display = 'none';
+      const clr = document.getElementById('clearSearchBtn');
+      if (clr) clr.style.display = 'none';
     }
 
-    // ==================== 双栏对照撰稿工作台 & 多格式预览抽屉（含防误触拦截） ====================
-    function markEditorDirty() {
-      STATE.editorDirty = true;
-      document.getElementById('editorDirtyBadge').style.display = 'inline-flex';
+    // ==================== 双栏对照撰稿工作台 & 多格式预览抽屉（含防误触与自动恢复） ====================
+    const _debouncedAutosaveDraft = debounceFn(() => {
       try {
         localStorage.setItem('wb_autosave_draft', JSON.stringify({
-          filename: document.getElementById('drawerEditorFilename').value,
-          content: document.getElementById('drawerEditorTextarea').value,
+          doc_id: STATE.drawerDoc ? STATE.drawerDoc.id : null,
+          task_id: STATE.drawerTaskId || null,
+          filename: document.getElementById('drawerEditorFilename')?.value || '',
+          content: document.getElementById('drawerEditorTextarea')?.value || '',
+          ts: Date.now(),
           time: new Date().toLocaleTimeString()
         }));
       } catch (e) {}
+    }, 1200);
+
+    function markEditorDirty() {
+      STATE.editorDirty = true;
+      const badge = document.getElementById('editorDirtyBadge');
+      if (badge) badge.style.display = 'inline-flex';
+      _debouncedAutosaveDraft();
     }
 
-    function clearEditorDirty() {
+    function clearEditorDirty(clearStorage = false) {
       STATE.editorDirty = false;
-      document.getElementById('editorDirtyBadge').style.display = 'none';
+      const badge = document.getElementById('editorDirtyBadge');
+      if (badge) badge.style.display = 'none';
+      if (clearStorage) {
+        try { localStorage.removeItem('wb_autosave_draft'); } catch (e) {}
+      }
+    }
+
+    async function checkAndOfferAutosaveRestore(docId, taskId) {
+      try {
+        const raw = localStorage.getItem('wb_autosave_draft');
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        if (!saved || !saved.content || (Date.now() - (saved.ts || 0) > 24 * 3600 * 1000)) return;
+        const matchDoc = docId && saved.doc_id === docId;
+        const matchTask = !docId && taskId && saved.task_id === taskId;
+        if (!matchDoc && !matchTask) return;
+        const curText = document.getElementById('drawerEditorTextarea')?.value || '';
+        if (saved.content === curText) { localStorage.removeItem('wb_autosave_draft'); return; }
+        const dlg = await showCustomDialog({
+          title: '发现未保存的本地自动备份',
+          message: `检测到 ${saved.time || '刚才'} 对《${saved.filename || '草稿'}》的未保存草稿缓存，是否恢复到编辑器？`
+        });
+        if (dlg && dlg.confirmed) {
+          if (saved.filename) document.getElementById('drawerEditorFilename').value = saved.filename;
+          document.getElementById('drawerEditorTextarea').value = saved.content;
+          updateEditorWordCount();
+          switchDrawerMode('edit');
+          markEditorDirty();
+          showToast('已恢复上次未保存的草稿内容');
+        } else {
+          localStorage.removeItem('wb_autosave_draft');
+        }
+      } catch (e) {}
     }
 
     function populateSplitRefSelector(taskId) {
@@ -6581,11 +7507,10 @@
         (t.incoming_files || []).forEach(f => {
           opts.push(`<option value="doc_${f.id}">[本件来文原件] ${escapeHtml(f.filename)}</option>`);
         });
-        (t.reference_docs || []).forEach(r => {
+        (t.reference_docs || STATE.taskRefsCache[t.id] || []).forEach(r => {
           opts.push(`<option value="doc_${r.id}">[关联参考旧稿] ${escapeHtml(r.filename)}</option>`);
         });
       }
-      // 打通【重要事项记录】与【资料存档】供左栏直接对照引用！
       (STATE.important_records || []).forEach(rec => {
         opts.push(`<option value="rec_${rec.id}">[重要事项底数/预案] ${escapeHtml(rec.title)}</option>`);
       });
@@ -6602,7 +7527,9 @@
       if (sel.value) loadSplitReferenceContent(sel.value);
     }
 
+    let _splitRefReqSeq = 0;
     async function loadSplitReferenceContent(val) {
+      const mySeq = ++_splitRefReqSeq;
       const box = document.getElementById('splitLeftContentBox');
       if (!val) { box.textContent = '暂无对照内容'; return; }
       if (val.startsWith('task_raw_')) {
@@ -6622,6 +7549,7 @@
         const rid = parseInt(val.replace('rec_', ''));
         box.textContent = '正在加载重要事项底数...';
         const res = await apiFetch(`/api/records/${rid}`);
+        if (mySeq !== _splitRefReqSeq) return;
         const rec = res.record;
         const attTexts = (rec.files || []).map(f => `\n--- 附件《${f.filename}》提取内容 ---\n${f.extracted_text || ''}`).join('\n');
         box.textContent = `【重要事项】${rec.title}（${rec.category}）\n\n${rec.content_md || ''}${attTexts}`;
@@ -6635,6 +7563,7 @@
         const did = parseInt(val.replace('doc_', ''));
         box.textContent = '正在加载参考文档正文...';
         const res = await apiFetch(`/api/docs/${did}/preview`);
+        if (mySeq !== _splitRefReqSeq) return;
         box.textContent = res.document.extracted_text || '（该文件无纯文本内容）';
       }
     }
@@ -6716,6 +7645,29 @@
       document.getElementById('editorWordCountBar').innerHTML = `实时字数：<strong>${cleanChars}</strong> 字 | 段落：<strong>${paras}</strong> 段${hint}`;
     }
 
+    function renderDrawerSiblingBar(taskId, currentDocId) {
+      const bar = document.getElementById('drawerSiblingBar');
+      const sel = document.getElementById('drawerSiblingSelect');
+      if (!bar || !sel) return;
+      const t = taskId ? (STATE.tasks || []).find(x => x.id === taskId) : null;
+      const siblings = t ? [...(t.incoming_files || []).map(f => ({ ...f, _lbl: '来文' })), ...(t.drafted_files || []).map(f => ({ ...f, _lbl: f.sub_folder ? `材料/${f.sub_folder}` : '材料' }))] : [];
+      if (siblings.length <= 1) {
+        bar.classList.remove('is-visible');
+        sel.innerHTML = '';
+        return;
+      }
+      sel.innerHTML = siblings.map(f => `<option value="${f.id}" ${f.id === currentDocId ? 'selected' : ''}>[${escapeHtml(f._lbl)}] ${escapeHtml(f.filename)}</option>`).join('');
+      bar.classList.add('is-visible');
+    }
+
+    function stepDrawerSibling(delta) {
+      const sel = document.getElementById('drawerSiblingSelect');
+      if (!sel || sel.options.length <= 1) return;
+      const nextIdx = (sel.selectedIndex + delta + sel.options.length) % sel.options.length;
+      const nextId = parseInt(sel.options[nextIdx].value);
+      if (nextId) openDocPreview(nextId);
+    }
+
     async function openDocPreview(docId) {
       const res = await apiFetch(`/api/docs/${docId}/preview`);
       const d = res.document;
@@ -6724,9 +7676,12 @@
       clearEditorDirty();
 
       document.getElementById('drawerTitle').textContent = d.filename;
-      document.getElementById('drawerTitle').title = '双击可重命名该文件';
-      document.getElementById('drawerSubMeta').textContent = `所属目录：${d.category} | 类型：${d.file_type || d.doc_role} | 更新：${d.updated_at}`;
-      document.getElementById('drawerPathText').textContent = `本机绝对路径：${d.abs_path}`;
+      document.getElementById('drawerTitle').title = '双击或按 F2 重命名该文件';
+      const renBtn = document.getElementById('btnDrawerRename');
+      if (renBtn) renBtn.style.display = STATE.can_edit ? 'inline-flex' : 'none';
+      document.getElementById('drawerSubMeta').textContent = `目录：${d.category}${d.sub_folder ? '/' + d.sub_folder : ''} | 类型：${d.file_type || d.doc_role} | 更新：${d.updated_at}`;
+      document.getElementById('drawerPathText').textContent = d.abs_path || '';
+      document.getElementById('drawerPathText').title = d.abs_path || '';
 
       const dlLink = document.getElementById('drawerDownloadLink');
       dlLink.href = `/api/docs/${d.id}/download`;
@@ -6738,6 +7693,8 @@
       document.getElementById('btnDrawerDelete').style.display = STATE.can_edit ? 'inline-flex' : 'none';
       document.getElementById('drawerTabEditBtn').style.display = (STATE.can_edit && d.is_editable_text) ? 'inline-block' : 'none';
 
+      renderDrawerSiblingBar(STATE.drawerTaskId, d.id);
+
       document.getElementById('drawerEditorFilename').value = d.filename;
       document.getElementById('drawerEditorTextarea').value = d.extracted_text || '';
       updateEditorWordCount();
@@ -6747,6 +7704,9 @@
       setDrawerMode('doc');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
+      if (STATE.can_edit && d.is_editable_text) {
+        checkAndOfferAutosaveRestore(d.id, STATE.drawerTaskId);
+      }
     }
 
     // v3.2.2 双击抽屉标题直接重命名（本地磁盘一起改名，索引/事项清单同步刷新）
@@ -6830,6 +7790,9 @@
       document.getElementById('btnDrawerOpenWps').style.display = 'none';
       document.getElementById('btnDrawerOpenDir').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerDelete').style.display = 'none';
+      const renBtn = document.getElementById('btnDrawerRename');
+      if (renBtn) renBtn.style.display = 'none';
+      renderDrawerSiblingBar(taskId, null);
       document.getElementById('drawerTabEditBtn').style.display = 'inline-block';
 
       document.getElementById('drawerEditorFilename').value = defaultName;
@@ -6849,13 +7812,14 @@
       setDrawerMode('doc');
       document.getElementById('drawerBackdrop').style.display = 'block';
       document.getElementById('previewDrawer').style.display = 'flex';
+      checkAndOfferAutosaveRestore(null, taskId);
     }
 
     function openOnlineEditorNewStandalone() {
       STATE.drawerDoc = null;
       STATE.drawerTaskId = null;
       clearEditorDirty();
-      const cat = STATE.libCategoryFilter || '03_综合汇报与总结';
+      const cat = STATE.libCategoryFilter || getDefaultCategory();
       document.getElementById('drawerTitle').textContent = `在线新建独立材料 (${cat})`;
       document.getElementById('drawerTitle').removeAttribute('title');
       document.getElementById('drawerSubMeta').textContent = `保存目录：${cat}`;
@@ -6926,17 +7890,27 @@
         body: JSON.stringify({
           doc_id: STATE.drawerDoc ? STATE.drawerDoc.id : null,
           task_id: STATE.drawerTaskId,
-          category: STATE.libCategoryFilter || '03_综合汇报与总结',
+          category: STATE.libCategoryFilter || getDefaultCategory(),
           filename: fname,
           content
         })
       });
 
-      clearEditorDirty();
-      STATE.drawerDoc = res.document;
-      STATE.drawerDoc.extracted_text = content;
+      clearEditorDirty(true);
+      const savedDoc = res.document || {};
+      STATE.drawerDoc = { ...savedDoc, extracted_text: content };
+      document.getElementById('drawerTitle').textContent = savedDoc.filename || fname;
+      document.getElementById('drawerTitle').title = '双击或按 F2 重命名该文件';
+      if (savedDoc.abs_path) document.getElementById('drawerPathText').textContent = savedDoc.abs_path;
+      const dlLink = document.getElementById('drawerDownloadLink');
+      if (dlLink && savedDoc.id) { dlLink.href = `/api/docs/${savedDoc.id}/download`; dlLink.style.display = 'inline-flex'; }
+      const renBtn = document.getElementById('btnDrawerRename');
+      if (renBtn) renBtn.style.display = STATE.can_edit ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerDelete').style.display = STATE.can_edit ? 'inline-flex' : 'none';
+      document.getElementById('btnDrawerOpenWps').style.display = STATE.is_localhost ? 'inline-flex' : 'none';
       document.getElementById('btnDrawerFormatGw').style.display = 'inline-flex';
       document.getElementById('btnDrawerFormatRedhead').style.display = 'inline-flex';
+      renderDrawerSiblingBar(STATE.drawerTaskId, savedDoc.id);
 
       if (res.task) {
         updateSingleTaskInStateAndDOM(res.task);
@@ -6986,7 +7960,7 @@
     }
 
     async function attemptClosePreviewDrawer() {
-      if (STATE.editorDirty && STATE.drawerMode === 'edit') {
+      if (STATE.editorDirty) {
         const dlg = await showCustomDialog({
           title: '尚未保存草稿修改',
           message: '您当前在编辑器中有未保存的文字修改，确定要直接关闭吗？（点击取消可返回按 Ctrl+S 保存）',
@@ -6998,7 +7972,7 @@
     }
 
     function closePreviewDrawerForce() {
-      clearEditorDirty();
+      clearEditorDirty(true);
       document.getElementById('drawerBackdrop').style.display = 'none';
       document.getElementById('previewDrawer').style.display = 'none';
       if (STATE.drawerIsArchive) {
@@ -7428,31 +8402,161 @@
     const debouncedFilterSheet = debounceFn((prefix, val) => filterSpreadsheetGrid(prefix, val), 220);
     const debouncedWordCount = debounceFn(() => updateEditorWordCount(), 220);
 
+    // ==================== 全站统一自定义右键菜单 ====================
+    function closeContextMenu() {
+      const m = document.getElementById('gwContextMenu');
+      if (m) m.style.display = 'none';
+    }
+
+    function openDocContextMenu(ev, docId, taskId = null) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const menu = document.getElementById('gwContextMenu');
+      if (!menu) return;
+      const doc = (STATE.documents || []).find(x => x.id === docId) || {};
+      const t = taskId ? (STATE.tasks || []).find(x => x.id === taskId) : null;
+      const folders = t ? getTaskMaterialFolderNames(t) : [];
+      const isIncoming = doc.doc_role === 'incoming';
+
+      let items = [];
+      items.push(`<button class="gw-ctx-item" onclick="closeContextMenu();openDocPreview(${docId})">${ico('eye')} 在线预览</button>`);
+      if (STATE.is_localhost) {
+        items.push(`<button class="gw-ctx-item" onclick="closeContextMenu();openLocalPath('file', ${docId})">${ico('edit')} 本机 WPS 打开</button>`);
+      }
+      items.push(`<a class="gw-ctx-item" style="text-decoration:none;" href="/api/docs/${docId}/download" onclick="closeContextMenu()">${ico('download')} 下载到本地</a>`);
+
+      if (STATE.can_edit) {
+        items.push(`<div class="gw-ctx-sep"></div>`);
+        items.push(`<button class="gw-ctx-item" onclick="closeContextMenu();renameDocByIdPrompt(${docId})">${ico('edit')} 重命名</button>`);
+        if (t) {
+          const targetRole = isIncoming ? 'draft' : 'incoming';
+          items.push(`<button class="gw-ctx-item" onclick="closeContextMenu();swapFileRole(${docId}, '${targetRole}')">${ico('repeat')} 切换为${isIncoming ? '我写的材料' : '来文原件'}</button>`);
+          if (folders.length > 0 || doc.sub_folder) {
+            items.push(`<div class="gw-ctx-sep"></div><div class="gw-ctx-label">移至材料文件夹</div>`);
+            if (doc.sub_folder) {
+              items.push(`<button class="gw-ctx-item" onclick="closeContextMenu();moveDocToFolder(${docId}, ${t.id}, '')">${ico('folder')} 移回根目录</button>`);
+            }
+            folders.forEach(fn => {
+              if (fn !== doc.sub_folder) {
+                items.push(`<button class="gw-ctx-item" onclick="closeContextMenu();moveDocToFolder(${docId}, ${t.id}, '${escapeJsAttr(fn)}')">${ico('folder')} ${escapeHtml(fn)}</button>`);
+              }
+            });
+          }
+        }
+        items.push(`<button class="gw-ctx-item" onclick="closeContextMenu();quickFormatDocToGw(${docId}, 'report')">${ico('file')} 导出国标公文 (.docx)</button>`);
+        items.push(`<div class="gw-ctx-sep"></div>`);
+        items.push(`<button class="gw-ctx-item danger" onclick="closeContextMenu();deleteDocQuick(${docId})">${ico('trash')} 删除文件</button>`);
+      }
+
+      menu.innerHTML = items.join('');
+      menu.style.display = 'block';
+      const mw = menu.offsetWidth || 190;
+      const mh = menu.offsetHeight || 220;
+      const left = Math.min(ev.clientX, window.innerWidth - mw - 10);
+      const top = Math.min(ev.clientY, window.innerHeight - mh - 10);
+      menu.style.left = Math.max(8, left) + 'px';
+      menu.style.top = Math.max(8, top) + 'px';
+    }
+
+    async function renameDocByIdPrompt(docId) {
+      const d = (STATE.documents || []).find(x => x.id === docId);
+      if (!d) return;
+      const prevDrawerDoc = STATE.drawerDoc;
+      STATE.drawerDoc = d;
+      await renameCurrentDocPrompt();
+      if (!prevDrawerDoc || prevDrawerDoc.id !== docId) {
+        STATE.drawerDoc = prevDrawerDoc;
+      }
+    }
+
+    function openShortcutModal() {
+      const el = document.getElementById('shortcutModalBackdrop');
+      if (el) el.style.display = 'flex';
+    }
+
+    document.addEventListener('click', () => closeContextMenu());
+    window.addEventListener('scroll', () => closeContextMenu(), true);
+
     window.addEventListener('keydown', ev => {
-      const tag = (document.activeElement && document.activeElement.tagName || '').toUpperCase();
-      const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      const active = document.activeElement;
+      const tag = (active && active.tagName || '').toUpperCase();
+      const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (active && active.isContentEditable);
+
+      // 搜索浮层 ↑/↓ + Enter 导航
+      const searchBox = document.getElementById('searchResultsBox');
+      if (searchBox && searchBox.style.display === 'block') {
+        if (ev.key === 'ArrowDown') { ev.preventDefault(); stepSearchResultKbd(1); return; }
+        if (ev.key === 'ArrowUp') { ev.preventDefault(); stepSearchResultKbd(-1); return; }
+        if (ev.key === 'Enter' && _searchKbdIdx >= 0 && !ev.isComposing) {
+          ev.preventDefault();
+          activateSearchResultKbd();
+          return;
+        }
+      }
 
       if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'k') {
         ev.preventDefault();
         const inp = document.getElementById('globalSearchInput');
         if (inp) { inp.focus(); inp.select(); }
+        return;
       }
+
+      if (!inInput && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        if (ev.key === '/') {
+          ev.preventDefault();
+          const inp = document.getElementById('globalSearchInput');
+          if (inp) { inp.focus(); inp.select(); }
+          return;
+        }
+        if (ev.key === '?' || (ev.shiftKey && ev.key === '/')) {
+          ev.preventDefault();
+          openShortcutModal();
+          return;
+        }
+        if (ev.key.toLowerCase() === 'n' && STATE.can_edit) {
+          ev.preventDefault();
+          toggleOmniboxPanel(true);
+          return;
+        }
+        if (ev.key.toLowerCase() === 'm' && STATE.activeMainTab === 'workbench') {
+          ev.preventDefault();
+          setBrowseMode(STATE.browseMode === 'minimal' ? 'full' : 'minimal');
+          return;
+        }
+      }
+
+      if (ev.key === 'F2') {
+        const dr = document.getElementById('previewDrawer');
+        if (dr && dr.style.display === 'flex' && STATE.drawerDoc && STATE.drawerDoc.id && !STATE.drawerIsArchive) {
+          ev.preventDefault();
+          renameCurrentDocPrompt();
+          return;
+        }
+      }
+
       if (ev.altKey && !ev.ctrlKey && !ev.metaKey && !inInput) {
         const tabOrder = ['workbench', 'archives', 'records', 'library', 'recurring', 'summary'];
         const num = parseInt(ev.key);
         if (num >= 1 && num <= 6) {
           ev.preventDefault();
           switchMainTab(tabOrder[num - 1]);
+          return;
         }
       }
+
       if (ev.key === 'Escape') {
+        // 分层关闭：1. 右键菜单 -> 2. 灯箱/弹窗 -> 3. 右侧抽屉 -> 4. 搜索浮层
+        const ctx = document.getElementById('gwContextMenu');
+        if (ctx && ctx.style.display === 'block') { closeContextMenu(); return; }
         const lb = document.getElementById('imageLightboxBackdrop');
         if (lb && lb.style.display === 'flex') { closeImageLightbox(); return; }
         const topId = _topOpenBackdropId();
         if (topId) { tryCloseModalByBackdrop(topId); return; }
         const dr = document.getElementById('previewDrawer');
-        if (dr && dr.classList.contains('open') && typeof closePreviewDrawer === 'function') closePreviewDrawer();
+        if (dr && dr.style.display === 'flex') { attemptClosePreviewDrawer(); return; }
+        if (searchBox && searchBox.style.display === 'block') { clearSearch(); return; }
       }
+
       const lb = document.getElementById('imageLightboxBackdrop');
       if (lb && lb.style.display === 'flex') {
         if (ev.key === 'ArrowLeft') stepLightbox(-1);
@@ -7461,9 +8565,26 @@
     });
 
     let _dragDepth = 0;
+    function _shouldSkipGlobalDropOverlay(target) {
+      if (!STATE.can_edit) return true;
+      const omni = document.getElementById('omniboxPanel');
+      const omniOpen = omni && omni.classList.contains('is-open');
+      if (STATE.browseMode === 'minimal' && !omniOpen) return true;
+      if (target && target.closest && (
+        target.closest('.arch-tile') ||
+        target.closest('#archiveIntakeBox') ||
+        target.closest('.task-card') ||
+        target.closest('.file-col') ||
+        target.closest('.mat-folder-head') ||
+        target.closest('.mat-root-dropzone')
+      )) return true;
+      return false;
+    }
+
     window.addEventListener('dragenter', ev => {
       if (!STATE.can_edit) return;
       if (ev.dataTransfer && Array.from(ev.dataTransfer.types || []).includes('Files')) {
+        if (_shouldSkipGlobalDropOverlay(ev.target)) return;
         _dragDepth++;
         const ov = document.getElementById('globalDropOverlay');
         if (ov) ov.classList.add('active');
@@ -7486,9 +8607,16 @@
       const ov = document.getElementById('globalDropOverlay');
       if (ov) ov.classList.remove('active');
       if (!STATE.can_edit) return;
-      // 极简浏览模式下不响应拖拽建档（建档台已隐藏）
-      if (STATE.browseMode === 'minimal') return;
-      if (ev.target && ev.target.closest && (ev.target.closest('.task-card') || ev.target.closest('.min-card') || ev.target.closest('#omniboxPanel') || ev.target.closest('#archiveIntakeBox'))) {
+      const omni = document.getElementById('omniboxPanel');
+      const omniOpen = omni && omni.classList.contains('is-open');
+      if (STATE.browseMode === 'minimal' && !omniOpen) return;
+      if (ev.target && ev.target.closest && (
+        ev.target.closest('.task-card') ||
+        ev.target.closest('.min-card') ||
+        ev.target.closest('.arch-tile') ||
+        ev.target.closest('#omniboxPanel') ||
+        ev.target.closest('#archiveIntakeBox')
+      )) {
         return;
       }
       if (ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files.length > 0) {
@@ -7500,6 +8628,9 @@
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && Date.now() - _LAST_BOOTSTRAP_AT > 20000) {
+        const ae = document.activeElement;
+        const tag = (ae && ae.tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (ae && ae.isContentEditable)) return;
         loadBootstrap();
       }
     });
@@ -7511,6 +8642,11 @@
       const isDark = localStorage.getItem('wb_theme') === 'dark';
       if (isDark) document.body.classList.add('dark-mode');
       updateThemeBtnUI(isDark);
+      const sumInp = document.getElementById('summaryPeriodInput');
+      if (sumInp && !sumInp.value.trim()) {
+        const now = new Date();
+        sumInp.value = `${now.getFullYear()}年${now.getMonth() + 1}月阶段性`;
+      }
       applyBrowseModeChrome();
       loadBootstrap();
     });

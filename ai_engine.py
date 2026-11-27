@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-公文与通知 AI 解析、四维知识检索（待办+公文+资料存档+重要事项记录）、文件角色智能判别与阶段总结引擎 (ai_engine.py v3.1.0)
+公文与通知 AI 解析、四维知识检索（待办+公文+资料存档+重要事项记录）、文件角色智能判别与阶段总结引擎 (ai_engine.py v3.3.0)
 """
 
 import ipaddress
@@ -16,6 +16,15 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("gw_workbench.ai_engine")
+
+# HTTP 响应体最大读取上限（2MB），防止异常接口打爆内存
+MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024
+
+# AI 检索上下文总字符预算，防止小上下文本地模型溢出
+MAX_SEARCH_CONTEXT_CHARS = 6000
+
+# 最近一次 API 调用错误信息，便于调用方感知失败原因
+_LAST_API_ERROR: str = ""
 
 # 政务公文高频虚词/停用词（用于旧稿精准关联与关键词清洗）
 GOV_STOPWORDS = frozenset({
@@ -35,14 +44,79 @@ CHECKLIST_FLUFF_RE = re.compile(
 )
 
 
-def _is_private_or_local_url(api_base: str) -> bool:
-    """判断 API 地址是否属于本机或 RFC1918/内网地址（支持 10/8、172.16/12、192.168/16、localhost）"""
+def _safe_str(val: Any) -> str:
+    """安全将 LLM 返回的任意类型字段转换为去首尾空白的字符串，绝不因非字符串抛出 AttributeError"""
+    if val is None or isinstance(val, bool):
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if isinstance(val, (int, float)):
+        return str(val).strip()
+    if isinstance(val, (list, tuple)):
+        parts = [_safe_str(item) for item in val]
+        return "、".join(p for p in parts if p)
+    if isinstance(val, dict):
+        if not val:
+            return ""
+        try:
+            return json.dumps(val, ensure_ascii=False).strip()
+        except Exception:
+            return str(val).strip()
+    return str(val).strip()
+
+
+def _validate_deadline(val: Any) -> str:
+    """严格校验 YYYY-MM-DD 合法公历日期；非法字符串返回空字符串"""
+    s = _safe_str(val)
+    if not s or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return ""
     try:
-        parsed = urllib.parse.urlparse(api_base if "://" in api_base else f"http://{api_base}")
+        datetime.strptime(s, "%Y-%m-%d")
+        return s
+    except ValueError:
+        return ""
+
+
+def get_last_api_error() -> str:
+    """获取最近一次 LLM API 调用的错误描述（成功时为空字符串）"""
+    return _LAST_API_ERROR
+
+
+def _is_openai_o_series(model: str) -> bool:
+    """判断是否为 OpenAI o1/o3/o4 推理模型系列"""
+    m = (model or "").strip().lower()
+    return bool(re.search(r"(?:^|[/:\-_])o[134](?:$|[/:\-_.\d])", m))
+
+
+def is_reasoning_model(model: str) -> bool:
+    """判断是否为推理模型（支持 OpenAI o1/o3/o4、DeepSeek-R1/Reasoner、QwQ）"""
+    m = (model or "").strip().lower()
+    if not m:
+        return False
+    if _is_openai_o_series(m):
+        return True
+    return any(tag in m for tag in ("deepseek-r1", "deepseek-reasoner", "qwq"))
+
+
+def _is_private_or_local_url(api_base: str) -> bool:
+    """判断 API 地址是否属于本机或 RFC1918/内网地址（支持 IP、localhost、.local/.lan/.internal 及无点号单段主机名）"""
+    try:
+        raw = (api_base or "").strip()
+        if not raw:
+            return False
+        parsed = urllib.parse.urlparse(raw if "://" in raw else f"http://{raw}")
         host = (parsed.hostname or "").strip().lower()
         if not host:
             return False
-        if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local") or host.endswith(".lan"):
+        if (
+            host in ("localhost", "127.0.0.1", "::1")
+            or host.endswith(".local")
+            or host.endswith(".lan")
+            or host.endswith(".internal")
+        ):
+            return True
+        # 单段无点号主机名（如 Docker/内网 DNS 中的 ollama、vllm、llm-server）
+        if "." not in host and ":" not in host:
             return True
         ip_obj = ipaddress.ip_address(host)
         return bool(ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local)
@@ -53,14 +127,16 @@ def _is_private_or_local_url(api_base: str) -> bool:
 
 
 def _normalize_chat_completions_url(api_base: str) -> str:
-    """规范化 OpenAI 兼容 Chat Completions URL，兼容 Ollama 裸端口与带查询参数端点"""
+    """规范化 OpenAI 兼容 Chat Completions URL，自动补全 http:// 与路径，兼容 Ollama 裸端口与带查询参数端点"""
     base = (api_base or "").strip()
     if not base:
         return ""
+    if "://" not in base:
+        base = f"http://{base}"
     parsed = urllib.parse.urlsplit(base)
     path = parsed.path.rstrip("/")
     if path.endswith("/chat/completions"):
-        return base
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, parsed.fragment))
     if path == "" or path == "/":
         # 如 Ollama 默认 http://172.19.51.69:11434 -> 自动补 /v1/chat/completions
         new_path = "/v1/chat/completions"
@@ -76,19 +152,33 @@ def call_openai_compatible_api(
     system_prompt: str,
     user_prompt: str,
     temperature: float = 0.2,
-    timeout: int = 35,
+    timeout: int = 20,
     max_tokens: int = 1200,
     retries: int = 1,
 ) -> Optional[str]:
-    """调用兼容 OpenAI Chat Completions 的接口，支持内网全私有网段与瞬时错误重试"""
-    api_base = (config.get("ai_api_base") or "").strip().rstrip("/")
-    api_key = (config.get("ai_api_key") or "").strip()
-    model = (config.get("ai_model") or "deepseek-chat").strip()
+    """
+    调用兼容 OpenAI Chat Completions 的接口：
+    - 默认超时预算 timeout=20, retries=1，最坏总耗时 <= 42s（远低于 wb.py 60s 阈值）
+    - 读取响应体上限 2MB，防止超大异常包撑爆内存
+    - HTTP 400/401/403/404 直接返回不重试，并记录清晰错误日志与 last_error
+    - 兼容推理模型（o1/o3/o4 传 max_completion_tokens，推理模型自动提升 token 上限 >= 3000）
+    """
+    global _LAST_API_ERROR
+    _LAST_API_ERROR = ""
+    call_openai_compatible_api.last_error = ""
+
+    api_base = _safe_str((config or {}).get("ai_api_base")).rstrip("/")
+    api_key = _safe_str((config or {}).get("ai_api_key"))
+    model = _safe_str((config or {}).get("ai_model")) or "deepseek-chat"
 
     if not api_base:
+        _LAST_API_ERROR = "missing ai_api_base"
+        call_openai_compatible_api.last_error = _LAST_API_ERROR
         return None
     if not api_key and not _is_private_or_local_url(api_base):
-        logger.warning("AI API skipped: missing api_key for non-private endpoint %s", api_base)
+        _LAST_API_ERROR = f"missing api_key for non-private endpoint {api_base}"
+        call_openai_compatible_api.last_error = _LAST_API_ERROR
+        logger.warning("AI API skipped: %s", _LAST_API_ERROR)
         return None
 
     url = _normalize_chat_completions_url(api_base)
@@ -103,96 +193,174 @@ def call_openai_compatible_api(
             {"role": "user", "content": user_prompt},
         ],
     }
-    model_lower = model.lower()
-    is_reasoning_model = any(tag in model_lower for tag in ("o1-", "o3-", "o4-", "deepseek-r1", "qwq"))
-    if not is_reasoning_model:
+
+    reasoning = is_reasoning_model(model)
+    if reasoning:
+        effective_max_tokens = max(max_tokens, 3000) if max_tokens > 0 else 3000
+        if _is_openai_o_series(model):
+            payload["max_completion_tokens"] = effective_max_tokens
+        else:
+            payload["max_tokens"] = effective_max_tokens
+    else:
         payload["temperature"] = temperature
-    if max_tokens > 0:
-        payload["max_tokens"] = max_tokens
+        if max_tokens > 0:
+            payload["max_tokens"] = max_tokens
 
     data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     attempts = max(1, retries + 1)
+    start_ts = time.monotonic()
+    total_budget = 42.0
+
     for attempt in range(attempts):
         try:
             req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw_resp = resp.read().decode("utf-8", errors="replace")
+                raw_resp = resp.read(MAX_API_RESPONSE_BYTES).decode("utf-8", errors="replace")
                 body = json.loads(raw_resp)
-                content = body["choices"][0]["message"].get("content") or ""
-                return content.strip()
+                choices = body.get("choices") if isinstance(body, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    _LAST_API_ERROR = "empty choices in API response"
+                    call_openai_compatible_api.last_error = _LAST_API_ERROR
+                    logger.warning("AI API returned empty choices on %s", url)
+                    return None
+                msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+                content = _safe_str(msg.get("content") if isinstance(msg, dict) else "")
+                return content
         except urllib.error.HTTPError as e:
             status = getattr(e, "code", 0)
+            err_body = ""
+            try:
+                err_body = e.read(512).decode("utf-8", errors="replace").strip()
+            except Exception:
+                pass
+            _LAST_API_ERROR = f"HTTP {status}" + (f": {err_body[:200]}" if err_body else "")
+            call_openai_compatible_api.last_error = _LAST_API_ERROR
+            if status in (400, 401, 403, 404):
+                logger.error("AI API non-retryable %s on %s", _LAST_API_ERROR, url)
+                return None
             logger.warning("AI API HTTP %s (attempt %d/%d) on %s", status, attempt + 1, attempts, url)
             if status in (429, 500, 502, 503, 504) and attempt + 1 < attempts:
-                time.sleep(0.8 * (attempt + 1))
-                continue
+                if time.monotonic() - start_ts < total_budget:
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
             return None
         except Exception as e:
-            logger.warning("AI API error (attempt %d/%d) on %s: %s", attempt + 1, attempts, url, e)
-            if attempt + 1 < attempts:
+            _LAST_API_ERROR = f"{type(e).__name__}: {e}"
+            call_openai_compatible_api.last_error = _LAST_API_ERROR
+            logger.warning("AI API error (attempt %d/%d) on %s: %s", attempt + 1, attempts, url, _LAST_API_ERROR)
+            if attempt + 1 < attempts and (time.monotonic() - start_ts < total_budget):
                 time.sleep(0.6)
                 continue
             return None
     return None
 
 
-def _extract_json_from_llm(raw_text: str) -> Optional[Dict[str, Any]]:
-    """健壮提取 LLM 返回的 JSON：兼容 DeepSeek-R1/QwQ <think> 块、代码块围栏、尾逗号与前后废话"""
-    if not raw_text:
-        return None
-    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw_text, flags=re.IGNORECASE).strip()
-    if "<think>" in cleaned.lower():
-        cleaned = re.sub(r"<think>[\s\S]*$", "", cleaned, flags=re.IGNORECASE).strip()
+call_openai_compatible_api.last_error = ""
 
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, flags=re.IGNORECASE)
-    if fence_match:
-        cleaned = fence_match.group(1).strip()
 
-    def _try_parse(candidate: str) -> Optional[Dict[str, Any]]:
-        try:
-            obj = json.loads(candidate)
-            return obj if isinstance(obj, dict) else None
-        except Exception:
-            fixed = re.sub(r",\s*([}\]])", r"\1", candidate)
-            try:
-                obj = json.loads(fixed)
-                return obj if isinstance(obj, dict) else None
-            except Exception:
-                return None
-
-    direct = _try_parse(cleaned)
-    if direct is not None:
-        return direct
-
-    # 栈匹配提取最外层完整 JSON 对象，避免贪婪正则跨段污染
-    start_idx = -1
-    depth = 0
+def _strip_trailing_commas(text: str) -> str:
+    """安全移除 JSON 对象/数组中的尾随逗号，绝不破坏字符串字面量内部的 `, }` 或 `, ]`"""
+    out: List[str] = []
+    n = len(text)
     in_str = False
     escaped = False
-    for i, ch in enumerate(cleaned):
+    i = 0
+    while i < n:
+        ch = text[i]
         if in_str:
+            out.append(ch)
             if escaped:
                 escaped = False
             elif ch == "\\":
                 escaped = True
             elif ch == '"':
                 in_str = False
+            i += 1
             continue
         if ch == '"':
             in_str = True
-        elif ch == "{":
-            if depth == 0:
-                start_idx = i
-            depth += 1
-        elif ch == "}":
-            if depth > 0:
-                depth -= 1
-                if depth == 0 and start_idx != -1:
-                    res = _try_parse(cleaned[start_idx : i + 1])
-                    if res is not None:
-                        return res
-                    start_idx = -1
-    return None
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _extract_json_from_llm(raw_text: str) -> Optional[Dict[str, Any]]:
+    """健壮提取 LLM 返回的 JSON：支持剥离 <think> 块、遍历多个代码块逐个解析、安全去尾逗号（不破坏字符串字面量）"""
+    if not raw_text:
+        return None
+    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", raw_text, flags=re.IGNORECASE).strip()
+    if "<think>" in cleaned.lower():
+        cleaned = re.sub(r"<think>[\s\S]*$", "", cleaned, flags=re.IGNORECASE).strip()
+
+    def _try_parse(candidate: str) -> Optional[Dict[str, Any]]:
+        cand = (candidate or "").strip()
+        if not cand:
+            return None
+        try:
+            obj = json.loads(cand)
+            return obj if isinstance(obj, dict) else None
+        except Exception:
+            fixed = _strip_trailing_commas(cand)
+            try:
+                obj = json.loads(fixed)
+                return obj if isinstance(obj, dict) else None
+            except Exception:
+                return None
+
+    def _scan_balanced_objects(source: str) -> Optional[Dict[str, Any]]:
+        start_idx = -1
+        depth = 0
+        in_str = False
+        escaped = False
+        for i, ch in enumerate(source):
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                if depth == 0:
+                    start_idx = i
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start_idx != -1:
+                        res = _try_parse(source[start_idx : i + 1])
+                        if res is not None:
+                            return res
+                        start_idx = -1
+        return None
+
+    # 1. 遍历所有 Markdown 代码块逐个尝试解析合法 JSON 对象
+    for fence_match in re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, flags=re.IGNORECASE):
+        block = fence_match.group(1).strip()
+        parsed = _try_parse(block) or _scan_balanced_objects(block)
+        if parsed is not None:
+            return parsed
+
+    # 2. 直接整体解析
+    direct = _try_parse(cleaned)
+    if direct is not None:
+        return direct
+
+    # 3. 栈匹配提取最外层完整 JSON 对象，避免贪婪正则跨段污染
+    return _scan_balanced_objects(cleaned)
 
 
 # 待办目录内判定为“来文原件”的强特征。用户约定：拿不准就当自己写的材料（v3.1.1）
@@ -208,13 +376,19 @@ _INCOMING_WEAK = ("的通知", "的方案", "的函")
 _INCOMING_BODY = ("各镇街", "各区县", "各市应急管理局", "各有关单位", "现将有关事项通知如下")
 
 
-def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool = False, cat_name: str = "") -> str:
+def infer_doc_role(
+    filename: str,
+    text_preview: str = "",
+    in_task_folder: bool = False,
+    cat_name: str = "",
+    sub_folder: str = "",
+) -> str:
     """
     智能判别本地新增或扫描文件的性质角色 ('incoming' | 'draft' | 'template' | 'historical' | 'archive' | 'record')
 
-    v3.1.1 起：待办目录内只认“强特征”（发文动作词、文号、附件、OFD、[来文] 前缀），
-    其余一律按“我自己写的材料”处理——宁可把新来文放错栏（点 ⇄ 一键纠正并锁定），
-    也不能把我起草的材料悄悄甩进“来文原件”。
+    v3.3.0：
+    - 支持 sub_folder 参数：当 in_task_folder=True 且 sub_folder 非空且文件名非 [来文] 开头时，直接返回 'draft'
+    - 清理历史不可达死代码分支
     """
     fn = (filename or "").strip()
     preview = (text_preview or "")[:400]
@@ -227,6 +401,11 @@ def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool =
         return "incoming"
     if fn.startswith(("[材料]", "【材料】", "材料_")):
         return "draft"
+
+    # 任务子目录内的非 [来文] 文件，直接视为办理过程材料/文稿
+    if in_task_folder and (sub_folder or "").strip():
+        return "draft"
+
     if any(k in fn for k in ("范文", "模板", "参考样例", "通用格式", "[模板]", "【范文")):
         return "template"
     if "资料存档" in cat_name:
@@ -243,8 +422,7 @@ def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool =
     if any(k in fn for k in draft_feature):
         return "draft"
     if fn.lower().endswith(".ofd") or re.search(r"[〔\[\(（]20\d{2}[〕\]\)）]\s*\d+\s*号", sig_text):
-        if not any(k in fn for k in ("初稿", "定稿", "我县", "我局", "汇报", "总结", "国标排版")):
-            return "incoming"
+        return "incoming"
     if fn.startswith(("附件", "附表")):
         return "incoming"
     if any(k in fn for k in _INCOMING_STRONG):
@@ -256,12 +434,12 @@ def infer_doc_role(filename: str, text_preview: str = "", in_task_folder: bool =
         if any(k in preview for k in _INCOMING_BODY):
             return "incoming"
 
-    return "draft" if in_task_folder else ("historical" if "历史" in cat_name else "draft")
+    return "draft"
 
 
 def match_best_category(text_and_title: str, categories: Optional[List[str]] = None) -> str:
-    """根据主题词智能推荐物理分类目录（同时适配新版 01~06 分类与旧版分类）"""
-    avail_cats = categories or [
+    """根据实际分类名动态匹配优先，结合通用政务业务语义推荐物理分类目录（弱化地域词硬编码）"""
+    avail_cats = list(categories) if categories else [
         "01_需反馈意见",
         "02_省及潍坊来文",
         "03_高密部门来文",
@@ -274,22 +452,39 @@ def match_best_category(text_and_title: str, categories: Optional[List[str]] = N
 
     txt = text_and_title or ""
 
-    # 1. 优先精确命中目录名关键词
+    # 1. 优先基于实际分类名动态匹配（拆解分类名中的业务词与地域/层级词并按命中长度计分）
+    best_cat = ""
+    best_score = 0
     for c in avail_cats:
-        clean_c = re.sub(r"^\d+[_\-\s]*", "", c)
-        for seg in re.split(r"[与和及_\-\s/]+", clean_c):
+        clean_c = re.sub(r"^\d+[_\-\s]*", "", c).strip()
+        if not clean_c:
+            continue
+        score = 0
+        if len(clean_c) >= 2 and clean_c in txt:
+            score += len(clean_c) * 3
+        raw_segs = [s.strip() for s in re.split(r"[与和及_\-\s/、]+", clean_c) if s.strip()]
+        for seg in raw_segs:
             if len(seg) >= 2 and seg in txt:
-                return c
+                score += len(seg) * 2
+            # 提取分类名内不含通用后缀（来文/工作/通知/文件）的核心短语（如 省及潍坊来文 -> 潍坊、高密部门来文 -> 高密）
+            core = re.sub(r"(?:来文|工作|通知|文件|材料|部门)$", "", seg).strip()
+            if len(core) >= 2 and core != seg and core in txt:
+                score += len(core) * 2
+        if score > best_score:
+            best_score = score
+            best_cat = c
+    if best_cat:
+        return best_cat
 
-    # 2. 适配新版默认 6 分类语义规则
+    # 2. 通用政务业务语义规则（不依赖具体地名硬编码）
     semantic_rules: List[Tuple[Tuple[str, ...], Tuple[str, ...]]] = [
         (("征求意见", "反馈意见", "修改意见", "书面意见", "无意见"), ("反馈", "意见")),
         (("会议", "培训", "视频会", "调度会", "座谈会", "参会", "会场", "讲座"), ("会议", "培训")),
         (("督查", "考核", "整改", "暗访", "通报", "约谈", "巡查", "回头看", "销号"), ("督查", "考核", "整改")),
-        (("协助", "配合", "协办", "联合开展", "抽调"), ("协助",)),
-        (("省应急", "山东省", "鲁应急", "潍坊市", "潍应急", "市应急局", "市安委办"), ("省及潍坊", "上级", "潍坊来文")),
-        (("高密", "本级", "各镇街", "街道", "镇政府", "高密市"), ("高密部门", "本级")),
-        # 兼容旧版分类体系
+        (("协助", "配合", "协办", "联合开展", "抽调"), ("协助", "配合")),
+        (("省应急", "省厅", "省政府", "省安委", "市应急", "市局", "市政府", "市安委", "上级"), ("省", "市", "上级", "来文")),
+        (("本级", "各镇街", "镇街", "街道", "镇政府", "本部门", "县直", "区直", "部门"), ("部门", "本级", "镇街")),
+        # 兼容业务条线分类体系
         (("防灾", "减灾", "救灾", "防汛", "汛情", "抗旱", "森林防火", "森林防灭火", "森防", "地震", "地质灾害", "低温雨雪", "冰冻", "台风", "自然灾害", "冬春"), ("防灾", "减灾")),
         (("隐患", "安全生产", "重大事故", "危化", "工贸", "非煤矿山", "消防", "火灾", "排查", "整治", "执法", "安委"), ("隐患", "安全")),
         (("总结", "汇报", "述职", "讲话", "工作要点", "计划", "季报", "月报", "年终", "范文", "模板"), ("汇报", "总结")),
@@ -300,8 +495,9 @@ def match_best_category(text_and_title: str, categories: Optional[List[str]] = N
                 if any(h in c for h in cat_hints):
                     return c
 
+    # 3. 通用兜底：优先选择“来文/日常/通知/综合”类目录，否则返回首个分类
     for c in avail_cats:
-        if "省及潍坊" in c or "日常" in c or "通知" in c:
+        if any(h in c for h in ("来文", "日常", "通知", "综合")):
             return c
     return avail_cats[0]
 
@@ -312,13 +508,14 @@ def _clean_checklist_items(raw_items: List[Any], max_items: int = 3, max_len: in
     seen = set()
     for item in raw_items or []:
         if isinstance(item, dict):
-            text = str(item.get("text") or "").strip()
+            text = _safe_str(item.get("text"))
             done = bool(item.get("done", False))
         elif isinstance(item, str):
             text = item.strip()
             done = False
         else:
-            continue
+            text = _safe_str(item)
+            done = False
         if not text or len(text) < 4:
             continue
         text = re.sub(r"\s+", " ", text)
@@ -353,6 +550,144 @@ def _detect_doc_kind(title: str, text: str) -> str:
     ):
         return "fyi"
     return "action"
+
+
+def _resolve_inferred_date(year: Optional[int], month: int, day: int, now: datetime) -> Optional[str]:
+    """根据提取到的年月日构建 YYYY-MM-DD；缺省年份时若早于当前日期超过 60 天，自动推算为下一年"""
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    try:
+        if year is not None:
+            dt = datetime(year, month, day)
+        else:
+            y = today.year
+            try:
+                dt = datetime(y, month, day)
+            except ValueError:
+                # 例如平年遇到 2月29日，尝试下一年
+                dt = datetime(y + 1, month, day)
+            if (today - dt).days > 60:
+                dt = datetime(dt.year + 1, month, day)
+        return dt.strftime("%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def _extract_rule_deadline(clean_text: str, now: Optional[datetime] = None) -> str:
+    """
+    规则引擎截止日期提取：
+    1. 优先抓取靠近“前报送/截止/之前/限期”等强触发词的日期，避免误抓文末成文日期
+    2. 缺省年份时若推断日期早于当前日期超过 60 天（如 12 月收到“1 月 5 日前”），自动推算为下一年
+    """
+    ref_now = now or datetime.now()
+    if not clean_text:
+        return ""
+
+    time_opt = r"(?:\s*(?:上午|下午|中午|晚上)?\s*\d{1,2}\s*[时点:：]\s*\d{0,2}\s*分?)?"
+    strong_suffix = r"(?:前报送|前上报|前提交|前反馈|前完成|前报|之前|以前|下班前|前|截止|限期)"
+    strong_prefix = r"(?:截止(?:时间|日期)?(?:为|至)?|截至|限期|不晚于|最迟(?:于)?|最晚(?:于)?)"
+
+    # Tier 1: 带强截止触发词的日期（优先后置“前报送/之前/截止”或前置“截止/限期/不晚于”）
+    tier1_patterns: List[Tuple[str, bool]] = [
+        (rf"(?:请于|务必于|于|在|{strong_prefix})?\s*(\d{{4}})\s*[年\-/\.]\s*(\d{{1,2}})\s*[月\-/\.]\s*(\d{{1,2}})\s*日?{time_opt}\s*{strong_suffix}", True),
+        (rf"{strong_prefix}[：:\s]*(\d{{4}})\s*[年\-/\.]\s*(\d{{1,2}})\s*[月\-/\.]\s*(\d{{1,2}})\s*日?", True),
+        (rf"(?:请于|务必于|于|在|{strong_prefix})?\s*(\d{{1,2}})\s*月\s*(\d{{1,2}})\s*日{time_opt}\s*{strong_suffix}", False),
+        (rf"{strong_prefix}[：:\s]*(\d{{1,2}})\s*月\s*(\d{{1,2}})\s*日", False),
+    ]
+    for pat, has_year in tier1_patterns:
+        for m in re.finditer(pat, clean_text):
+            groups = m.groups()
+            if has_year:
+                res = _resolve_inferred_date(int(groups[0]), int(groups[1]), int(groups[2]), ref_now)
+            else:
+                res = _resolve_inferred_date(None, int(groups[0]), int(groups[1]), ref_now)
+            if res:
+                return res
+
+    # Tier 2: 次强触发词（请于/务必于 ... 内/报送/提交/反馈/完成）
+    tier2_patterns: List[Tuple[str, bool]] = [
+        (rf"(?:请于|务必于)\s*(\d{{4}})\s*[年\-/\.]\s*(\d{{1,2}})\s*[月\-/\.]\s*(\d{{1,2}})\s*日?{time_opt}\s*(?:内|报送|提交|反馈|完成)", True),
+        (rf"(?:请于|务必于)\s*(\d{{1,2}})\s*月\s*(\d{{1,2}})\s*日{time_opt}\s*(?:内|报送|提交|反馈|完成)", False),
+    ]
+    for pat, has_year in tier2_patterns:
+        for m in re.finditer(pat, clean_text):
+            groups = m.groups()
+            if has_year:
+                res = _resolve_inferred_date(int(groups[0]), int(groups[1]), int(groups[2]), ref_now)
+            else:
+                res = _resolve_inferred_date(None, int(groups[0]), int(groups[1]), ref_now)
+            if res:
+                return res
+
+    # Tier 3: 相对时间词（今日/明日/后天）优先于裸成文日期
+    if any(k in clean_text for k in ("今日下班前", "今天下班前", "今日内", "今天内", "立即报送")):
+        return ref_now.strftime("%Y-%m-%d")
+    if any(k in clean_text for k in ("明日", "明天")):
+        return (ref_now + timedelta(days=1)).strftime("%Y-%m-%d")
+    if "后天" in clean_text:
+        return (ref_now + timedelta(days=2)).strftime("%Y-%m-%d")
+
+    # Tier 4: 兜底扫描非落款成文日期的普通日期（剔除文末独立成行的成文日期）
+    lines = [ln.strip() for ln in clean_text.splitlines() if ln.strip()]
+    body_lines = list(lines)
+    while body_lines and re.fullmatch(r"\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日", body_lines[-1]):
+        body_lines.pop()
+    fallback_text = "\n".join(body_lines)
+
+    for pat, has_year in (
+        (r"(\d{4})\s*[年\-]\s*(\d{1,2})\s*[月\-]\s*(\d{1,2})\s*日", True),
+        (r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", False),
+    ):
+        for m in re.finditer(pat, fallback_text):
+            groups = m.groups()
+            if has_year:
+                res = _resolve_inferred_date(int(groups[0]), int(groups[1]), int(groups[2]), ref_now)
+            else:
+                res = _resolve_inferred_date(None, int(groups[0]), int(groups[1]), ref_now)
+            if res:
+                return res
+
+    return ""
+
+
+def _sample_long_document(clean_body: str, max_len: int = 4000) -> str:
+    """
+    长公文三段智能采样：
+    超过 4000 字时采用“首 2000 字 + 中段（命中任务分工/时间节点/报送要求关键词处）1200 字 + 尾 1000 字”
+    """
+    if len(clean_body) <= max_len:
+        return clean_body
+
+    head_len = 2000
+    mid_len = 1200
+    tail_len = 1000
+
+    head = clean_body[:head_len]
+    tail = clean_body[-tail_len:]
+    mid_region = clean_body[head_len : len(clean_body) - tail_len]
+
+    if len(mid_region) <= mid_len:
+        return clean_body
+
+    mid_keywords = (
+        "任务分工", "职责分工", "责任分工", "工作分工",
+        "时间节点", "时间安排", "进度安排", "工作步骤",
+        "报送要求", "上报要求", "填报要求", "反馈要求",
+        "截止时间", "前报送", "工作要求", "具体要求", "参会要求",
+    )
+    hit_pos = -1
+    for kw in mid_keywords:
+        idx = mid_region.find(kw)
+        if idx != -1:
+            hit_pos = idx
+            break
+
+    if hit_pos != -1:
+        start = max(0, min(hit_pos - 120, len(mid_region) - mid_len))
+    else:
+        start = (len(mid_region) - mid_len) // 2
+
+    mid = mid_region[start : start + mid_len]
+    return f"{head}\n...\n{mid}\n...\n{tail}"
 
 
 def _rule_based_parse_document(
@@ -448,35 +783,7 @@ def _rule_based_parse_document(
                 issuing_org = ln
                 break
 
-    deadline = ""
-    date_ctx_patterns = [
-        r"(?:请于|务必于|于|在|截止|截至)?\s*(\d{4})\s*[年\-/\.]\s*(\d{1,2})\s*[月\-/\.]\s*(\d{1,2})\s*日?(?:\s*\d{1,2}[时点:：]\d{0,2})?\s*(?:前|之前|下班前|内|报送|提交|反馈)",
-        r"(?:请于|务必于|于|在|截止)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s*\d{1,2}[时点:：]\d{0,2})?\s*(?:前|之前|下班前|内|报送|提交|反馈|完成)",
-        r"(\d{4})\s*[年\-]\s*(\d{1,2})\s*[月\-]\s*(\d{1,2})\s*日",
-        r"(\d{1,2})\s*月\s*(\d{1,2})\s*日",
-    ]
-    for pat in date_ctx_patterns:
-        m = re.search(pat, clean_text)
-        if m:
-            groups = m.groups()
-            try:
-                if len(groups) == 3:
-                    y, mo, d = int(groups[0]), int(groups[1]), int(groups[2])
-                else:
-                    y, mo, d = now.year, int(groups[0]), int(groups[1])
-                dt = datetime(y, mo, d)
-                deadline = dt.strftime("%Y-%m-%d")
-                break
-            except Exception:
-                continue
-
-    if not deadline:
-        if any(k in clean_text for k in ("今日下班前", "今天下班前", "今日内", "今天内", "立即报送")):
-            deadline = now.strftime("%Y-%m-%d")
-        elif any(k in clean_text for k in ("明日", "明天")):
-            deadline = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-        elif "后天" in clean_text:
-            deadline = (now + timedelta(days=2)).strftime("%Y-%m-%d")
+    deadline = _extract_rule_deadline(clean_text, now)
 
     priority = "普通"
     if any(k in clean_text for k in ("特急", "加急", "立即", "务必于今日", "今日下班前", "马上", "主要领导批示", "迎检", "督查", "紧急")):
@@ -580,7 +887,7 @@ def parse_incoming_content(
         return rule_res
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    default_org = (cfg.get("default_org_name") or "本科室").strip()
+    default_org = _safe_str(cfg.get("default_org_name")) or "本科室"
     sys_prompt = (
         f"你是基层应急管理科室（{default_org}）的公文办件助手，当前日期 {today_str}。"
         "请以本单位经办人视角从公文或通知中提取工作台 JSON，严格输出 JSON 对象，包含字段：\n"
@@ -597,12 +904,9 @@ def parse_incoming_content(
         "同一材料的起草/审签/盖章/报送合并为 1 条；会议通知仅保留明确要求动作（如报名单、按时参会）；"
         "纯阅知件直接返回空数组 []；严禁拆出“研读文件/核对要求/高度重视/审签盖章/归档”等常识性内部步骤。"
     )
-    # 截取头尾关键信息减少冗余 Token（保留前 2600 字 + 尾 1200 字，覆盖发文事由与文末报送时限）
+    # 超过 4000 字长公文采用首 2000 + 中段关键词 1200 + 尾 1000 三段智能采样
     clean_body = (text or "").strip()
-    if len(clean_body) > 4000:
-        clipped = clean_body[:2600] + "\n...\n" + clean_body[-1200:]
-    else:
-        clipped = clean_body
+    clipped = _sample_long_document(clean_body, max_len=4000)
     user_prompt = f"文件名：{filename}\n来源提示：{source_hint}\n正文内容：\n{clipped}"
 
     llm_raw = call_openai_compatible_api(cfg, sys_prompt, user_prompt)
@@ -610,26 +914,40 @@ def parse_incoming_content(
     if not parsed or not isinstance(parsed, dict):
         return rule_res
 
-    doc_kind = parsed.get("doc_kind") if parsed.get("doc_kind") in ("action", "meeting", "feedback", "fyi") else rule_res.get("doc_kind", "action")
-    if "checklist" in parsed and isinstance(parsed.get("checklist"), list):
+    llm_doc_kind = _safe_str(parsed.get("doc_kind"))
+    doc_kind = llm_doc_kind if llm_doc_kind in ("action", "meeting", "feedback", "fyi") else rule_res.get("doc_kind", "action")
+
+    raw_checklist = parsed.get("checklist")
+    if "checklist" in parsed and isinstance(raw_checklist, list):
         # 修复 L399 反向兜底陷阱：模型显式返回 [] 或判定为纯阅知件时尊重空列表
-        if doc_kind == "fyi" and len(parsed["checklist"]) == 0:
+        if doc_kind == "fyi" and len(raw_checklist) == 0:
             chk_formatted = []
         else:
-            chk_formatted = _clean_checklist_items(parsed["checklist"], max_items=3, max_len=36)
+            chk_formatted = _clean_checklist_items(raw_checklist, max_items=3, max_len=36)
     else:
         chk_formatted = [] if doc_kind == "fyi" else rule_res["checklist"]
 
+    llm_title = _safe_str(parsed.get("title"))
+    llm_source_channel = _safe_str(parsed.get("source_channel"))
+    llm_doc_number = _safe_str(parsed.get("doc_number"))
+    llm_issuing_org = _safe_str(parsed.get("issuing_org"))
+    llm_priority = _safe_str(parsed.get("priority"))
+    llm_deadline = _validate_deadline(parsed.get("deadline"))
+    llm_category = _safe_str(parsed.get("category"))
+    llm_summary = _safe_str(parsed.get("summary"))
+
+    rule_deadline = _validate_deadline(rule_res.get("deadline"))
+
     return {
-        "title": (parsed.get("title") or rule_res["title"]).strip()[:60],
+        "title": (llm_title or rule_res["title"])[:60],
         "doc_kind": doc_kind,
-        "source_channel": parsed.get("source_channel") or rule_res["source_channel"],
-        "doc_number": parsed.get("doc_number") if parsed.get("doc_number") is not None else rule_res["doc_number"],
-        "issuing_org": parsed.get("issuing_org") if parsed.get("issuing_org") is not None else rule_res["issuing_org"],
-        "priority": parsed.get("priority") if parsed.get("priority") in ("普通", "重要", "紧急") else rule_res["priority"],
-        "deadline": parsed.get("deadline") if parsed.get("deadline") is not None else rule_res["deadline"],
-        "category": parsed.get("category") if parsed.get("category") in cats else rule_res["category"],
-        "summary": (parsed.get("summary") or rule_res["summary"]).strip()[:200],
+        "source_channel": llm_source_channel or rule_res["source_channel"],
+        "doc_number": llm_doc_number or rule_res["doc_number"],
+        "issuing_org": llm_issuing_org or rule_res["issuing_org"],
+        "priority": llm_priority if llm_priority in ("普通", "重要", "紧急") else rule_res["priority"],
+        "deadline": llm_deadline or rule_deadline,
+        "category": llm_category if llm_category in cats else rule_res["category"],
+        "summary": (llm_summary or rule_res["summary"])[:200],
         "checklist": chk_formatted,
         "engine": "llm_api",
     }
@@ -697,38 +1015,61 @@ def extract_reference_terms(title: str, summary: str = "") -> Dict[str, float]:
 
 
 def extract_search_keywords(natural_query: str) -> List[str]:
-    """从自然语言搜索问句中拆解核心实词（过滤纯年份噪声，保留具体日期/编号如 11.17 与中文核心词）"""
+    """
+    从自然语言搜索问句中拆解核心实词：
+    - 仅在标点与多字停用短语边界切分，绝不用单字（的/了/和/与/或/及）腰斩“及时报送/涉及危化品/了解情况”等词
+    - 保留用户显式输入的年份词（如 2025、2026）与具体日期/编号（如 11.17 / G204）
+    """
     q = (natural_query or "").strip()
     if not q:
         return []
+
+    # 仅在词边界停用短语与标点空白处切分，避免单字腰斩实词内部
     split_delimiters = (
         r"或者|还是|以及|关于|有关|请问|帮我|找一下|找出|搜索|查询|哪些|什么|"
         r"我写过的|我写过|我写的|以前的|以前|历史的|历史|今年的|今年|去年的|去年|"
-        r"有没有|在哪里|的|了|和|与|或|及|[，。？！、；：\"\"''（）《》【】\s]+"
+        r"有没有|在哪里|[，。？！、；：\"\"''（）《》【】\s]+"
     )
-    parts = [p.strip() for p in re.split(split_delimiters, q) if p and p.strip()]
+    raw_parts = [p.strip() for p in re.split(split_delimiters, q) if p and p.strip()]
+
+    # 对片段内“……的(材料|公文|通知|文件|方案|报告|总结|汇报|台账|预案|清单|记录|要求|工作|情况)”在结构助词边界拆分
+    parts: List[str] = []
+    for rp in raw_parts:
+        sub_parts = re.split(
+            r"的(?=(?:材料|公文|通知|文件|要求|工作|事项|记录|情况|方案|报告|总结|汇报|台账|预案|会议|培训|制度|清单|名单))",
+            rp,
+        )
+        for sp in sub_parts:
+            sp = sp.strip()
+            if len(sp) >= 3 and sp.endswith("的") and not sp.endswith(("目的", "标的")):
+                sp = sp[:-1].strip()
+            if len(sp) >= 3 and sp.startswith("的") and not sp.startswith("的确"):
+                sp = sp[1:].strip()
+            if sp:
+                parts.append(sp)
+
     generic_tail = {"材料", "公文", "通知", "文件", "要求", "工作", "事项", "记录", "情况"}
     tokens: List[str] = []
 
-    # 先提取中文核心词，避免数字/年份挤占前 10 槽位
+    # 先提取中文核心词，同时兼容前置年份/编号（如“2025年防汛总结” -> “防汛总结” + “2025”）
     for p in parts:
-        cjk_only = re.sub(r"^[0-9\.\-_]+", "", p).strip()
+        cjk_only = re.sub(r"^[0-9\.\-_]+年?", "", p).strip()
         for candidate in (cjk_only, p):
             if len(candidate) >= 2 and candidate not in generic_tail and candidate not in GOV_STOPWORDS:
-                if not re.fullmatch(r"20\d{2}", candidate) and candidate not in tokens:
+                if candidate not in tokens:
                     tokens.append(candidate)
         if len(p) >= 4:
             for sub_kw in (
                 "灾害民生", "民生保险", "防灾减灾", "森林防灭火", "森林防火", "冬春", "自然灾害",
-                "汛情", "防汛", "地震", "预案", "隐患排查", "安全生产", "救灾物资", "总结",
-                "汇报", "方案", "台账", "调度", "督导", "会议记录", "培训课件", "下沉",
+                "汛情", "防汛", "地震", "预案", "隐患排查", "安全生产", "救灾物资", "危化品",
+                "总结", "汇报", "方案", "台账", "调度", "督导", "会议记录", "培训课件", "下沉",
             ):
                 if sub_kw in p and sub_kw not in tokens:
                     tokens.append(sub_kw)
 
-    # 再补充显式编号/月日（如 11.17 / G204），过滤纯 4 位年份
+    # 补充显式年份（如 2025 / 2026）与编号/月日（如 11.17 / G204），不再过滤 20\d{2}
     for num_tok in re.findall(r"[A-Za-z0-9]+(?:[\.\-][A-Za-z0-9]+)*", q):
-        if len(num_tok) >= 2 and not re.fullmatch(r"20\d{2}", num_tok) and num_tok not in tokens:
+        if len(num_tok) >= 2 and num_tok not in tokens:
             tokens.append(num_tok)
 
     if not tokens:
@@ -747,34 +1088,58 @@ def synthesize_ai_search_answer(
 ) -> Dict[str, Any]:
     """
     两段式 AI 搜索的第二阶段：覆盖【重要事项记录】、【资料存档】、【工作台待办】与【公文与材料库】四维知识解答
+    内置总上下文字符预算（默认 6000 字）按相关度截断，防止小上下文本地模型溢出。
     """
     cfg = config or {}
     archives = matched_archives or []
     records = matched_records or []
-    context_blocks = []
 
+    max_ctx_chars = MAX_SEARCH_CONTEXT_CHARS
+    try:
+        cfg_budget = int(cfg.get("ai_search_context_budget") or 0)
+        if cfg_budget >= 500:
+            max_ctx_chars = cfg_budget
+    except Exception:
+        pass
+
+    raw_blocks: List[str] = []
     for r in records[:8]:
-        snippet = (r.get("match_snippet") or r.get("content_md") or "")[:320].replace("\n", " ")
-        context_blocks.append(
+        snippet = _safe_str(r.get("match_snippet") or r.get("content_md"))[:320].replace("\n", " ")
+        raw_blocks.append(
             f"[重要事项记录 #{r['id']}] 标题：{r['title']} | 分类：{r.get('category', '')} | 内容摘录：{snippet}"
         )
     for a in archives[:8]:
-        f_names = "、".join(f.get("filename", "") for f in (a.get("files") or [])[:6])
-        snippet = (a.get("match_snippet") or a.get("notes_md") or "")[:240].replace("\n", " ")
-        context_blocks.append(
+        f_names = "、".join(_safe_str(f.get("filename")) for f in (a.get("files") or [])[:6] if isinstance(f, dict))
+        snippet = _safe_str(a.get("match_snippet") or a.get("notes_md"))[:240].replace("\n", " ")
+        raw_blocks.append(
             f"[资料存档 #{a['id']}] 标题：{a['title']} | 日期：{a.get('archive_date', '')} | 分类：{a.get('category', '')} | "
             f"内含文件：{f_names or '无'} | 纪要摘录：{snippet}"
         )
     for t in matched_tasks[:8]:
-        context_blocks.append(
+        raw_blocks.append(
             f"[待办事项 #{t['id']}] 标题：{t['title']} | 文号：{t.get('doc_number') or '无'} | 状态：{t['status']} | "
-            f"截止：{t.get('deadline') or '无'} | 要求摘要：{t.get('summary') or ''} | 分类：{t.get('category') or ''}"
+            f"截止：{t.get('deadline') or '无'} | 要求摘要：{_safe_str(t.get('summary'))[:240]} | 分类：{t.get('category') or ''}"
         )
     for d in matched_docs[:12]:
-        snippet = (d.get("snippet") or d.get("content_preview") or "")[:260].replace("\n", " ")
-        context_blocks.append(
+        snippet = _safe_str(d.get("snippet") or d.get("content_preview"))[:260].replace("\n", " ")
+        raw_blocks.append(
             f"[文件 #{d['id']}] 名称：{d['filename']} | 类型：{d['doc_role']} | 分类目录：{d['category']} | 内容摘录：{snippet}"
         )
+
+    # 按相关度顺序装入上下文，严格控制在总字符预算内
+    context_blocks: List[str] = []
+    used_chars = 0
+    for block in raw_blocks:
+        sep = 1 if context_blocks else 0
+        if used_chars + sep + len(block) <= max_ctx_chars:
+            context_blocks.append(block)
+            used_chars += sep + len(block)
+        else:
+            remaining = max_ctx_chars - used_chars - sep
+            if remaining >= 80:
+                context_blocks.append(block[: remaining - 1] + "…")
+                used_chars += sep + remaining
+            break
 
     # 修复：仅当确实召回到本地上下文时才调用 LLM，避免 0 命中白耗 Token 或诱发编造
     if cfg.get("ai_api_base") and context_blocks:
